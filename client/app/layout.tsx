@@ -89,6 +89,11 @@ export const metadata: Metadata = {
   },
   manifest: "/manifest.json",
   category: "education",
+  icons: {
+    icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
+    apple: [{ url: "/favicon.svg", type: "image/svg+xml" }],
+    shortcut: [{ url: "/favicon.svg", type: "image/svg+xml" }],
+  },
 };
 
 const deriveTags = (event: FetchedEvent): string[] => {
