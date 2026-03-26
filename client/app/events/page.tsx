@@ -257,7 +257,10 @@ const EventsPage = () => {
                 {filteredEvents.length > ITEMS_PER_PAGE && (
                   <div className="flex justify-center items-center gap-4 mt-12">
                     <button
-                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      onClick={() => {
+  setCurrentPage((p) => Math.max(1, p - 1));
+  window.scrollTo({ top: 0, behavior: "smooth" }); // scroll to top after going to previous page
+}}
                       disabled={currentPage === 1}
                       className="px-6 py-3 bg-[#154CB3] text-white rounded-full disabled:bg-gray-300 disabled:cursor-not-allowed hover:bg-[#154cb3eb] transition-colors font-medium"
                     >
@@ -267,7 +270,10 @@ const EventsPage = () => {
                       Page {currentPage} of {totalPages}
                     </span>
                     <button
-                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      onClick={() => {
+  setCurrentPage((p) => Math.min(totalPages, p + 1));
+  window.scrollTo({ top: 0, behavior: "smooth" }); // scroll to top after going to next page
+}}
                       disabled={currentPage === totalPages}
                       className="px-6 py-3 bg-[#154CB3] text-white rounded-full disabled:bg-gray-300 disabled:cursor-not-allowed hover:bg-[#154cb3eb] transition-colors font-medium"
                     >
