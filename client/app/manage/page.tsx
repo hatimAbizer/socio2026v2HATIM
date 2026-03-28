@@ -471,7 +471,7 @@ export default function ManageDashboard() {
 
         {/* 2. The Control Bar (Tabs & Search) */}
         <div className="flex flex-col md:flex-row justify-between md:items-center border-b border-slate-200 gap-4 mb-6">
-          <div className="flex items-center gap-8 overflow-x-auto text-sm w-full md:w-auto">
+          <div className="flex items-center gap-8 overflow-x-auto overflow-y-hidden pb-2 text-sm w-full md:w-auto [&::-webkit-scrollbar]:hidden [-moz-scrollbar-width:none]">
             <button
               onClick={() => setActiveTab("fests")}
               className={`pb-4 transition-colors whitespace-nowrap -mb-[1px] ${
