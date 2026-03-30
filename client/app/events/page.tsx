@@ -215,10 +215,10 @@ const EventsPageContent = () => {
 
   return (
     <div className="min-h-screen bg-white">
-      <main className="container mx-auto px-4 py-6 max-w-7xl">
-        <div className="mb-12">
-          <div className="flex flex-row items-center justify-between">
-            <h1 className="text-3xl font-black text-[#154CB3] mb-2 mt-6">
+      <main className="container mx-auto px-4 pt-3 pb-8 sm:pt-4 sm:pb-10 max-w-7xl">
+        <div className="mb-8 sm:mb-10">
+          <div className="flex flex-row items-center justify-between gap-3">
+            <h1 className="text-3xl font-black text-[#154CB3] mb-1 mt-1 sm:mt-2">
               Explore events
             </h1>
             <Link
@@ -242,11 +242,11 @@ const EventsPageContent = () => {
               Back to Discovery
             </Link>
           </div>
-          <p className="text-gray-500 mb-4 text-sm sm:text-base">
+          <p className="text-gray-500 mb-3 text-sm sm:text-base">
             Browse through all upcoming events happening on campus.
           </p>
 
-          <form onSubmit={handlePageSearchSubmit} className="mb-6 sm:mb-8 max-w-3xl">
+          <form onSubmit={handlePageSearchSubmit} className="mb-4 sm:mb-5 max-w-3xl">
             <label htmlFor="events-page-search" className="sr-only">
               Search events
             </label>
@@ -296,7 +296,7 @@ const EventsPageContent = () => {
             </div>
           </form>
 
-          <div className="flex flex-wrap gap-2 mb-6 sm:mb-8">
+          <div className="flex flex-wrap gap-2 mb-4 sm:mb-5">
             {filterOptions.map((filter, index) => (
               <button
                 key={index}
@@ -312,7 +312,7 @@ const EventsPageContent = () => {
             ))}
           </div>
           <div>
-            <h2 className="text-xl sm:text-2xl font-bold text-[#063168] mb-4 sm:mb-6">
+            <h2 className="text-xl sm:text-2xl font-bold text-[#063168] mb-3 sm:mb-4">
               {`${
                 activeFilterName === "All" ? "All" : activeFilterName
               } events (${filteredEvents.length})`}
