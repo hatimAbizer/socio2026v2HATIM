@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { EventsSection } from "../_components/Discover/EventsSection";
 import { FullWidthCarousel } from "../_components/Discover/ImageCarousel";
 import { FestsSection } from "../_components/Discover/FestSection";
@@ -39,14 +40,32 @@ interface Category {
   icon: string;
 }
 
+const DEFAULT_DISCOVER_CAMPUS = "Central Campus (Main)";
+
+const findCampusByQueryValue = (value: string | null) => {
+  if (!value) {
+    return null;
+  }
+
+  return (
+    christCampuses.find(
+      (campus) => campus.toLowerCase() === value.toLowerCase()
+    ) || null
+  );
+};
+
 const DiscoverPage = () => {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const campusParam = searchParams.get("campus");
+
   const {
     isLoading: isLoadingEventsFromContext,
     error: errorEventsFromContext,
     allEvents,
   } = useEvents();
 
-  const [selectedCampus, setSelectedCampus] = useState("Central Campus (Main)");
+  const [selectedCampus, setSelectedCampus] = useState(DEFAULT_DISCOVER_CAMPUS);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -155,6 +174,15 @@ const DiscoverPage = () => {
   }));
 
   useEffect(() => {
+    const campusFromUrl =
+      findCampusByQueryValue(campusParam) || DEFAULT_DISCOVER_CAMPUS;
+
+    setSelectedCampus((previous) =>
+      previous === campusFromUrl ? previous : campusFromUrl
+    );
+  }, [campusParam]);
+
+  useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (
         dropdownRef.current &&
@@ -176,11 +204,23 @@ const DiscoverPage = () => {
   const handleCampusSelect = (campus: string) => {
     setSelectedCampus(campus);
     setIsDropdownOpen(false);
+
+    const params = new URLSearchParams(searchParams.toString());
+    if (campus === DEFAULT_DISCOVER_CAMPUS) {
+      params.delete("campus");
+    } else {
+      params.set("campus", campus);
+    }
+
+    const queryString = params.toString();
+    router.push(queryString ? `/Discover?${queryString}` : "/Discover", {
+      scroll: false,
+    });
   };
 
   return (
     <div className="min-h-screen bg-white">
-      <main className="container mx-auto px-6 sm:px-8 lg:px-12 py-6 max-w-[1200px] pb-16">
+      <main className="container mx-auto px-4 sm:px-6 lg:px-10 py-6 max-w-[1200px] pb-16">
         <section className="mb-12">
           <div className="flex flex-col md:flex-row md:justify-between md:items-start gap-6 mb-10">
             <div className="flex-1">
