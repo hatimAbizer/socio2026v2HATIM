@@ -156,6 +156,52 @@ const getTeamSize = (registration: OrganiserRegistration) => {
   return 1 + teammates.length;
 };
 
+const ORGANISER_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+
+type OrganiserTagMeta = {
+  value: string;
+  isValidEmail: boolean;
+  hasValue: boolean;
+};
+
+const getOrganiserTagMeta = (value?: string | null): OrganiserTagMeta => {
+  const normalized = (value || "").trim();
+
+  if (!normalized) {
+    return {
+      value: "Unknown organiser",
+      isValidEmail: false,
+      hasValue: false,
+    };
+  }
+
+  return {
+    value: normalized,
+    isValidEmail: ORGANISER_EMAIL_REGEX.test(normalized),
+    hasValue: true,
+  };
+};
+
+const getOrganiserTagClassName = (meta: OrganiserTagMeta) => {
+  if (meta.isValidEmail) {
+    return "border-blue-200 bg-blue-50 text-blue-700";
+  }
+
+  if (meta.hasValue) {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+
+  return "border-slate-200 bg-slate-100 text-slate-600";
+};
+
+const getOrganiserTagText = (meta: OrganiserTagMeta) => {
+  if (meta.hasValue && !meta.isValidEmail) {
+    return `${meta.value} (unverified)`;
+  }
+
+  return meta.value;
+};
+
 export default function OrganiserHistoryModal({
   isOpen,
   organiserIdentifier,
@@ -410,7 +456,15 @@ export default function OrganiserHistoryModal({
   const registrationsByEvent = useMemo(() => {
     const grouped = new Map<
       string,
-      { eventId: string; title: string; count: number; latestAt: string; team: number; individual: number }
+      {
+        eventId: string;
+        title: string;
+        count: number;
+        latestAt: string;
+        team: number;
+        individual: number;
+        organiserEmail: string | null;
+      }
     >();
 
     filteredRegistrations.forEach((registration) => {
@@ -423,6 +477,7 @@ export default function OrganiserHistoryModal({
         latestAt: registration.created_at,
         team: 0,
         individual: 0,
+        organiserEmail: linkedEvent?.created_by || null,
       };
 
       current.count += 1;
@@ -430,6 +485,10 @@ export default function OrganiserHistoryModal({
         current.team += 1;
       } else {
         current.individual += 1;
+      }
+
+      if (!current.organiserEmail && linkedEvent?.created_by) {
+        current.organiserEmail = linkedEvent.created_by;
       }
 
       if (new Date(registration.created_at).getTime() > new Date(current.latestAt).getTime()) {
@@ -606,6 +665,7 @@ export default function OrganiserHistoryModal({
               {events.map((event) => {
                 const status = getEventStatus(event.event_date);
                 const eventRegistrationCount = registrationCountByEvent.get(event.event_id) || 0;
+                const organiserTagMeta = getOrganiserTagMeta(event.created_by);
                 return (
                   <div
                     key={`${event.event_id}-${event.created_at}`}
@@ -628,6 +688,13 @@ export default function OrganiserHistoryModal({
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2">
+                      <span
+                        title={organiserTagMeta.value}
+                        className={`inline-flex max-w-full items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] ${getOrganiserTagClassName(organiserTagMeta)}`}
+                      >
+                        Organizer:
+                        <span className="max-w-[220px] truncate">{getOrganiserTagText(organiserTagMeta)}</span>
+                      </span>
                       <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-600">
                         <CalendarDays className="h-3 w-3" />
                         {formatDate(event.event_date)}
@@ -729,27 +796,38 @@ export default function OrganiserHistoryModal({
                   <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                     <p className="text-sm font-semibold text-slate-900">Registrations by Event</p>
                     <div className="mt-3 space-y-2">
-                      {registrationsByEvent.map((grouped) => (
-                        <div key={grouped.eventId} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-slate-900">{grouped.title}</p>
-                              <p className="mt-1 text-xs text-slate-500">
-                                {grouped.individual} individual · {grouped.team} team · Latest {formatDate(grouped.latestAt)}
-                              </p>
+                      {registrationsByEvent.map((grouped) => {
+                        const organiserTagMeta = getOrganiserTagMeta(grouped.organiserEmail);
+
+                        return (
+                          <div key={grouped.eventId} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-slate-900">{grouped.title}</p>
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {grouped.individual} individual · {grouped.team} team · Latest {formatDate(grouped.latestAt)}
+                                </p>
+                                <span
+                                  title={organiserTagMeta.value}
+                                  className={`mt-1 inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] ${getOrganiserTagClassName(organiserTagMeta)}`}
+                                >
+                                  Organizer:
+                                  <span className="max-w-[220px] truncate">{getOrganiserTagText(organiserTagMeta)}</span>
+                                </span>
+                              </div>
+                              <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700">
+                                {grouped.count}
+                              </span>
                             </div>
-                            <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700">
-                              {grouped.count}
-                            </span>
+                            <Link
+                              href={`/event/${grouped.eventId}`}
+                              className="mt-2 inline-flex items-center text-xs font-semibold text-[#154CB3] hover:underline"
+                            >
+                              Open event details
+                            </Link>
                           </div>
-                          <Link
-                            href={`/event/${grouped.eventId}`}
-                            className="mt-2 inline-flex items-center text-xs font-semibold text-[#154CB3] hover:underline"
-                          >
-                            Open event details
-                          </Link>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -762,6 +840,7 @@ export default function OrganiserHistoryModal({
                         const registrantName = getRegistrantName(registration);
                         const registrantEmail = getRegistrantEmail(registration);
                         const teamSize = getTeamSize(registration);
+                        const organiserTagMeta = getOrganiserTagMeta(linkedEvent?.created_by);
 
                         return (
                           <div
@@ -775,6 +854,13 @@ export default function OrganiserHistoryModal({
                                 <p className="mt-1 text-[11px] text-slate-500">
                                   {(linkedEvent?.title || "Unknown Event")} · Registered on {formatDate(registration.created_at)}
                                 </p>
+                                <span
+                                  title={organiserTagMeta.value}
+                                  className={`mt-1 inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] ${getOrganiserTagClassName(organiserTagMeta)}`}
+                                >
+                                  Organizer:
+                                  <span className="max-w-[220px] truncate">{getOrganiserTagText(organiserTagMeta)}</span>
+                                </span>
                               </div>
                               <span
                                 className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${
