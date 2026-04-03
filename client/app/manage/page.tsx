@@ -812,6 +812,7 @@ export default function ManageDashboard() {
         throw new Error(payload?.error || "Failed to update fest archive status.");
       }
 
+      // Update fest archive state
       setFestArchiveOverrides((prev) => ({
         ...prev,
         [festId]: {
@@ -819,6 +820,22 @@ export default function ManageDashboard() {
           archived_at: shouldArchive ? new Date().toISOString() : null,
         },
       }));
+
+      // Also update all events under this fest
+      const nowIso = new Date().toISOString();
+      setArchiveOverrides((prev) => {
+        const updated = { ...prev };
+        // Find all events with this fest_id and update them
+        contextAllEvents?.forEach((event) => {
+          if (event.fest === festId) {
+            updated[event.event_id] = {
+              is_archived: Boolean(shouldArchive),
+              archived_at: shouldArchive ? nowIso : null,
+            };
+          }
+        });
+        return updated;
+      });
 
       const eventsAffected = payload?.events_affected || 0;
       toast.success(
