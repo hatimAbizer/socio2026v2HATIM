@@ -236,7 +236,7 @@ function NavigationBar() {
   return (
     <>
  {/* CHANGED FOR EACH DEVICE */}
-      <nav ref={navContainerRef} className="w-full flex flex-wrap md:flex-nowrap items-center pt-6 pb-4 md:pt-8 md:pb-7 px-4 md:px-8 lg:px-12 text-[#154CB3] select-none relative gap-3 md:gap-4">
+      <nav ref={navContainerRef} className="relative z-50 w-full flex flex-wrap md:flex-nowrap items-center pt-6 pb-4 md:pt-8 md:pb-7 px-4 md:px-8 lg:px-12 text-[#154CB3] select-none gap-3 md:gap-4">
         <div ref={desktopNavMeasureRef} className="hidden md:flex absolute invisible pointer-events-none -z-10">
           <div className="flex space-x-8">
             {navigationLinks.map((link) => (
