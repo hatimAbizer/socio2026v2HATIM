@@ -23,6 +23,25 @@ import { pushEventToGated, shouldPushEventToGated, isGatedEnabled } from "../uti
 
 const router = express.Router();
 
+// HEALTH CHECK - Verify Supabase connection
+router.get("/debug/health", async (req, res) => {
+  try {
+    const result = await queryOne("events", { where: { event_id: "test" } });
+    return res.json({
+      status: "ok",
+      supabase: "connected",
+      message: "✅ Supabase connection is working"
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: "error",
+      supabase: "disconnected",
+      message: "❌ Supabase connection failed",
+      error: error.message
+    });
+  }
+});
+
 // DIAGNOSTIC ENDPOINT - Check authentication and organiser status
 router.get("/debug/status", 
   authenticateUser,
@@ -661,21 +680,26 @@ router.put(
       };
 
       // Handle file uploads if new files are provided
-      if (files?.eventImage && files.eventImage[0]) {
-        // Delete old image if exists (optional extended feature: strictly clean up old files)
-        // Here we just overwrite the reference
-        const result = await uploadFileToSupabase(files.eventImage[0], "event-images", eventId);
-        uploadedFilePaths.image = result?.publicUrl || null;
-      }
+      try {
+        if (files?.eventImage && files.eventImage[0]) {
+          // Delete old image if exists (optional extended feature: strictly clean up old files)
+          // Here we just overwrite the reference
+          const result = await uploadFileToSupabase(files.eventImage[0], "event-images", eventId);
+          uploadedFilePaths.image = result?.publicUrl || null;
+        }
 
-      if (files?.bannerImage && files.bannerImage[0]) {
-        const result = await uploadFileToSupabase(files.bannerImage[0], "event-banners", eventId);
-        uploadedFilePaths.banner = result?.publicUrl || null;
-      }
-      
-      if (files?.pdfFile && files.pdfFile[0]) {
-        const result = await uploadFileToSupabase(files.pdfFile[0], "event-pdfs", eventId);
-        uploadedFilePaths.pdf = result?.publicUrl || null;
+        if (files?.bannerImage && files.bannerImage[0]) {
+          const result = await uploadFileToSupabase(files.bannerImage[0], "event-banners", eventId);
+          uploadedFilePaths.banner = result?.publicUrl || null;
+        }
+        
+        if (files?.pdfFile && files.pdfFile[0]) {
+          const result = await uploadFileToSupabase(files.pdfFile[0], "event-pdfs", eventId);
+          uploadedFilePaths.pdf = result?.publicUrl || null;
+        }
+      } catch (fileError) {
+        console.error("❌ File upload error during event update:", fileError.message);
+        throw fileError; // Re-throw to be caught by main try-catch
       }
 
       const {
@@ -773,8 +797,8 @@ router.put(
         allowed_campuses: Array.isArray(req.body.allowed_campuses)
           ? req.body.allowed_campuses
           : parseJsonField(req.body.allowed_campuses, []),
-        updated_at: new Date().toISOString(),
-        updated_by: req.userInfo.email
+        updated_at: new Date().toISOString()
+        // NOTE: 'updated_by' column does not exist in events table - removed
       };
 
       // If event_id changed, update related records first
@@ -891,8 +915,16 @@ router.put(
         userId: req.userId,
         userEmail: req.userInfo?.email,
         isOrganiser: req.userInfo?.is_organiser,
-        eventId: req.params.eventId
+        eventId: req.params.eventId,
+        supabaseError: error.status || error.statusCode || "N/A",
+        errorType: error.constructor.name
       });
+      
+      // More detailed logging for debugging
+      if (error.message && error.message.includes('Supabase')) {
+        console.error("🔴 Supabase-specific error detected - checking connectivity...");
+      }
+      
       return res.status(500).json({ 
         error: "Internal server error while updating event.",
         details: error.message,

@@ -36,6 +36,12 @@ export async function initializeDatabase() {
   }
 }
 
+// DEBUG: Log Supabase connection status
+if (!supabaseServiceKey) {
+  console.warn('⚠️ WARNING: SUPABASE_SERVICE_ROLE_KEY not loaded from environment. Using fallback.');
+  console.warn('This will cause authentication failures on all database operations!');
+}
+
 // Helper function to execute queries - returns all rows
 export async function queryAll(table, options = {}) {
   let query = supabase.from(table).select(options.select || '*');
