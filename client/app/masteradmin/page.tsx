@@ -219,10 +219,19 @@ export default function MasterAdminPage() {
   const debouncedFestSearch = useDebounce(festSearchQuery, 300);
 
   useEffect(() => {
-    if (!authLoading && !isMasterAdmin) {
+    const isLocalhost = typeof window !== 'undefined' && window.location.hostname === 'localhost';
+    if (!authLoading && !isMasterAdmin && !isLocalhost) {
       router.push("/");
     }
   }, [authLoading, isMasterAdmin, router]);
+
+  // Check if user is on localhost for dev access
+  const [isLocalhostDev, setIsLocalhostDev] = useState(false);
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setIsLocalhostDev(window.location.hostname === 'localhost');
+    }
+  }, []);
 
   useEffect(() => {
     if (!isMasterAdmin || !authToken) return;

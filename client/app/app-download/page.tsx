@@ -41,9 +41,9 @@ const ComingSoon = () => {
   }, []);
 
   return (
-    <div ref={pageRef} className="min-h-screen bg-gradient-to-b from-[#f8f9fc] to-[#e8f0ff] flex flex-col items-center justify-center px-4 py-16">
+    <div ref={pageRef} className="relative isolate min-h-screen bg-gradient-to-b from-[#f8f9fc] to-[#e8f0ff] flex flex-col items-center justify-center px-4 py-16 overflow-hidden">
       {/* Background Elements */}
-      <div className="absolute inset-0 z-0 overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
         <div className="pulse-circle absolute top-1/4 left-1/4 w-64 h-64 rounded-full bg-blue-100 opacity-20 animate-pulse"></div>
         <div className="pulse-circle absolute bottom-1/4 right-1/4 w-72 h-72 rounded-full bg-yellow-100 opacity-20 animate-pulse" style={{ animationDelay: '1s' }}></div>
       </div>

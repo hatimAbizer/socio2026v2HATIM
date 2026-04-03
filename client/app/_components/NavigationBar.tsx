@@ -88,6 +88,7 @@ function NavigationBar() {
   const displayName = userData?.name || sessionDisplayName;
   const displayAvatar = userData?.avatar_url || session?.user?.user_metadata?.avatar_url || null;
   const avatarInitial = (displayName || "U").charAt(0).toUpperCase();
+  const isLocalhost = typeof window !== 'undefined' && window.location.hostname === 'localhost';
 
   useEffect(() => {
     setAvatarLoadError(false);
@@ -236,7 +237,7 @@ function NavigationBar() {
   return (
     <>
  {/* CHANGED FOR EACH DEVICE */}
-      <nav ref={navContainerRef} className="w-full flex flex-wrap md:flex-nowrap items-center pt-6 pb-4 md:pt-8 md:pb-7 px-4 md:px-8 lg:px-12 text-[#154CB3] select-none relative gap-3 md:gap-4">
+      <nav ref={navContainerRef} className="relative z-50 w-full flex flex-wrap md:flex-nowrap items-center pt-6 pb-4 md:pt-8 md:pb-7 px-4 md:px-8 lg:px-12 text-[#154CB3] select-none gap-3 md:gap-4">
         <div ref={desktopNavMeasureRef} className="hidden md:flex absolute invisible pointer-events-none -z-10">
           <div className="flex space-x-8">
             {navigationLinks.map((link) => (
@@ -349,14 +350,14 @@ function NavigationBar() {
                   {!isDesktopCompact && (userData as any).is_masteradmin && (
                     <Link href="/masteradmin">
                       <button className="cursor-pointer font-semibold px-3 py-1.5 sm:px-4 sm:py-2 border-2 rounded-full text-xs sm:text-sm hover:bg-red-50 border-red-600 text-red-600 transition-all duration-200 ease-in-out">
-                        Admin Panel
+                        {(userData as any).is_masteradmin ? 'Admin Panel' : 'Admin (Dev)'}
                       </button>
                     </Link>
                   )}
                   {!isDesktopCompact && userData.is_organiser && (
                     <Link href="/manage">
                       <button className="cursor-pointer font-semibold px-3 py-1.5 sm:px-4 sm:py-2 border-2 rounded-full text-xs sm:text-sm hover:bg-[#f3f3f3] transition-all duration-200 ease-in-out">
-                        Manage events
+                        {userData.is_organiser ? 'Manage events' : 'Manage (Dev)'}
                       </button>
                     </Link>
                   )}
