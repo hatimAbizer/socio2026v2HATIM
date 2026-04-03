@@ -352,7 +352,7 @@ function NavigationBar() {
                   {!isDesktopCompact && isMasterAdmin && (
                     <Link href="/masteradmin">
                       <button className="cursor-pointer font-semibold px-3 py-1.5 sm:px-4 sm:py-2 border-2 rounded-full text-xs sm:text-sm hover:bg-red-50 border-red-600 text-red-600 transition-all duration-200 ease-in-out">
-                        Main Admin
+                        Admin Panel
                       </button>
                     </Link>
                   )}
@@ -603,7 +603,7 @@ function NavigationBar() {
                     onClick={closeDesktopMenu}
                     className="block w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-100 transition-colors duration-200"
                   >
-                    Main Admin
+                    Admin Panel
                   </Link>
                 )}
                 {canManageEvents && (
