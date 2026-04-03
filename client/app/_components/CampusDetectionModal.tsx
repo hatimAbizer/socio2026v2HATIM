@@ -80,14 +80,12 @@ export default function CampusDetectionModal({
   const [confirmInput, setConfirmInput] = useState("");
   const [copied, setCopied] = useState(false);
   const [pasted, setPasted] = useState(false);
-  const [pasteError, setPasteError] = useState("");
 
   const detectLocation = useCallback(() => {
     setState("detecting");
     setConfirmInput("");
     setCopied(false);
     setPasted(false);
-    setPasteError("");
     if (!navigator.geolocation) {
       setState("notOnCampus");
       return;
@@ -150,17 +148,10 @@ export default function CampusDetectionModal({
     } catch {}
   };
 
-  const pasteConfirmWord = async () => {
-    try {
-      const clipboardText = await navigator.clipboard.readText();
-      setConfirmInput(clipboardText.trim().toUpperCase());
-      setPasted(true);
-      setPasteError("");
-      setTimeout(() => setPasted(false), 2000);
-    } catch {
-      setPasteError("Clipboard access was blocked. Paste manually with Ctrl+V.");
-      setTimeout(() => setPasteError(""), 3000);
-    }
+  const pasteConfirmWord = () => {
+    setConfirmInput(CONFIRM_WORD);
+    setPasted(true);
+    setTimeout(() => setPasted(false), 2000);
   };
 
   const isConfirmationValid = confirmInput.trim().toUpperCase() === CONFIRM_WORD;
@@ -202,7 +193,6 @@ export default function CampusDetectionModal({
                   setConfirmInput("");
                   setCopied(false);
                   setPasted(false);
-                  setPasteError("");
                   setState("finalConfirm");
                 }}
                 className="w-full bg-[#154CB3] hover:bg-[#0f3d8a] text-white font-semibold py-2.5 rounded-lg transition-colors mb-2 text-sm"
@@ -228,70 +218,78 @@ export default function CampusDetectionModal({
               </div>
 
               <div className="mb-3 rounded-xl border border-[#154CB3]/15 bg-[#f4f8ff] p-3">
-                <p className="text-xs font-semibold text-[#063168] mb-1.5">Step 1: Copy the required word</p>
-                <div className="flex gap-2 items-stretch">
-                  <div className="flex-1 border border-[#154CB3]/25 bg-white rounded-lg px-3 py-2.5 text-center text-lg font-extrabold tracking-[0.2em] text-[#154CB3] font-mono select-all">
+                <p className="text-xs font-semibold text-[#063168] mb-2">Step 1: Use this required word</p>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="border border-[#154CB3]/25 bg-white rounded-lg px-3 py-2 text-center text-base font-extrabold tracking-[0.18em] text-[#154CB3] font-mono select-all">
                     {CONFIRM_WORD}
                   </div>
-                  <button
-                    onClick={copyYes}
-                    className="px-3 py-2.5 border border-[#154CB3]/30 bg-white rounded-lg hover:bg-[#eaf1ff] transition-colors text-xs font-semibold text-[#154CB3] flex items-center gap-1 shrink-0"
-                    title="Copy confirmation word"
-                  >
-                    {copied ? (
-                      <>
-                        <svg className="w-3.5 h-3.5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.5 12.75l6 6 9-13.5" />
-                        </svg>
-                        Copied
-                      </>
-                    ) : (
-                      <>
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 0 1-.75.75H9.75a.75.75 0 0 1-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0 1 1.927-.184" />
-                        </svg>
-                        Copy
-                      </>
-                    )}
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={copyYes}
+                      className="px-3 py-2 border border-[#154CB3]/30 bg-white rounded-lg hover:bg-[#eaf1ff] transition-colors text-xs font-semibold text-[#154CB3] flex items-center gap-1 shrink-0"
+                      title="Copy confirmation word"
+                    >
+                      {copied ? (
+                        <>
+                          <svg className="w-3.5 h-3.5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.5 12.75l6 6 9-13.5" />
+                          </svg>
+                          Copied
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 0 1-.75.75H9.75a.75.75 0 0 1-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0 1 1.927-.184" />
+                          </svg>
+                          Copy
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      onClick={pasteConfirmWord}
+                      className="px-3 py-2 border border-[#154CB3]/30 bg-white rounded-lg hover:bg-[#eaf1ff] transition-colors text-xs font-semibold text-[#154CB3] flex items-center gap-1 shrink-0"
+                      title="Auto-fill YES in confirmation input"
+                    >
+                      {pasted ? (
+                        <>
+                          <svg className="w-3.5 h-3.5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.5 12.75l6 6 9-13.5" />
+                          </svg>
+                          Filled
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.5v15m7.5-7.5h-15" />
+                          </svg>
+                          Paste YES
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
 
               <div className="mb-3">
                 <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                  Step 2: Paste or type <span className="font-mono bg-gray-100 px-1 py-0.5 rounded text-[#154CB3]">{CONFIRM_WORD}</span> below
+                  Step 2: Confirm by typing <span className="font-mono bg-gray-100 px-1 py-0.5 rounded text-[#154CB3]">{CONFIRM_WORD}</span> below
                 </label>
-                <div className="flex gap-2 items-stretch">
-                  <input
-                    type="text"
-                    value={confirmInput}
-                    onChange={(e) => setConfirmInput(e.target.value.toUpperCase())}
-                    placeholder="Paste YES here"
-                    className="flex-1 border border-gray-300 rounded-lg px-3 py-2.5 text-center text-base font-bold tracking-widest uppercase focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent"
-                    autoFocus
-                  />
-                  <button
-                    onClick={pasteConfirmWord}
-                    className="px-3 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-xs font-semibold text-gray-600 flex items-center gap-1 shrink-0"
-                    title="Paste from clipboard"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.5v15m7.5-7.5h-15" />
-                    </svg>
-                    Paste
-                  </button>
-                </div>
+                <input
+                  type="text"
+                  value={confirmInput}
+                  onChange={(e) => setConfirmInput(e.target.value.toUpperCase())}
+                  placeholder="Type YES here"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-center text-base font-bold tracking-widest uppercase focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent"
+                  autoFocus
+                />
 
                 <p className={`mt-1.5 text-xs font-medium ${isConfirmationValid ? "text-green-600" : "text-gray-500"}`}>
                   {isConfirmationValid ? "Ready. You can now confirm and save." : `Enter ${CONFIRM_WORD} exactly to continue.`}
                 </p>
 
-                {pasted && !pasteError && (
-                  <p className="mt-1 text-xs font-medium text-green-600">Pasted from clipboard.</p>
-                )}
-
-                {pasteError && (
-                  <p className="mt-1 text-xs font-medium text-red-600">{pasteError}</p>
+                {pasted && (
+                  <p className="mt-1 text-xs font-medium text-green-600">YES inserted into the input.</p>
                 )}
               </div>
 
@@ -307,7 +305,6 @@ export default function CampusDetectionModal({
                   setConfirmInput("");
                   setCopied(false);
                   setPasted(false);
-                  setPasteError("");
                   setState("confirm");
                 }}
                 className="w-full text-gray-400 hover:text-gray-600 text-xs py-1.5 transition-colors"
