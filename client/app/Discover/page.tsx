@@ -67,11 +67,13 @@ const DiscoverPageContent = () => {
     error: errorEventsFromContext,
     allEvents,
   } = useEvents();
-  const { session } = useAuth();
+  const { session, userData } = useAuth();
 
   const [selectedCampus, setSelectedCampus] = useState(DEFAULT_DISCOVER_CAMPUS);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const isAdminOrOrganizer = userData?.is_organiser || (userData as any)?.is_admin;
 
   const [allFests, setAllFests] = useState<Fest[]>([]);
   const [isLoadingFests, setIsLoadingFests] = useState(true);
@@ -118,7 +120,7 @@ const DiscoverPageContent = () => {
   }, []);
 
   const {
-    filteredEvents,
+    filteredEvents: allFilteredEvents,
     carouselEvents: campusCarouselEvents,
     trendingEvents: campusTrendingEvents,
     upcomingEvents: campusUpcomingEvents,
@@ -126,6 +128,16 @@ const DiscoverPageContent = () => {
     () => buildDiscoverCampusDatasets(allEvents || [], selectedCampus),
     [allEvents, selectedCampus]
   );
+
+  // Filter out archived events for normal users
+  const filterArchivedForNormalUsers = (events: any[]) => {
+    if (isAdminOrOrganizer) return events;
+    return events.filter(e => !e.is_archived);
+  };
+
+  const filteredEvents = filterArchivedForNormalUsers(allFilteredEvents);
+  const campusTrendingEventsFiltered = filterArchivedForNormalUsers(campusTrendingEvents);
+  const campusUpcomingEventsFiltered = filterArchivedForNormalUsers(campusUpcomingEvents);
 
   const filteredUpcomingFests = useMemo(() => {
     const filtered = allFests.filter((fest) =>
@@ -375,10 +387,10 @@ const DiscoverPageContent = () => {
                 </div>
               )}
 
-              {campusTrendingEvents.length > 0 ? (
+              {campusTrendingEventsFiltered.length > 0 ? (
                 <EventsSection
                   title="Trending events"
-                  events={campusTrendingEvents}
+                  events={campusTrendingEventsFiltered}
                   baseUrl="event"
                   onArchiveToggle={handleToggleArchive}
                   archiveLoadingIds={archiveUpdatingIds}
@@ -459,10 +471,10 @@ const DiscoverPageContent = () => {
 
         {!isLoadingEventsFromContext && !errorEventsFromContext && (
           <>
-            {campusUpcomingEvents.length > 0 ? (
+            {campusUpcomingEventsFiltered.length > 0 ? (
               <EventsSection
                 title="Upcoming events"
-                events={campusUpcomingEvents}
+                events={campusUpcomingEventsFiltered}
                 showAll={false}
                 baseUrl="event"
                 onArchiveToggle={handleToggleArchive}

@@ -43,6 +43,8 @@ interface Fest {
   organizing_dept: string;
   created_by?: string;
   campus_hosted_at?: string | null;
+  is_archived?: boolean;
+  archived_at?: string | null;
 }
 
 const ITEMS_PER_PAGE = 12;
@@ -128,8 +130,16 @@ const ACCREDITATION_BODIES = [
 
 
 // ─── UI COMPONENTS ────────────────────────────────────────────────────────
-const MappedFestCard = ({ fest, baseUrl }: { fest: Fest, baseUrl: string }) => {
+interface MappedFestCardProps {
+  fest: Fest;
+  baseUrl: string;
+  isArchiveUpdating?: boolean;
+  onArchiveToggle?: (festId: string, shouldArchive: boolean) => void;
+}
+
+const MappedFestCard = ({ fest, baseUrl, isArchiveUpdating = false, onArchiveToggle }: MappedFestCardProps) => {
   const isPast = fest.closing_date ? new Date(fest.closing_date) < new Date() : false;
+  const isArchived = fest.is_archived ?? false;
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col hover:shadow-md transition-shadow duration-300">
@@ -142,10 +152,10 @@ const MappedFestCard = ({ fest, baseUrl }: { fest: Fest, baseUrl: string }) => {
         <div className="absolute top-3 right-3">
           <span
             className={`px-3 py-1.5 text-[10px] font-bold rounded-full tracking-wider shadow-sm flex items-center ${
-              isPast ? "bg-[#333333] text-white" : "bg-white text-emerald-600"
+              isArchived ? "bg-purple-600 text-white" : isPast ? "bg-[#333333] text-white" : "bg-white text-emerald-600"
             }`}
           >
-            {isPast ? "PAST" : "UPCOMING"}
+            {isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING"}
           </span>
         </div>
       </div>
@@ -165,14 +175,33 @@ const MappedFestCard = ({ fest, baseUrl }: { fest: Fest, baseUrl: string }) => {
           <Calendar className="w-4 h-4 text-slate-400" />
           {formatDateFull(fest.opening_date, "TBD")}
         </div>
-        {isPast ? (
-          <Link href={`/${baseUrl}/${fest.fest_id}`} className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 font-semibold text-sm transition-colors">
-            Archive <History className="w-4 h-4" />
-          </Link>
+        {isArchived ? (
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              onArchiveToggle?.(fest.fest_id, false);
+            }}
+            disabled={isArchiveUpdating}
+            className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 font-semibold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isArchiveUpdating ? "Restoring..." : "Restore"} <History className="w-4 h-4" />
+          </button>
         ) : (
-          <Link href={`/${baseUrl}/${fest.fest_id}`} className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline">
-            Manage <ArrowRight className="w-4 h-4" />
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                onArchiveToggle?.(fest.fest_id, true);
+              }}
+              disabled={isArchiveUpdating}
+              className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 font-semibold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isArchiveUpdating ? "Archiving..." : "Archive"} <History className="w-4 h-4" />
+            </button>
+            <Link href={`/${baseUrl}/${fest.fest_id}`} className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline">
+              Manage <ArrowRight className="w-4 h-4" />
+            </Link>
+          </div>
         )}
       </div>
     </div>
@@ -297,6 +326,8 @@ export default function ManageDashboard() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [archiveOverrides, setArchiveOverrides] = useState<Record<string, { is_archived: boolean; archived_at: string | null }>>({});
   const [archiveUpdatingIds, setArchiveUpdatingIds] = useState<Set<string>>(new Set());
+  const [festArchiveOverrides, setFestArchiveOverrides] = useState<Record<string, { is_archived: boolean; archived_at: string | null }>>({});
+  const [festArchiveUpdatingIds, setFestArchiveUpdatingIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -752,6 +783,60 @@ export default function ManageDashboard() {
     }
   };
 
+  const handleToggleArchiveFest = async (festId: string, shouldArchive: boolean) => {
+    if (!authToken) {
+      toast.error("Please sign in again to update archive status.");
+      return;
+    }
+
+    setFestArchiveUpdatingIds((prev) => {
+      const next = new Set(prev);
+      next.add(festId);
+      return next;
+    });
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL!;
+      const response = await fetch(`${apiUrl}/api/fests/${festId}/archive`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ archive: shouldArchive }),
+      });
+
+      const payload = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "Failed to update fest archive status.");
+      }
+
+      setFestArchiveOverrides((prev) => ({
+        ...prev,
+        [festId]: {
+          is_archived: Boolean(shouldArchive),
+          archived_at: shouldArchive ? new Date().toISOString() : null,
+        },
+      }));
+
+      const eventsAffected = payload?.events_affected || 0;
+      toast.success(
+        shouldArchive
+          ? `Fest and ${eventsAffected} events archived successfully.`
+          : "Fest and associated events moved back to active list."
+      );
+    } catch (error: any) {
+      console.error("Fest archive update failed:", error);
+      toast.error(error?.message || "Unable to update fest archive status.");
+    } finally {
+      setFestArchiveUpdatingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(festId);
+        return next;
+      });
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans">
@@ -885,9 +970,21 @@ export default function ManageDashboard() {
                 <div className="text-center text-slate-500 py-10 text-sm font-medium">No results found.</div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {paginatedFests.items.map((fest) => (
-                        <MappedFestCard key={fest.fest_id} fest={fest} baseUrl="edit/fest" />
-                    ))}
+                    {paginatedFests.items.map((fest) => {
+                      const archiveOverride = festArchiveOverrides[fest.fest_id];
+                      const festWithOverride = archiveOverride
+                        ? { ...fest, ...archiveOverride }
+                        : fest;
+                      return (
+                        <MappedFestCard
+                          key={fest.fest_id}
+                          fest={festWithOverride}
+                          baseUrl="edit/fest"
+                          isArchiveUpdating={festArchiveUpdatingIds.has(fest.fest_id)}
+                          onArchiveToggle={handleToggleArchiveFest}
+                        />
+                      );
+                    })}
                 </div>
               )}
             </>

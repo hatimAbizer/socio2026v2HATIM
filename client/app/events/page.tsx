@@ -127,6 +127,8 @@ const EventsPageContent = () => {
     return () => window.clearTimeout(timeoutId);
   }, [categoryParam, router, searchParam, searchQuery]);
 
+  const isAdminOrOrganizer = userData?.is_organiser || (userData as any)?.is_admin;
+  
   const eventsToFilter = Array.isArray(allEvents) ? allEvents : [];
 
   const handleToggleArchive = async (eventId: string, shouldArchive: boolean) => {
@@ -171,6 +173,11 @@ const EventsPageContent = () => {
     }
   };
   const filteredEvents = (eventsToFilter as FetchedEvent[]).filter((event) => {
+    // Archive filter - hide archived events from normal users
+    if (!isAdminOrOrganizer && event.is_archived) {
+      return false;
+    }
+    
     // Category filter
     if (activeFilterName !== "All") {
       const eventTagsForFiltering: string[] = [];

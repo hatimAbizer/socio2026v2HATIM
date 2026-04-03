@@ -564,6 +564,90 @@ router.put(
     }
   });
 
+// PATCH archive/unarchive fest - REQUIRES AUTHENTICATION + OWNERSHIP + ORGANISER
+// When archiving a fest, all associated events are also archived
+router.patch(
+  "/:festId/archive",
+  authenticateUser,
+  getUserInfo(),
+  checkRoleExpiration,
+  (req, res, next) => {
+    if (req.userInfo?.is_masteradmin || req.userInfo?.is_organiser) {
+      return next();
+    }
+    return res.status(403).json({ error: "Access denied: Organiser privileges required" });
+  },
+  requireOwnership('fests', 'festId', 'auth_uuid'),
+  async (req, res) => {
+    try {
+      const { festId } = req.params;
+      const rawArchiveValue = req.body?.archive;
+      const shouldArchive =
+        rawArchiveValue === true || rawArchiveValue === "true" || rawArchiveValue === 1 || rawArchiveValue === "1";
+      const shouldUnarchive =
+        rawArchiveValue === false || rawArchiveValue === "false" || rawArchiveValue === 0 || rawArchiveValue === "0";
+
+      if (!shouldArchive && !shouldUnarchive) {
+        return res.status(400).json({
+          error: "Invalid payload: 'archive' must be a boolean (true or false).",
+        });
+      }
+
+      const archiveValue = shouldArchive;
+      const nowIso = new Date().toISOString();
+
+      // Archive/unarchive the fest
+      const festTable = await getFestTableForDatabase(queryAll);
+      const updatedFests = await update(
+        festTable,
+        {
+          is_archived: archiveValue,
+          archived_at: archiveValue ? nowIso : null,
+          archived_by: archiveValue ? req.userInfo?.email || req.userId || null : null,
+          updated_at: nowIso,
+        },
+        { fest_id: festId }
+      );
+
+      if (!updatedFests || updatedFests.length === 0) {
+        return res.status(404).json({ error: "Fest not found." });
+      }
+
+      const updatedFest = updatedFests[0];
+
+      // Also archive/unarchive all events under this fest
+      const eventsToUpdate = await queryAll("events", {
+        where: { fest_id: festId }
+      });
+
+      if (eventsToUpdate && eventsToUpdate.length > 0) {
+        await update(
+          "events",
+          {
+            is_archived: archiveValue,
+            archived_at: archiveValue ? nowIso : null,
+            archived_by: archiveValue ? req.userInfo?.email || req.userId || null : null,
+            updated_at: nowIso,
+          },
+          { fest_id: festId }
+        );
+        console.log(`✅ ${archiveValue ? "Archived" : "Unarchived"} ${eventsToUpdate.length} events for fest ${festId}`);
+      }
+
+      return res.status(200).json({
+        message: archiveValue 
+          ? `Fest and ${eventsToUpdate?.length || 0} associated events archived successfully.` 
+          : "Fest and associated events moved back to active list.",
+        fest: mapFestResponse(updatedFest),
+        events_affected: eventsToUpdate?.length || 0,
+      });
+    } catch (error) {
+      console.error("Server error PATCH /api/fests/:festId/archive:", error);
+      return res.status(500).json({ error: "Internal server error while updating archive state." });
+    }
+  }
+);
+
 // DELETE fest - REQUIRES AUTHENTICATION + OWNERSHIP + ORGANISER PRIVILEGES
 router.delete(
   "/:festId",

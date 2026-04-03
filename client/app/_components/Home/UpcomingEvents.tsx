@@ -20,7 +20,14 @@ const UpcomingEvents = () => {
     isLoading: isLoadingContext,
     error: errorContext,
   } = useEvents();
-  const { session } = useAuth();
+  const { session, userData } = useAuth();
+  const isAdminOrOrganizer = userData?.is_organiser || (userData as any)?.is_admin;
+
+  // Filter out archived events for normal users
+  const filteredUpcomingEvents = upcomingEvents.filter(event => {
+    if (isAdminOrOrganizer) return true;
+    return !event.is_archived;
+  });
 
   const handleToggleArchive = async (eventId: string, shouldArchive: boolean) => {
     if (!session?.access_token) {
@@ -65,7 +72,7 @@ const UpcomingEvents = () => {
   };
 
   useEffect(() => {
-    if (isLoadingContext || upcomingEvents.length === 0) return;
+    if (isLoadingContext || filteredUpcomingEvents.length === 0) return;
 
     gsap.registerPlugin(ScrollTrigger);
 
@@ -114,7 +121,7 @@ const UpcomingEvents = () => {
         }
       });
     };
-  }, [upcomingEvents, isLoadingContext]);
+  }, [filteredUpcomingEvents, isLoadingContext]);
 
   if (isLoadingContext) {
     return (
@@ -124,7 +131,7 @@ const UpcomingEvents = () => {
     );
   }
 
-  if (upcomingEvents.length === 0) {
+  if (filteredUpcomingEvents.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center w-full mt-8 sm:mt-12 md:mt-16 mb-8 sm:mb-12 md:mb-16">
         <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-[#063168] px-4 text-center">
@@ -155,7 +162,7 @@ const UpcomingEvents = () => {
         Here's a glimpse of what's next. Don't miss out!
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-8 mt-8 sm:mt-12 w-full px-4 sm:px-6 lg:px-8">
-        {upcomingEvents.map((event: ContextEventForCard) => {
+        {filteredUpcomingEvents.map((event: ContextEventForCard) => {
           const eventCardData = {
             title: event.title,
             dept: event.organizing_dept,
