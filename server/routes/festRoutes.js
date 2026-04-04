@@ -181,7 +181,6 @@ const mapFestResponse = (fest) => {
 router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
   try {
     const { page, pageSize, search, status, sortBy, sortOrder } = req.query;
-    const festTable = await getFestTableForDatabase(queryAll);
     const today = new Date().toISOString().split('T')[0];
 
     let queryOptions = {
@@ -200,17 +199,31 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
     }
 
     console.log(`Fetching fests with status: ${status || 'all'}...`);
-    const fests = await getMergedFestsFromCandidates(queryOptions, festTable);
+    let fests = [];
+    try {
+      const festTable = await getFestTableForDatabase(queryAll);
+      fests = await getMergedFestsFromCandidates(queryOptions, festTable);
+    } catch (error) {
+      if (!isMissingRelationError(error)) {
+        throw error;
+      }
+      console.warn("[Fests] Fest tables not available; falling back to event-derived fests.");
+      fests = [];
+    }
 
     let events = [];
     try {
-      events = await queryAll("events", { select: "event_id, fest, fest_id" });
+      events = await queryAll("events", {
+        select: "event_id, fest, fest_id, organizing_dept, event_date, created_at",
+      });
     } catch (error) {
       if (isMissingRelationError(error)) {
         events = [];
       } else if (isMissingColumnError(error)) {
         try {
-          events = await queryAll("events", { select: "event_id, fest_id" });
+          events = await queryAll("events", {
+            select: "event_id, fest_id, organizing_dept, event_date, created_at",
+          });
         } catch (fallbackError) {
           if (isMissingRelationError(fallbackError) || isMissingColumnError(fallbackError)) {
             events = [];
@@ -257,6 +270,27 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
       ...mapFestResponse(fest),
       registration_count: festRegistrationCounts[fest.fest_id] || 0
     }));
+
+    if (processedFests.length === 0 && (events || []).length > 0) {
+      const derivedFestMap = new Map();
+      for (const event of events) {
+        const festKey = String(event?.fest_id || event?.fest || "").trim();
+        if (!festKey || derivedFestMap.has(festKey)) continue;
+
+        derivedFestMap.set(festKey, {
+          fest_id: festKey,
+          fest_title: festKey,
+          organizing_dept: event?.organizing_dept || null,
+          opening_date: event?.event_date || null,
+          closing_date: event?.event_date || null,
+          created_at: event?.created_at || null,
+          is_archived: false,
+          registration_count: festRegistrationCounts[festKey] || 0,
+        });
+      }
+
+      processedFests = Array.from(derivedFestMap.values());
+    }
 
     const normalizedSearch = typeof search === "string" ? search.trim().toLowerCase() : "";
     if (normalizedSearch) {
@@ -415,10 +449,18 @@ router.get("/:festId", optionalAuth, checkRoleExpiration, async (req, res) => {
     }
 
     console.log(`[Fest GET] Getting fest table...`);
-    const festTable = await getFestTableForDatabase(queryAll);
-    
-    console.log(`[Fest GET] Querying ${festTable} table for fest_id: ${festSlug}`);
-    const fest = await getFestByIdFromCandidates(festSlug, festTable);
+    let fest = null;
+    try {
+      const festTable = await getFestTableForDatabase(queryAll);
+      console.log(`[Fest GET] Querying ${festTable} table for fest_id: ${festSlug}`);
+      fest = await getFestByIdFromCandidates(festSlug, festTable);
+    } catch (error) {
+      if (!isMissingRelationError(error)) {
+        throw error;
+      }
+      console.warn(`[Fest GET] Fest tables unavailable while querying ${festSlug}; returning not found.`);
+      fest = null;
+    }
 
     if (!fest) {
       console.warn(`[Fest GET] Fest not found: ${festSlug}`);
