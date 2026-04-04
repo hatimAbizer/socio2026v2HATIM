@@ -22,6 +22,8 @@ interface FestDataFromAPI {
   venue?: string;
   status?: string;
   registration_deadline?: string;
+  is_archived?: boolean;
+  archived_at?: string;
   timeline?: { time: string; title: string; description: string }[];
   sponsors?: { name: string; logo_url: string; website?: string }[];
   social_links?: { platform: string; url: string }[];
@@ -175,6 +177,9 @@ const FestPage = () => {
     fetch(`${API_URL}/api/fests/${festIdSlug}`)
       .then((res) => {
         if (!res.ok) {
+          if (res.status === 403) {
+            throw new Error("This fest is archived and not available");
+          }
           if (res.status === 404) {
             throw new Error(`Fest with ID '${festIdSlug}' not found.`);
           }

@@ -7,7 +7,8 @@ import {
   getUserInfo,
   checkRoleExpiration,
   requireOrganiser,
-  requireOwnership
+  requireOwnership,
+  optionalAuth
 } from "../middleware/authMiddleware.js";
 import { sendBroadcastNotification } from "./notificationRoutes.js";
 import { pushFestToGated, isGatedEnabled } from "../utils/gatedSync.js";
@@ -98,7 +99,7 @@ const mapFestResponse = (fest) => {
 };
 
 // GET all fests
-router.get("/", async (req, res) => {
+router.get("/", optionalAuth, async (req, res) => {
   try {
     const { page, pageSize, search, status, sortBy, sortOrder } = req.query;
     const festTable = await getFestTableForDatabase(queryAll);
@@ -189,6 +190,17 @@ router.get("/", async (req, res) => {
 
         return true;
       });
+    }
+
+    // Filter out archived fests for non-organizers/admins
+    const userInfo = req.userInfo;
+    const isAdminOrOrganizer = userInfo && (userInfo.is_masteradmin || userInfo.is_organiser);
+    
+    if (!isAdminOrOrganizer) {
+      processedFests = processedFests.filter((fest) => !fest.is_archived);
+      console.log(`[Archive Filter] Non-organizer viewing ${processedFests.length} non-archived fests`);
+    } else {
+      console.log(`[Archive Filter] Organizer/Admin viewing all ${processedFests.length} fests (incl. archived)`);
     }
 
     const hasExplicitSortBy = typeof sortBy === "string" && sortBy.trim() !== "";
@@ -282,7 +294,7 @@ router.get("/", async (req, res) => {
 });
 
 // GET specific fest by ID
-router.get("/:festId", async (req, res) => {
+router.get("/:festId", optionalAuth, async (req, res) => {
   try {
     const { festId: festSlug } = req.params;
     console.log(`[Fest GET] Fetching fest: ${festSlug}`);
@@ -302,6 +314,17 @@ router.get("/:festId", async (req, res) => {
     if (!fest) {
       console.warn(`[Fest GET] Fest not found: ${festSlug}`);
       return res.status(404).json({ error: `Fest with ID (slug) '${festSlug}' not found.` });
+    }
+
+    // Check if fest is archived
+    if (fest.is_archived) {
+      const userInfo = req.userInfo;
+      const isAdminOrOrganizer = userInfo && (userInfo.is_masteradmin || userInfo.is_organiser);
+      
+      if (!isAdminOrOrganizer) {
+        console.warn(`[Fest GET] Archived fest access denied: ${festSlug}`);
+        return res.status(403).json({ error: "This fest is archived and not available" });
+      }
     }
 
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');

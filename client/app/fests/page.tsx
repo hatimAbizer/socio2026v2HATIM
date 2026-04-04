@@ -19,6 +19,8 @@ interface Fest {
   closing_date: string;
   fest_image_url: string;
   category: string;
+  is_archived?: boolean;
+  archived_at?: string;
 }
 
 interface FilterOption {
@@ -140,6 +142,11 @@ const FestsPageContent = () => {
 
   const festsToFilter = Array.isArray(allFests) ? allFests : [];
   const filteredFests: Fest[] = festsToFilter.filter((fest: Fest) => {
+    // Filter out archived fests
+    if (fest.is_archived) {
+      return false;
+    }
+
     if (
       activeFilter !== "All" &&
       fest.category?.toLowerCase() !== activeFilter.toLowerCase()
