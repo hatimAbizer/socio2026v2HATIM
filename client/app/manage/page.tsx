@@ -18,6 +18,7 @@ import {
   downloadWorkbook,
 } from "@/lib/xlsxTheme";
 import AnimatedListDropdown from "@/app/_components/UI/AnimatedListDropdown";
+import EventReminderButton from "@/app/_components/EventReminderButton";
 import {
   Search,
   SlidersHorizontal,
@@ -220,6 +221,7 @@ const MappedEventCard = ({
   archiveSource,
   onToggleArchive,
   isArchiveActionLoading,
+  authToken,
 }: {
   event: ContextEvent;
   baseUrl: string;
@@ -227,6 +229,7 @@ const MappedEventCard = ({
   archiveSource: EventArchiveSource;
   onToggleArchive: (eventId: string, shouldArchive: boolean) => void;
   isArchiveActionLoading: boolean;
+  authToken?: string | null;
 }) => {
   const isPast = event.event_date ? new Date(event.event_date) < new Date() : false;
   const statusLabel = isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING";
@@ -268,12 +271,24 @@ const MappedEventCard = ({
           </p>
         )}
       </div>
-      <div className="px-5 py-3.5 border-t border-slate-100 flex justify-between items-center bg-slate-50/50">
+      <div className="px-5 py-3.5 border-t border-slate-100 bg-slate-50/50 space-y-2">
         <div className="flex items-center gap-2 text-slate-500 text-sm font-medium">
           <Calendar className="w-4 h-4 text-slate-400" />
           {formatDateFull(event.event_date, "TBD")}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            href={`/event/${event.event_id}/participants`}
+            className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline"
+          >
+            View Participants
+          </Link>
+          <Link
+            href={`/attendance?eventId=${encodeURIComponent(event.event_id)}&eventTitle=${encodeURIComponent(event.title)}`}
+            className="flex items-center gap-1.5 text-emerald-700 font-semibold text-sm hover:underline"
+          >
+            Mark Attendance
+          </Link>
           <button
             type="button"
             disabled={isArchiveActionLoading}
@@ -291,6 +306,13 @@ const MappedEventCard = ({
           <Link href={`/${baseUrl}/${event.event_id}`} className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline">
             Edit <Pencil className="w-4 h-4" />
           </Link>
+          {authToken ? (
+            <EventReminderButton
+              eventId={event.event_id}
+              eventTitle={event.title}
+              authToken={authToken}
+            />
+          ) : null}
         </div>
       </div>
     </div>
@@ -1300,6 +1322,7 @@ export default function ManageDashboard() {
                             archiveSource={archiveState.archiveSource}
                             onToggleArchive={handleToggleArchive}
                             isArchiveActionLoading={archiveUpdatingIds.has(event.event_id)}
+                            authToken={authToken}
                           />
                         );
                     })}

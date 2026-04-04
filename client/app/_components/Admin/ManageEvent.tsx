@@ -1703,7 +1703,7 @@ export default function EventForm({
                     type="button"
                     onClick={handleNavigationToDashboard}
                     disabled={isSubmittingProp || rhfIsSubmitting || isDeleting}
-                    className="w-full sm:w-auto px-5 py-2.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                    className="w-full sm:w-auto px-5 py-2.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                   >
                     Cancel
                   </button>
@@ -1715,7 +1715,7 @@ export default function EventForm({
                           type="button"
                           onClick={onToggleArchive}
                           disabled={isArchiveUpdating || isSubmittingProp || rhfIsSubmitting || isDeleting}
-                          className={`w-full sm:w-auto px-4 py-2.5 text-sm font-medium rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed ${
+                          className={`w-full sm:w-auto px-4 py-2.5 text-sm font-medium rounded-md border transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed ${
                             isArchiveUpdating || isSubmittingProp || rhfIsSubmitting || isDeleting
                               ? "bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed"
                               : isArchived
@@ -1730,7 +1730,7 @@ export default function EventForm({
                         type="button"
                         onClick={closeRegistration}
                         disabled={isSubmittingProp || rhfIsSubmitting || isDeleting}
-                        className="w-full sm:w-auto px-4 py-2.5 border border-red-200 bg-red-50 text-red-700 text-sm font-medium rounded-lg hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                        className="w-full sm:w-auto px-4 py-2.5 border border-red-200 bg-red-50 text-red-700 text-sm font-medium rounded-md hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                       >
                         Close Registrations
                       </button>
@@ -1738,7 +1738,7 @@ export default function EventForm({
                         type="button"
                         onClick={openDeleteConfirmation}
                         disabled={isDeleting || isSubmittingProp || rhfIsSubmitting}
-                        className="w-full sm:w-auto px-4 py-2.5 border border-red-300 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                        className="w-full sm:w-auto px-4 py-2.5 border border-red-300 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                       >
                         {isDeleting ? "Deleting..." : "Delete"}
                       </button>
@@ -1748,7 +1748,7 @@ export default function EventForm({
                   <button
                     type="submit"
                     disabled={isSubmittingProp || rhfIsSubmitting || isDeleting}
-                    className="w-full sm:w-auto px-6 py-2.5 bg-[#154CB3] text-white text-sm font-medium rounded-lg hover:bg-[#0f3a7a] focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                    className="w-full sm:w-auto px-6 py-2.5 bg-[#154CB3] text-white text-sm font-medium rounded-md hover:bg-[#0f3a7a] focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                   >
                     {isSubmittingProp || rhfIsSubmitting
                       ? isEditMode
