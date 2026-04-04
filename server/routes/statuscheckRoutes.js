@@ -571,6 +571,88 @@ async function runMutationChecks(req) {
   return checks;
 }
 
+router.post("/insert-dummy-event", async (req, res) => {
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const today = normalizeDateOnly();
+  const eventId = `statuscheck-dummy-event-${stamp}`;
+  const eventTitle = `Statuscheck Dummy Event ${stamp}`;
+
+  try {
+    const festTable = await getFestTableForDatabase(queryAll).catch(() => null);
+    const sampleRows = await getSampleRows();
+
+    const eventPayload = {
+      event_id: eventId,
+      title: eventTitle,
+      description:
+        "Dummy event inserted by StatusCheck to validate database write connectivity. No image/banner/pdf attached.",
+      event_date: today,
+      event_time: "12:00:00",
+      venue: "Statuscheck Sandbox",
+      organizing_dept: "STATUSCHECK",
+      created_by: req.userInfo.email,
+      auth_uuid: req.userId,
+      total_participants: 0,
+      organizer_email: req.userInfo.email,
+      event_image_url: null,
+      banner_url: null,
+      pdf_url: null,
+      department_access: [],
+      rules: [],
+      schedule: [],
+      prizes: [],
+      custom_fields: [],
+      claims_applicable: false,
+      allow_outsiders: false,
+      registration_fee: null,
+      outsider_registration_fee: null,
+      participants_per_team: 1,
+      max_participants: null,
+      outsider_max_participants: null,
+    };
+
+    if (sampleRows?.sampleFestId) {
+      if (festTable === "fests") {
+        eventPayload.fest_id = sampleRows.sampleFestId;
+        eventPayload.fest = sampleRows.sampleFestId;
+      } else {
+        eventPayload.fest = sampleRows.sampleFestId;
+      }
+    }
+
+    const insertedRows = await insert("events", [eventPayload]);
+    const createdEvent = insertedRows?.[0] || null;
+
+    if (!createdEvent) {
+      throw new Error("Dummy event insert returned no rows");
+    }
+
+    return res.status(201).json({
+      ok: true,
+      message: "Dummy event inserted successfully",
+      event: {
+        event_id: createdEvent.event_id,
+        title: createdEvent.title,
+        description: createdEvent.description,
+        event_date: createdEvent.event_date,
+        event_time: createdEvent.event_time,
+        venue: createdEvent.venue,
+        fest_id: createdEvent.fest_id || createdEvent.fest || null,
+        event_image_url: createdEvent.event_image_url || null,
+        banner_url: createdEvent.banner_url || null,
+        pdf_url: createdEvent.pdf_url || null,
+        created_at: createdEvent.created_at || null,
+        created_by: createdEvent.created_by || null,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || "Failed to insert dummy event",
+    });
+  }
+});
+
 function buildLoadTargetPath(target, sampleRows, customPath = "") {
   const normalizedTarget = String(target || "events").trim().toLowerCase();
 

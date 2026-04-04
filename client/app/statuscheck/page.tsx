@@ -202,10 +202,25 @@ type CheckSectionKey = "endpointChecks" | "fetchDisplayChecks" | "workflowChecks
 type HistoryEntry = {
   id: string;
   at: string;
-  kind: "summary" | "full" | "load";
+  kind: "summary" | "full" | "load" | "insert";
   ok: boolean;
   headline: string;
   detail: string;
+};
+
+type DummyEventInsertResult = {
+  event_id: string;
+  title: string;
+  description: string;
+  event_date: string;
+  event_time: string;
+  venue: string;
+  fest_id: string | null;
+  event_image_url: string | null;
+  banner_url: string | null;
+  pdf_url: string | null;
+  created_at: string | null;
+  created_by: string | null;
 };
 
 type IssueItem = {
@@ -457,6 +472,8 @@ export default function StatusCheckPage() {
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [runningFull, setRunningFull] = useState(false);
   const [runningLoad, setRunningLoad] = useState(false);
+  const [insertingDummyEvent, setInsertingDummyEvent] = useState(false);
+  const [lastDummyEvent, setLastDummyEvent] = useState<DummyEventInsertResult | null>(null);
 
   const [includeMutations, setIncludeMutations] = useState(false);
   const [confirmation, setConfirmation] = useState("");
@@ -785,6 +802,54 @@ export default function StatusCheckPage() {
     }
   }, [headers, loadTarget, customPath, iterations, concurrency, appendHistory]);
 
+  const insertDummyEvent = useCallback(async () => {
+    if (!headers) return;
+
+    setInsertingDummyEvent(true);
+    try {
+      const response = await fetch(`${API_URL}/api/statuscheck/insert-dummy-event`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({}),
+      });
+
+      const data = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        event?: DummyEventInsertResult;
+      };
+
+      if (!response.ok || !data?.ok || !data?.event) {
+        throw new Error(data?.error || data?.message || "Failed to insert dummy event");
+      }
+
+      setLastDummyEvent(data.event);
+
+      appendHistory({
+        at: new Date().toISOString(),
+        kind: "insert",
+        ok: true,
+        headline: "Dummy event inserted",
+        detail: `event_id ${data.event.event_id}`,
+      });
+
+      toast.success(`Dummy event inserted: ${data.event.event_id}`);
+      void fetchSummary({ silent: true, record: true });
+    } catch (error) {
+      appendHistory({
+        at: new Date().toISOString(),
+        kind: "insert",
+        ok: false,
+        headline: "Dummy event insert failed",
+        detail: error instanceof Error ? error.message : "Unknown error",
+      });
+      toast.error(error instanceof Error ? error.message : "Unable to insert dummy event");
+    } finally {
+      setInsertingDummyEvent(false);
+    }
+  }, [headers, appendHistory, fetchSummary]);
+
   useEffect(() => {
     if (verificationPhase !== "ready" || !headers) return;
     void fetchSummary({ silent: true });
@@ -940,6 +1005,10 @@ export default function StatusCheckPage() {
       {
         title: "Run Load Check",
         command: `curl -X POST "${apiBaseForTools}/api/statuscheck/load" -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" -d '{"target":"${targetPath}","iterations":${iterations},"concurrency":${concurrency}}'`,
+      },
+      {
+        title: "Insert Dummy Event",
+        command: `curl -X POST "${apiBaseForTools}/api/statuscheck/insert-dummy-event" -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" -d '{}'`,
       },
     ];
   }, [apiBaseForTools, runLoadAlongsideFull, loadTarget, customPath, iterations, concurrency]);
@@ -1097,14 +1166,14 @@ export default function StatusCheckPage() {
         <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_10%_5%,_#0f172a_0%,_#020617_50%,_#000000_100%)]" />
         <div className="mx-auto max-w-4xl rounded-3xl border border-slate-700 bg-slate-900/80 p-10 text-center shadow-[0_24px_60px_-30px_rgba(56,189,248,0.45)] backdrop-blur-sm">
           <RefreshCw className={cn("mx-auto h-10 w-10 text-[#154CB3]", verificationPhase === "checking" && "animate-spin")} />
-          <p className="mt-3 text-lg font-semibold text-slate-800">
+          <p className="mt-3 text-lg font-semibold text-slate-100">
             {verificationPhase === "welcome" ? "Welcome, Developer" : "Verifying Access"}
           </p>
-          <p className="mt-1 text-sm text-slate-600">
+          <p className="mt-1 text-sm text-slate-300">
             {verificationPhase === "welcome" ? "Opening StatusCheck workspace..." : verificationMessage}
           </p>
           {verificationPhase === "checking" && verificationAttempt > 0 && (
-            <p className="mt-1 text-xs text-slate-500">Attempt {verificationAttempt} of 3</p>
+            <p className="mt-1 text-xs text-slate-400">Attempt {verificationAttempt} of 3</p>
           )}
         </div>
       </div>
@@ -1116,8 +1185,8 @@ export default function StatusCheckPage() {
       <div className={cn("statuscheck-dark min-h-screen p-8", headingFont.className)}>
         <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_10%_5%,_#0f172a_0%,_#020617_50%,_#000000_100%)]" />
         <div className="mx-auto max-w-4xl rounded-3xl border border-rose-700/60 bg-slate-900/85 p-10 text-center shadow-[0_20px_50px_-30px_rgba(225,29,72,0.45)] backdrop-blur-sm">
-          <p className="text-lg font-semibold text-rose-700">Access verification failed</p>
-          <p className="mt-2 text-sm text-slate-600">{verificationMessage}</p>
+          <p className="text-lg font-semibold text-rose-300">Access verification failed</p>
+          <p className="mt-2 text-sm text-slate-300">{verificationMessage}</p>
         </div>
       </div>
     );
@@ -1499,7 +1568,7 @@ export default function StatusCheckPage() {
                     key={table.table}
                     className={cn(
                       "rounded-lg border px-3 py-2",
-                      table.ok ? "border-emerald-200 bg-emerald-50" : "border-rose-200 bg-rose-50"
+                      table.ok ? "border-emerald-500/35 bg-emerald-950/35" : "border-rose-500/35 bg-rose-950/35"
                     )}
                   >
                     <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-600">{table.table}</div>
@@ -1627,8 +1696,8 @@ export default function StatusCheckPage() {
         </section>
 
         <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end">
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="space-y-4">
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
               {LOAD_PRESETS.map((preset) => (
                 <button
                   key={preset.id}
@@ -1637,24 +1706,25 @@ export default function StatusCheckPage() {
                   className={cn(
                     "rounded-lg border p-2 text-left",
                     selectedPresetId === preset.id
-                      ? "border-[#154CB3] bg-blue-50"
-                      : "border-slate-300 bg-white hover:bg-slate-50"
+                      ? "border-cyan-400/60 bg-cyan-500/10 ring-1 ring-cyan-400/25"
+                      : "border-slate-600 bg-slate-900/60 hover:bg-slate-800/70"
                   )}
                 >
-                  <div className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700">
+                  <div className="inline-flex items-center gap-1 text-xs font-semibold text-slate-100">
                     <Rocket className="h-3.5 w-3.5" />
                     {preset.label}
                   </div>
-                  <div className="mt-1 text-[11px] text-slate-600">{preset.description}</div>
-                  <div className={cn("mt-1 text-[11px] text-slate-500", monoFont.className)}>
+                  <div className="mt-1 text-[11px] text-slate-300">{preset.description}</div>
+                  <div className={cn("mt-1 text-[11px] text-slate-400", monoFont.className)}>
                     {preset.iterations} iters / {preset.concurrency} conc
                   </div>
                 </button>
               ))}
             </div>
 
-            <div className="grid flex-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr),auto] xl:items-end">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <label className="text-[11px] font-semibold text-slate-400">
                 Load Target
                 <select
                   value={loadTarget}
@@ -1672,7 +1742,7 @@ export default function StatusCheckPage() {
                   <option value="custom">custom path</option>
                 </select>
               </label>
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+              <label className="text-[11px] font-semibold text-slate-400">
                 Iterations
                 <input
                   type="number"
@@ -1684,7 +1754,7 @@ export default function StatusCheckPage() {
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700"
                 />
               </label>
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+              <label className="text-[11px] font-semibold text-slate-400">
                 Concurrency
                 <input
                   type="number"
@@ -1696,7 +1766,7 @@ export default function StatusCheckPage() {
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700"
                 />
               </label>
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+              <label className="text-[11px] font-semibold text-slate-400">
                 Custom Path
                 <input
                   type="text"
@@ -1707,9 +1777,9 @@ export default function StatusCheckPage() {
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700"
                 />
               </label>
-            </div>
+              </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 xl:justify-end">
               <label className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                 <input
                   type="checkbox"
@@ -1728,6 +1798,7 @@ export default function StatusCheckPage() {
                 <Gauge className={cn("h-4 w-4", runningLoad && "animate-pulse")} />
                 {runningLoad ? "Running..." : "Run Load"}
               </button>
+              </div>
             </div>
           </div>
 
@@ -1949,14 +2020,80 @@ export default function StatusCheckPage() {
 
           .statuscheck-dark .bg-slate-50 {
             background-color: rgba(30, 41, 59, 0.55) !important;
+
+          <div className="mt-4 rounded-xl border border-slate-300 bg-slate-900/55 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div className="text-sm font-semibold text-slate-100">Insert Dummy Event (DB write check)</div>
+                <p className="mt-1 text-xs text-slate-300">
+                  Inserts one lightweight event row with only text content. No image, banner, or PDF is attached.
+                </p>
+              </div>
+
+              <button
+                onClick={() => void insertDummyEvent()}
+                disabled={insertingDummyEvent}
+                title="Insert a synthetic event row to confirm database write connectivity"
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#154CB3] px-4 py-2 text-sm font-semibold text-white hover:bg-[#154CB3]/90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Rocket className={cn("h-4 w-4", insertingDummyEvent && "animate-pulse")} />
+                {insertingDummyEvent ? "Inserting..." : "Insert Dummy Event"}
+              </button>
+            </div>
+
+            {lastDummyEvent && (
+              <div className="mt-3 rounded-lg border border-slate-400/40 bg-slate-900/60 p-3 text-xs text-slate-300">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className={monoFont.className}>event_id: {lastDummyEvent.event_id}</div>
+                  <button
+                    onClick={() => void copyToClipboard(lastDummyEvent.event_id, "Dummy event ID copied")}
+                    className="rounded-md border border-slate-400/50 px-2 py-1 text-[11px] font-semibold text-slate-200 hover:bg-slate-800"
+                  >
+                    Copy ID
+                  </button>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-400">
+                  {lastDummyEvent.title} | media: image=null, banner=null, pdf=null
+                </div>
+              </div>
+            )}
+          </div>
           }
 
           .statuscheck-dark .bg-slate-100 {
             background-color: rgba(30, 41, 59, 0.72) !important;
           }
 
+          .statuscheck-dark .bg-emerald-50 {
+            background-color: rgba(6, 78, 59, 0.34) !important;
+          }
+
+          .statuscheck-dark .bg-rose-50 {
+            background-color: rgba(127, 29, 29, 0.34) !important;
+          }
+
+          .statuscheck-dark .bg-amber-50 {
+            background-color: rgba(120, 53, 15, 0.36) !important;
+          }
+
+          .statuscheck-dark .bg-blue-50 {
+            background-color: rgba(30, 58, 138, 0.34) !important;
+          }
+
           .statuscheck-dark [class*="border-slate-"] {
             border-color: #334155 !important;
+          }
+
+          .statuscheck-dark [class*="border-emerald-"] {
+            border-color: rgba(16, 185, 129, 0.45) !important;
+          }
+
+          .statuscheck-dark [class*="border-rose-"] {
+            border-color: rgba(244, 63, 94, 0.45) !important;
+          }
+
+          .statuscheck-dark [class*="border-amber-"] {
+            border-color: rgba(245, 158, 11, 0.45) !important;
           }
 
           .statuscheck-dark .text-slate-900,
@@ -1965,10 +2102,28 @@ export default function StatusCheckPage() {
             color: #e2e8f0 !important;
           }
 
-          .statuscheck-dark .text-slate-600,
-          .statuscheck-dark .text-slate-500,
-          .statuscheck-dark .text-slate-400 {
+          .statuscheck-dark .text-slate-600 {
+            color: #cbd5e1 !important;
+          }
+
+          .statuscheck-dark .text-slate-500 {
             color: #94a3b8 !important;
+          }
+
+          .statuscheck-dark .text-slate-400 {
+            color: #7c90ac !important;
+          }
+
+          .statuscheck-dark .text-emerald-700 {
+            color: #6ee7b7 !important;
+          }
+
+          .statuscheck-dark .text-rose-700 {
+            color: #fda4af !important;
+          }
+
+          .statuscheck-dark .text-amber-700 {
+            color: #fcd34d !important;
           }
 
           .statuscheck-dark input:not([type="checkbox"]):not([type="radio"]),
