@@ -1405,7 +1405,7 @@ export default function EventForm({
                         {/* Hosted At */}
                         <div>
                           <label className="block text-xs font-semibold text-gray-700 mb-2">
-                            Where is this event?
+                            Where is the event Hosted at?
                           </label>
                           <Controller
                             name="campusHostedAt"
@@ -1461,7 +1461,9 @@ export default function EventForm({
                             )}
                           />
                           <p className="text-xs text-gray-500 mt-2">
-                            Leave all unchecked to allow all campuses
+                            {!watch("allowOutsiders") 
+                              ? "All campuses or select specific campuses where this event will be held (Mandatory)"
+                              : "Leave all unchecked to allow all campuses"}
                           </p>
                         </div>
                       </div>
@@ -1656,6 +1658,32 @@ export default function EventForm({
                     placeholder="10-digit mobile number"
                   />
                 </div>
+
+                {/* Custom Fields Section - Moved Up */}
+                <div className="bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 rounded-2xl p-6 sm:p-7 shadow-sm">
+                  <div className="mb-4">
+                    <h3 className="text-base font-bold text-[#063168] flex items-center gap-2">
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
+                        <path fillRule="evenodd" d="M4 5a2 2 0 012-2 1 1 0 000-2H6a6 6 0 016 6v3h3a2 2 0 110 4h-.5a.5.5 0 00-.5.5v.5a2.5 2.5 0 01-5 0V14h-.5a2 2 0 110-4h3v-3A4 4 0 004 5zm15 7a2 2 0 11-4 0 2 2 0 014 0z" clipRule="evenodd" />
+                      </svg>
+                      Custom Fields
+                    </h3>
+                    <p className="text-xs text-gray-600 mt-1 ml-7">Add additional questions for participants</p>
+                  </div>
+                  <Controller
+                    name="customFields"
+                    control={control}
+                    render={({ field }) => (
+                      <DynamicCustomFieldBuilder
+                        fields={(field.value as CustomField[]) || []}
+                        onChange={(newFields) => field.onChange(newFields)}
+                        maxFields={10}
+                      />
+                    )}
+                  />
+                </div>
+
                 <DynamicTextList
                   listName="rules"
                   itemNoun="rule"
@@ -1679,21 +1707,6 @@ export default function EventForm({
                   register={register}
                   errors={errors}
                 />
-
-                {/* Custom Fields Section */}
-                <div className="mt-6 p-4 sm:p-6 bg-[#f5f8fe] rounded-xl border border-[#e0e7f1]">
-                  <Controller
-                    name="customFields"
-                    control={control}
-                    render={({ field }) => (
-                      <DynamicCustomFieldBuilder
-                        fields={(field.value as CustomField[]) || []}
-                        onChange={(newFields) => field.onChange(newFields)}
-                        maxFields={10}
-                      />
-                    )}
-                  />
-                </div>
 
                 <div className="flex flex-col-reverse sm:flex-row items-center justify-end space-y-3 space-y-reverse sm:space-y-0 sm:space-x-4 mt-8 sm:mt-10">
                   <button
