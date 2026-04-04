@@ -9,11 +9,15 @@ import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import {
   Activity,
   AlertTriangle,
+  BarChart3,
   Clock3,
   Copy,
   Download,
+  FileText,
   Gauge,
+  Keyboard,
   RefreshCw,
+  Rocket,
   Search,
   ShieldAlert,
   Sparkles,
@@ -35,6 +39,46 @@ const API_URL = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/api\/?$/, "")
 const MUTATION_CONFIRMATION_PHRASE = "I UNDERSTAND STATUSCHECK MUTATIONS";
 const HISTORY_STORAGE_KEY = "statuscheck:history:v2";
 const SLOW_CHECK_THRESHOLD_MS = 1200;
+const LOAD_PRESETS = [
+  {
+    id: "smoke",
+    label: "Smoke",
+    description: "Quick confidence pass",
+    target: "events",
+    iterations: 8,
+    concurrency: 2,
+    customPath: "",
+  },
+  {
+    id: "balanced",
+    label: "Balanced",
+    description: "Daily reliability baseline",
+    target: "events",
+    iterations: 30,
+    concurrency: 4,
+    customPath: "",
+  },
+  {
+    id: "burst",
+    label: "Burst",
+    description: "High traffic simulation",
+    target: "notifications",
+    iterations: 70,
+    concurrency: 8,
+    customPath: "",
+  },
+  {
+    id: "edge",
+    label: "Edge Path",
+    description: "Custom route verification",
+    target: "custom",
+    iterations: 20,
+    concurrency: 3,
+    customPath: "/api/events?page=1&pageSize=25",
+  },
+] as const;
+
+type LoadPreset = (typeof LOAD_PRESETS)[number];
 
 type TableCount = {
   table: string;
@@ -201,6 +245,16 @@ function downloadJsonFile(fileName: string, payload: unknown) {
   URL.revokeObjectURL(url);
 }
 
+function downloadTextFile(fileName: string, content: string) {
+  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 function wait(ms: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -329,6 +383,7 @@ export default function StatusCheckPage() {
   const router = useRouter();
   const { isLoading: authLoading, isMasterAdmin, session, userData } = useAuth();
   const verifyInProgressRef = useRef(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const authToken = session?.access_token || null;
 
@@ -357,6 +412,9 @@ export default function StatusCheckPage() {
   const [verificationPhase, setVerificationPhase] = useState<"checking" | "welcome" | "ready" | "failed">("checking");
   const [verificationAttempt, setVerificationAttempt] = useState(0);
   const [verificationMessage, setVerificationMessage] = useState("Checking auth/verify/status...");
+  const [selectedPresetId, setSelectedPresetId] = useState<LoadPreset["id"]>("balanced");
+  const [showRawDiagnostics, setShowRawDiagnostics] = useState(false);
+  const [rawTab, setRawTab] = useState<"summary" | "run" | "load">("summary");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -717,6 +775,58 @@ export default function StatusCheckPage() {
 
   const issues = useMemo(() => collectIssues(runResult), [runResult]);
 
+  const sectionSummaries = useMemo(() => {
+    if (!runResult) return [] as Array<{ key: CheckSectionKey; label: string; bucket: SummaryBucket }>;
+
+    return [
+      { key: "endpointChecks" as const, label: "Endpoint", bucket: runResult.summary.endpoints },
+      { key: "fetchDisplayChecks" as const, label: "Fetch / Display", bucket: runResult.summary.fetchDisplay },
+      { key: "workflowChecks" as const, label: "Workflow", bucket: runResult.summary.workflows },
+      { key: "mutationChecks" as const, label: "Mutation", bucket: runResult.summary.mutations },
+    ];
+  }, [runResult]);
+
+  const totalFailedChecks = useMemo(
+    () => sectionSummaries.reduce((sum, section) => sum + section.bucket.failed, 0),
+    [sectionSummaries]
+  );
+
+  const criticalIssueCount = useMemo(
+    () => issues.filter((issue) => issue.severity === "critical").length,
+    [issues]
+  );
+
+  const warningIssueCount = useMemo(
+    () => issues.filter((issue) => issue.severity === "warning").length,
+    [issues]
+  );
+
+  const opsScore = useMemo(() => {
+    let score = 100;
+
+    if (summary && !summary.dbHealth.ok) {
+      score -= 15;
+    }
+
+    score -= totalFailedChecks * 6;
+    score -= warningIssueCount * 2;
+
+    if (loadResult) {
+      score -= Math.min(20, Math.round(loadResult.errorRatePercent * 2));
+      if (loadResult.p95Ms > 1200) score -= 8;
+      if (loadResult.p95Ms > 2000) score -= 8;
+    }
+
+    return Math.max(0, Math.min(100, score));
+  }, [summary, totalFailedChecks, warningIssueCount, loadResult]);
+
+  const opsBand = useMemo(() => {
+    if (opsScore >= 90) return { label: "Excellent", accent: "emerald" };
+    if (opsScore >= 75) return { label: "Good", accent: "blue" };
+    if (opsScore >= 55) return { label: "Watch", accent: "amber" };
+    return { label: "Critical", accent: "rose" };
+  }, [opsScore]);
+
   const commandSnippets = useMemo(() => {
     const targetPath = loadTarget === "custom" ? customPath || "/api/events?page=1&pageSize=5" : loadTarget;
 
@@ -750,6 +860,139 @@ export default function StatusCheckPage() {
     toast.success("Snapshot exported");
   }, [summary, runResult, loadResult, issues, history]);
 
+  const applyLoadPreset = useCallback((preset: LoadPreset) => {
+    setSelectedPresetId(preset.id);
+    setLoadTarget(preset.target);
+    setIterations(preset.iterations);
+    setConcurrency(preset.concurrency);
+    setCustomPath(preset.customPath);
+    toast.success(`${preset.label} preset applied`);
+  }, []);
+
+  const incidentReportMarkdown = useMemo(() => {
+    const lines: string[] = [];
+    lines.push("# StatusCheck Incident Report");
+    lines.push("");
+    lines.push(`Generated: ${new Date().toISOString()}`);
+    lines.push(`Ops Score: ${opsScore}/100 (${opsBand.label})`);
+    lines.push("");
+
+    if (summary) {
+      lines.push("## Summary");
+      lines.push(`- Checked At: ${summary.checkedAt}`);
+      lines.push(`- DB Health: ${summary.dbHealth.ok ? "healthy" : "attention"}`);
+      lines.push(`- DB Message: ${summary.dbHealth.message}`);
+      lines.push("");
+    }
+
+    if (runResult) {
+      lines.push("## Section Results");
+      sectionSummaries.forEach((section) => {
+        lines.push(
+          `- ${section.label}: ${section.bucket.passed}/${section.bucket.total} pass, ${section.bucket.failed} failed, ${section.bucket.skipped} skipped`
+        );
+      });
+      lines.push("");
+    }
+
+    if (loadResult) {
+      lines.push("## Load Diagnostics");
+      lines.push(`- Target: ${loadResult.targetPath}`);
+      lines.push(`- Iterations/Concurrency: ${loadResult.iterations}/${loadResult.concurrency}`);
+      lines.push(`- Error Rate: ${loadResult.errorRatePercent}%`);
+      lines.push(`- p95: ${loadResult.p95Ms}ms`);
+      lines.push("");
+    }
+
+    lines.push("## Top Issues");
+    if (!issues.length) {
+      lines.push("- No critical or warning issues in latest run.");
+    } else {
+      issues.slice(0, 12).forEach((issue) => {
+        lines.push(
+          `- [${issue.severity.toUpperCase()}] ${issue.title} | ${issue.source} | status ${issue.status} | ${issue.durationMs}ms`
+        );
+      });
+    }
+
+    return lines.join("\n");
+  }, [opsScore, opsBand.label, summary, runResult, sectionSummaries, loadResult, issues]);
+
+  const copyIncidentReport = useCallback(() => {
+    void copyToClipboard(incidentReportMarkdown, "Incident report copied");
+  }, [incidentReportMarkdown]);
+
+  const exportIncidentReport = useCallback(() => {
+    downloadTextFile(`statuscheck-incident-${Date.now()}.md`, incidentReportMarkdown);
+    toast.success("Incident report exported");
+  }, [incidentReportMarkdown]);
+
+  const rawDiagnosticsPayload = useMemo(() => {
+    if (rawTab === "summary") {
+      return summary || { message: "No summary data loaded yet" };
+    }
+
+    if (rawTab === "run") {
+      return runResult || { message: "No full run data loaded yet" };
+    }
+
+    return loadResult || { message: "No load result data loaded yet" };
+  }, [rawTab, summary, runResult, loadResult]);
+
+  const rawDiagnosticsText = useMemo(
+    () => JSON.stringify(rawDiagnosticsPayload, null, 2),
+    [rawDiagnosticsPayload]
+  );
+
+  useEffect(() => {
+    if (verificationPhase !== "ready") return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isInputContext =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        Boolean(target?.isContentEditable);
+
+      if (isInputContext) return;
+
+      const key = event.key.toLowerCase();
+
+      if (key === "/") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+
+      if (key === "r") {
+        event.preventDefault();
+        void fetchSummary();
+        return;
+      }
+
+      if (key === "f") {
+        event.preventDefault();
+        void runFullCheck();
+        return;
+      }
+
+      if (key === "l") {
+        event.preventDefault();
+        void runLoadCheck();
+        return;
+      }
+
+      if (key === "e") {
+        event.preventDefault();
+        exportSnapshot();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [verificationPhase, fetchSummary, runFullCheck, runLoadCheck, exportSnapshot]);
+
   if (authLoading || !authToken || verificationPhase === "checking" || verificationPhase === "welcome") {
     return (
       <div className={cn("min-h-screen p-8", headingFont.className)}>
@@ -759,7 +1002,9 @@ export default function StatusCheckPage() {
           <p className="mt-3 text-lg font-semibold text-slate-800">
             {verificationPhase === "welcome" ? "Welcome developer!" : "Verifying developer access"}
           </p>
-          <p className="mt-1 text-sm text-slate-600">{verificationMessage}</p>
+          <p className="mt-1 text-sm text-slate-600">
+            {verificationPhase === "welcome" ? "Opening StatusCheck workspace..." : verificationMessage}
+          </p>
           {verificationPhase === "checking" && verificationAttempt > 0 && (
             <p className="mt-1 text-xs text-slate-500">Attempt {verificationAttempt} of 3</p>
           )}
@@ -835,7 +1080,7 @@ export default function StatusCheckPage() {
           </div>
         </section>
 
-        <section className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <section className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <KpiTile
             label="Database"
             value={summary?.dbHealth.ok ? "Healthy" : "Attention"}
@@ -868,6 +1113,18 @@ export default function StatusCheckPage() {
             helper={loadResult ? `error rate ${loadResult.errorRatePercent}%` : "run load diagnostics"}
             accent={loadResult && loadResult.errorRatePercent > 0 ? "amber" : "green"}
           />
+          <KpiTile
+            label="Ops Score"
+            value={`${opsScore}`}
+            helper={`${opsBand.label} stability band`}
+            accent={opsBand.accent === "emerald" ? "green" : opsBand.accent === "amber" ? "amber" : opsBand.accent === "rose" ? "amber" : "blue"}
+          />
+          <KpiTile
+            label="Active Issues"
+            value={`${criticalIssueCount}/${warningIssueCount}`}
+            helper="critical / warning"
+            accent={criticalIssueCount > 0 ? "amber" : warningIssueCount > 0 ? "slate" : "green"}
+          />
         </section>
 
         <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -878,6 +1135,7 @@ export default function StatusCheckPage() {
                 <div className="relative mt-1">
                   <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
                   <input
+                    ref={searchInputRef}
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                     placeholder="name, path, message"
@@ -975,6 +1233,15 @@ export default function StatusCheckPage() {
                 </button>
               );
             })}
+          </div>
+
+          <div className="mt-3 inline-flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <Keyboard className="h-3.5 w-3.5" />
+            Shortcuts: <span className={monoFont.className}>/</span> search,
+            <span className={monoFont.className}> R</span> refresh,
+            <span className={monoFont.className}> F</span> full run,
+            <span className={monoFont.className}> L</span> load,
+            <span className={monoFont.className}> E</span> export snapshot
           </div>
         </section>
 
@@ -1079,7 +1346,87 @@ export default function StatusCheckPage() {
         </section>
 
         <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[0.12em] text-slate-700">
+              <BarChart3 className="h-4 w-4" />
+              Raw Diagnostics
+            </h2>
+            <button
+              onClick={() => setShowRawDiagnostics((prev) => !prev)}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              {showRawDiagnostics ? "Hide JSON" : "Show JSON"}
+            </button>
+          </div>
+
+          {showRawDiagnostics && (
+            <div className="mt-3 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {([
+                  ["summary", "Summary"],
+                  ["run", "Full Run"],
+                  ["load", "Load"],
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setRawTab(key)}
+                    className={cn(
+                      "rounded-full border px-3 py-1.5 text-xs font-semibold",
+                      rawTab === key
+                        ? "border-[#154CB3] bg-[#154CB3] text-white"
+                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <button
+                  onClick={() => void copyToClipboard(rawDiagnosticsText, "Raw diagnostics copied")}
+                  className="ml-auto inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy JSON
+                </button>
+              </div>
+
+              <pre
+                className={cn(
+                  "max-h-72 overflow-auto rounded-lg border border-slate-200 bg-slate-900 p-3 text-[11px] text-slate-100",
+                  monoFont.className
+                )}
+              >
+                {rawDiagnosticsText}
+              </pre>
+            </div>
+          )}
+        </section>
+
+        <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row md:items-end">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {LOAD_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  onClick={() => applyLoadPreset(preset)}
+                  className={cn(
+                    "rounded-lg border p-2 text-left",
+                    selectedPresetId === preset.id
+                      ? "border-[#154CB3] bg-blue-50"
+                      : "border-slate-300 bg-white hover:bg-slate-50"
+                  )}
+                >
+                  <div className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700">
+                    <Rocket className="h-3.5 w-3.5" />
+                    {preset.label}
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-600">{preset.description}</div>
+                  <div className={cn("mt-1 text-[11px] text-slate-500", monoFont.className)}>
+                    {preset.iterations} iters / {preset.concurrency} conc
+                  </div>
+                </button>
+              ))}
+            </div>
+
             <div className="grid flex-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                 Load Target
@@ -1204,6 +1551,26 @@ export default function StatusCheckPage() {
             <div className="text-xs text-slate-500">{currentChecks.length} visible checks</div>
           </div>
 
+          {runResult && (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {sectionSummaries.map((section) => (
+                <button
+                  key={section.key}
+                  onClick={() => setActiveSection(section.key)}
+                  className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-left"
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">{section.label}</div>
+                  <div className="mt-1 text-sm font-bold text-slate-800">
+                    {section.bucket.passed}/{section.bucket.total} pass
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    fail {section.bucket.failed} | skipped {section.bucket.skipped}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
           {!runResult ? (
             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
               Run the full suite to populate this panel.
@@ -1223,7 +1590,25 @@ export default function StatusCheckPage() {
 
         <section className="mt-6 grid gap-4 lg:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-slate-700">Incident Feed</h2>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-bold uppercase tracking-[0.12em] text-slate-700">Incident Feed</h2>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={copyIncidentReport}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy Report
+                </button>
+                <button
+                  onClick={exportIncidentReport}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  Export .md
+                </button>
+              </div>
+            </div>
 
             {issues.length === 0 ? (
               <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">

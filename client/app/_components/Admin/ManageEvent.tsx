@@ -717,6 +717,9 @@ interface EventFormProps {
   existingImageFileUrl?: string | null;
   existingBannerFileUrl?: string | null;
   existingPdfFileUrl?: string | null;
+  isArchived?: boolean;
+  isArchiveUpdating?: boolean;
+  onToggleArchive?: () => void;
 }
 
 const baseButtonClasses =
@@ -734,6 +737,9 @@ export default function EventForm({
   existingImageFileUrl,
   existingBannerFileUrl,
   existingPdfFileUrl,
+  isArchived,
+  isArchiveUpdating,
+  onToggleArchive,
 }: EventFormProps) {
   const [fetchedFests, setFetchedFests] = useState<{ value: string; label: string }[]>([]);
 
@@ -1705,6 +1711,22 @@ export default function EventForm({
                       >
                         Close registrations
                       </button>
+                      {onToggleArchive && (
+                        <button
+                          type="button"
+                          onClick={onToggleArchive}
+                          disabled={isArchiveUpdating || isSubmittingProp || rhfIsSubmitting || isDeleting}
+                          className={`cursor-pointer px-4 sm:px-5 py-2 sm:py-3 rounded-full border font-medium text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors w-full sm:w-auto ${
+                            isArchiveUpdating || isSubmittingProp || rhfIsSubmitting || isDeleting
+                              ? "bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed"
+                              : isArchived
+                                ? "bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200 focus:ring-emerald-500"
+                                : "bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200 focus:ring-amber-500"
+                          }`}
+                        >
+                          {isArchiveUpdating ? "Saving..." : isArchived ? "Unarchive Event" : "Archive Event"}
+                        </button>
+                      )}
                     </>
                   )}
                   <button
