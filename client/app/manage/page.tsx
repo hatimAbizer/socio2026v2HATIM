@@ -306,13 +306,11 @@ const MappedEventCard = ({
           <Link href={`/${baseUrl}/${event.event_id}`} className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline">
             Edit <Pencil className="w-4 h-4" />
           </Link>
-          {authToken ? (
-            <EventReminderButton
-              eventId={event.event_id}
-              eventTitle={event.title}
-              authToken={authToken}
-            />
-          ) : null}
+          <EventReminderButton
+            eventId={event.event_id}
+            eventTitle={event.title}
+            authToken={authToken || ""}
+          />
         </div>
       </div>
     </div>
