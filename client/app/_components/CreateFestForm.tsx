@@ -2361,7 +2361,7 @@ function CreateFestForm(props?: CreateFestProps) {
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-8 sm:mt-10 pt-6 border-t border-gray-200">
                   <Link
                     href="/manage"
-                    className="w-full sm:w-auto px-5 py-2.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer text-center"
+                    className="w-full sm:w-auto px-5 py-2.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors cursor-pointer text-center inline-flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2"
                   >
                     Cancel
                   </Link>
