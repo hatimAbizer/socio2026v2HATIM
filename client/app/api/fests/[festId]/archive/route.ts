@@ -3,10 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { festId: string } }
+  { params }: { params: Promise<{ festId: string }> }
 ) {
   try {
-    const { festId } = params;
+    const { festId } = await params;
     const authHeader = request.headers.get("authorization");
     const body = await request.json();
 
