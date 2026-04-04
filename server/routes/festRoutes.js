@@ -159,6 +159,28 @@ const getFestByIdFromCandidates = async (festId, primaryTable) => {
   return null;
 };
 
+const deriveFestsFromEvents = (events, festRegistrationCounts = {}) => {
+  const derivedFestMap = new Map();
+
+  for (const event of events || []) {
+    const festKey = String(event?.fest_id || event?.fest || "").trim();
+    if (!festKey || derivedFestMap.has(festKey)) continue;
+
+    derivedFestMap.set(festKey, {
+      fest_id: festKey,
+      fest_title: festKey,
+      organizing_dept: event?.organizing_dept || null,
+      opening_date: event?.event_date || null,
+      closing_date: event?.event_date || null,
+      created_at: event?.created_at || null,
+      is_archived: false,
+      registration_count: festRegistrationCounts[festKey] || 0,
+    });
+  }
+
+  return Array.from(derivedFestMap.values());
+};
+
 const mapFestResponse = (fest) => {
   if (!fest) return fest;
   try {
@@ -272,24 +294,7 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
     }));
 
     if (processedFests.length === 0 && (events || []).length > 0) {
-      const derivedFestMap = new Map();
-      for (const event of events) {
-        const festKey = String(event?.fest_id || event?.fest || "").trim();
-        if (!festKey || derivedFestMap.has(festKey)) continue;
-
-        derivedFestMap.set(festKey, {
-          fest_id: festKey,
-          fest_title: festKey,
-          organizing_dept: event?.organizing_dept || null,
-          opening_date: event?.event_date || null,
-          closing_date: event?.event_date || null,
-          created_at: event?.created_at || null,
-          is_archived: false,
-          registration_count: festRegistrationCounts[festKey] || 0,
-        });
-      }
-
-      processedFests = Array.from(derivedFestMap.values());
+      processedFests = deriveFestsFromEvents(events, festRegistrationCounts);
     }
 
     const normalizedSearch = typeof search === "string" ? search.trim().toLowerCase() : "";
@@ -341,6 +346,15 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
     
     if (!isAdminOrOrganizer) {
       processedFests = processedFests.filter((fest) => !fest.is_archived);
+
+      if (processedFests.length === 0) {
+        const derivedFallbackFests = deriveFestsFromEvents(events, festRegistrationCounts);
+        if (derivedFallbackFests.length > 0) {
+          console.warn("[Archive Filter] No active fests visible; serving event-derived fallback fests.");
+          processedFests = derivedFallbackFests;
+        }
+      }
+
       console.log(`[Archive Filter] Non-organizer viewing ${processedFests.length} non-archived fests`);
     } else {
       console.log(`[Archive Filter] Organizer/Admin viewing all ${processedFests.length} fests (incl. archived)`);
