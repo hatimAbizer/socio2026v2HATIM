@@ -283,6 +283,7 @@ router.post("/", multerUpload.fields([
         event_image_url: event_image_url,
         banner_url: banner_url,
         pdf_url: pdf_url,
+        min_participants: parseOptionalInt(eventData.minParticipants || eventData.min_participants, 1),
         total_participants: 0,
         created_by: eventData.createdBy || "admin"
       };

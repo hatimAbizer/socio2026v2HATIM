@@ -626,6 +626,7 @@ router.post(
         outsider_max_participants: parseOptionalInt(req.body.outsider_max_participants || req.body.outsiderMaxParticipants, null),
         campus_hosted_at: campusHostedAt,
         allowed_campuses: parsedAllowedCampuses,
+        min_participants: parseOptionalInt(req.body.min_participants || req.body.minParticipants, 1),
       }]);
 
       if (!created || created.length === 0) {
@@ -1021,6 +1022,7 @@ router.put(
         outsider_max_participants: parseOptionalInt(req.body.outsider_max_participants || req.body.outsiderMaxParticipants, null),
         campus_hosted_at: campusHostedAt,
         allowed_campuses: parsedAllowedCampuses,
+        min_participants: parseOptionalInt(req.body.min_participants || req.body.minParticipants, 1),
         updated_at: new Date().toISOString(),
         // Auto-unarchive if date changed to future
         ...(shouldAutoUnarchive ? { is_archived: false, archived_at: null, archived_by: null } : {})

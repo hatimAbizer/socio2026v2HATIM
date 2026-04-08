@@ -99,6 +99,7 @@ const Page = () => {
   const [isIndividualEvent, setIsIndividualEvent] = useState(false);
   const [minTeammates, setMinTeammates] = useState(1);
   const [maxTeammates, setMaxTeammates] = useState(1);
+  const [visibleTeammateCount, setVisibleTeammateCount] = useState(1);
 
   const [submitLoading, setSubmitLoading] = useState(false);
   const [formData, setFormData] = useState<{
@@ -207,6 +208,11 @@ const Page = () => {
   useEffect(() => {
     if (selectedEvent && !authIsLoading && userData) {
       const teamSize = selectedEvent.participants_per_team ?? 1;
+      const minTeamSizeRaw = Number(
+        (selectedEvent as any).min_participants ?? (teamSize > 1 ? 2 : 1)
+      );
+      const minimumVisibleTeammates =
+        teamSize > 1 ? Math.min(Math.max(minTeamSizeRaw, 2), teamSize) : 1;
       const individual = teamSize <= 1;
 
       const firstTeammateData: Teammate = {
@@ -227,7 +233,7 @@ const Page = () => {
       if (!individual) {
         for (let i = 1; i < teamSize; i++) {
           initialTeammates.push({ name: "", registerNumber: "", email: "" });
-          initialErrorsTeammates.push({ registerNumber: "" });
+          initialErrorsTeammates.push({});
         }
       }
 
@@ -239,8 +245,16 @@ const Page = () => {
         teamName: individual ? "" : prev.teamName,
         teammates: initialErrorsTeammates,
       }));
+      setVisibleTeammateCount(minimumVisibleTeammates);
     }
   }, [selectedEvent, userData, authIsLoading]);
+
+  const isRequiredTeammate = (index: number): boolean => {
+    if (isIndividualEvent) {
+      return index === 0;
+    }
+    return index < minTeammates;
+  };
 
   const validateField = (
     field: keyof Teammate | "teamName",
@@ -252,7 +266,11 @@ const Page = () => {
 
     if (!trimmedValue) {
       const isFirstTeammate = index === 0;
-      if (
+      if (field === "registerNumber" && typeof index === "number") {
+        if (isRequiredTeammate(index)) {
+          error = "This field is required";
+        }
+      } else if (
         (field === "name" || field === "email") &&
         typeof index === "number" &&
         !isFirstTeammate
@@ -308,6 +326,46 @@ const Page = () => {
     }
   };
 
+  const handleAddTeammate = () => {
+    setVisibleTeammateCount((prev) => Math.min(prev + 1, maxTeammates));
+  };
+
+  const handleRemoveTeammate = () => {
+    if (visibleTeammateCount <= minTeammates) {
+      return;
+    }
+
+    const removedIndex = visibleTeammateCount - 1;
+
+    setVisibleTeammateCount((prev) => Math.max(minTeammates, prev - 1));
+
+    setFormData((prev) => {
+      const updatedTeammates = [...prev.teammates];
+      if (updatedTeammates[removedIndex]) {
+        updatedTeammates[removedIndex] = {
+          name: "",
+          registerNumber: "",
+          email: "",
+        };
+      }
+      return {
+        ...prev,
+        teammates: updatedTeammates,
+      };
+    });
+
+    setErrors((prev) => {
+      const updatedTeammateErrors = [...prev.teammates];
+      if (updatedTeammateErrors[removedIndex]) {
+        updatedTeammateErrors[removedIndex] = {};
+      }
+      return {
+        ...prev,
+        teammates: updatedTeammateErrors,
+      };
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegistrationError(null);
@@ -337,12 +395,20 @@ const Page = () => {
       }
     }
 
-    formData.teammates.forEach((teammate, i) => {
+    const activeTeammates = formData.teammates.slice(0, visibleTeammateCount);
+
+    activeTeammates.forEach((teammate, i) => {
       const currentTeammateErrors: FormErrors["teammates"][0] = {};
-      const fieldsToValidate: (keyof Teammate)[] = ["registerNumber"];
+      const fieldsToValidate: (keyof Teammate)[] = [];
 
       if (i === 0) {
         fieldsToValidate.push("name", "email");
+      }
+
+      const shouldValidateRegisterNumber =
+        isRequiredTeammate(i) || teammate.registerNumber.trim().length > 0;
+      if (shouldValidateRegisterNumber) {
+        fieldsToValidate.push("registerNumber");
       }
 
       fieldsToValidate.forEach((field) => {
@@ -357,7 +423,7 @@ const Page = () => {
     });
 
     const registerNumberUsage = new Map<string, number[]>();
-    formData.teammates.forEach((teammate, index) => {
+    activeTeammates.forEach((teammate, index) => {
       const regNum = teammate.registerNumber.trim();
 
       if (regNum && !newErrors.teammates[index]?.registerNumber) {
@@ -385,14 +451,25 @@ const Page = () => {
     if (!hasErrors && selectedEvent?.event_id) {
       setSubmitLoading(true);
 
-      const payload = {
-        eventId: selectedEvent.event_id,
-        teamName: isIndividualEvent ? null : formData.teamName.trim() || null,
-        teammates: formData.teammates.map((tm) => ({
+      const teammatesToSubmit = activeTeammates
+        .map((tm, index) => ({
           name: tm.name.trim(),
           registerNumber: tm.registerNumber.trim(),
           email: tm.email.trim(),
-        })),
+          isRequired: isRequiredTeammate(index),
+        }))
+        .filter((tm) => {
+          if (tm.isRequired) {
+            return true;
+          }
+          return Boolean(tm.name || tm.registerNumber || tm.email);
+        })
+        .map(({ isRequired, ...teammate }) => teammate);
+
+      const payload = {
+        eventId: selectedEvent.event_id,
+        teamName: isIndividualEvent ? null : formData.teamName.trim() || null,
+        teammates: teammatesToSubmit,
         custom_field_responses: Object.keys(customFieldResponses).length > 0 ? customFieldResponses : null,
       };
 
@@ -719,10 +796,44 @@ const Page = () => {
                     {errors.teamName}
                   </p>
                 )}
+
+                <div className="mt-4 flex flex-col gap-3 rounded-lg border border-blue-100 bg-blue-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-[#063168]">
+                      Minimum members required: {minTeammates}
+                    </p>
+                    <p className="text-xs text-gray-600">
+                      Add optional members only if needed (up to {maxTeammates}).
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleRemoveTeammate}
+                      disabled={visibleTeammateCount <= minTeammates}
+                      className="rounded-full border border-gray-300 px-4 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Remove Member
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAddTeammate}
+                      disabled={visibleTeammateCount >= maxTeammates}
+                      className="rounded-full bg-[#154CB3] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#154cb3eb] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Add Member
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
-            {formData.teammates.map((teammate, index) => (
+            {formData.teammates
+              .slice(0, visibleTeammateCount)
+              .map((teammate, index) => {
+                const isMandatoryMember = isRequiredTeammate(index);
+
+                return (
               <div
                 key={index}
                 className="mb-6 sm:mb-8 p-4 border border-gray-200 rounded-lg bg-gray-50/50"
@@ -736,7 +847,9 @@ const Page = () => {
                       ? "Participant Details"
                       : index === 0
                       ? "Participant 1 Details (Team Leader)"
-                      : `Participant ${index + 1} Details:`}
+                      : `Participant ${index + 1} Details${
+                          isMandatoryMember ? ":" : " (Optional):"
+                        }`}
                   </h3>
                 </div>
 
@@ -837,7 +950,10 @@ const Page = () => {
                       htmlFor={`register-${index}`}
                       className="block mb-1 sm:mb-2 text-xs sm:text-sm font-medium text-gray-700"
                     >
-                      Register number: <span className="text-red-500">*</span>
+                      Register number:{" "}
+                      {isMandatoryMember && (
+                        <span className="text-red-500">*</span>
+                      )}
                     </label>
                     <input
                       type="text"
@@ -883,7 +999,8 @@ const Page = () => {
                   </div>
                 </div>
               </div>
-            ))}
+                );
+              })}
 
             {/* Custom Fields Section - Additional fields created by event organiser */}
             {Array.isArray(selectedEvent?.custom_fields) && selectedEvent.custom_fields.length > 0 && (
