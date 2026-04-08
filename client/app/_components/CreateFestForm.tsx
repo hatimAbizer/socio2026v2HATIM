@@ -837,9 +837,11 @@ function CreateFestForm(props?: CreateFestProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false); // Used for delete operation
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitIntent, setSubmitIntent] = useState<"publish" | "draft">("publish");
   const [isLoadingFestData, setIsLoadingFestData] = useState(false);
   const [pendingFestSuccess, setPendingFestSuccess] = useState(false);
   const [wasDraftOnSubmit, setWasDraftOnSubmit] = useState(false);
+  const [successAction, setSuccessAction] = useState<"publish" | "draft">("publish");
   const [festModalVisible, setFestModalVisible] = useState(false);
 
   const { session } = useAuth();
@@ -1219,9 +1221,9 @@ function CreateFestForm(props?: CreateFestProps) {
     ] // Use prop isEditMode here
   );
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitFest = async (saveAsDraft: boolean) => {
     setErrors((prev) => ({ ...prev, submit: undefined }));
+    setSubmitIntent(saveAsDraft ? "draft" : "publish");
 
     const currentValidationErrors: Record<string, string | undefined> = {};
     const fieldsToValidate: (keyof CreateFestState)[] = [
@@ -1405,7 +1407,7 @@ function CreateFestForm(props?: CreateFestProps) {
     }
 
     setIsSubmitting(true);
-    setWasDraftOnSubmit(Boolean(finalIsEditMode && isDraftFest));
+    setWasDraftOnSubmit(Boolean(!saveAsDraft && finalIsEditMode && isDraftFest));
     let uploadedFestImageUrl: string | null = null;
 
     if (imageFile) {
@@ -1484,7 +1486,7 @@ function CreateFestForm(props?: CreateFestProps) {
       // - If in edit mode with no new file, keep the existing URL
       // - Otherwise null (new fest with no image - already caught above)
       const finalImageUrl = uploadedFestImageUrl ?? (isEditMode ? existingImageFileUrl : null);
-      const isPublishingDraft = finalIsEditMode && isDraftFest;
+      const isPublishingDraft = !saveAsDraft && finalIsEditMode && isDraftFest;
 
       console.log(`[Fest Submit] isEditMode=${isEditMode}, uploadedFestImageUrl=${uploadedFestImageUrl}, existingImageFileUrl=${existingImageFileUrl}, finalImageUrl=${finalImageUrl}`);
 
@@ -1522,7 +1524,7 @@ function CreateFestForm(props?: CreateFestProps) {
         custom_fields: customFieldsWithTeamSettings,
         // Always include festImageUrl so backend always updates the DB column
         festImageUrl: finalImageUrl,
-        is_draft: false,
+        is_draft: saveAsDraft,
         ...(isPublishingDraft ? { send_notifications: true } : {}),
       };
 
@@ -1574,7 +1576,11 @@ function CreateFestForm(props?: CreateFestProps) {
         const oldId = festIdFromPath;
         const newId = responseData.fest_id;
         console.log(`Fest ID changed from '${oldId}' to '${newId}', redirecting...`);
-        const successLabel = isPublishingDraft ? "published" : "updated";
+        const successLabel = saveAsDraft
+          ? "saved as draft"
+          : isPublishingDraft
+            ? "published"
+            : "updated";
         
         toast.success(
           `Fest ${successLabel} successfully! The fest link has changed from /fest/${oldId} to /fest/${newId}`,
@@ -1586,18 +1592,33 @@ function CreateFestForm(props?: CreateFestProps) {
       } else if (isEditMode) {
         // Show regular success message for edit
         toast.success(
-          isPublishingDraft ? "Fest published successfully!" : "Fest updated successfully!",
+          saveAsDraft
+            ? "Fest draft saved successfully!"
+            : isPublishingDraft
+              ? "Fest published successfully!"
+              : "Fest updated successfully!",
           { duration: 3000 }
         );
       }
 
       // Defer modal until overlay animation finishes
+      setSuccessAction(saveAsDraft ? "draft" : "publish");
       setPendingFestSuccess(true);
     } catch (error: any) {
       setErrors((prev) => ({ ...prev, submit: error.message }));
     } finally {
       setIsSubmitting(false);
+      setSubmitIntent("publish");
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await submitFest(false);
+  };
+
+  const handleSaveDraft = async () => {
+    await submitFest(true);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1811,19 +1832,27 @@ function CreateFestForm(props?: CreateFestProps) {
                 id="modal-title"
                 className="text-2xl sm:text-3xl font-semibold text-[#063168] mb-3"
               >
-                Fest {finalIsEditMode ? (wasDraftOnSubmit ? "Published" : "Updated") : "Published"}!
+                {successAction === "draft"
+                  ? "Draft Saved!"
+                  : `Fest ${finalIsEditMode ? (wasDraftOnSubmit ? "Published" : "Updated") : "Published"}!`}
               </h2>
               <p
                 id="modal-description"
                 className="text-gray-500 mb-8 text-sm sm:text-base px-4"
               >
-                Your fest has been successfully{" "}
-                {finalIsEditMode ? (wasDraftOnSubmit ? "published" : "updated") : "published"}.<br />
-                What would you like to do next?
+                {successAction === "draft"
+                  ? "Your fest has been saved as a draft. It is hidden until you publish it."
+                  : (
+                    <>
+                      Your fest has been successfully{" "}
+                      {finalIsEditMode ? (wasDraftOnSubmit ? "published" : "updated") : "published"}.<br />
+                      What would you like to do next?
+                    </>
+                  )}
               </p>
             </div>
             <div className="flex flex-col sm:flex-row-reverse sm:justify-center gap-3">
-              {!finalIsEditMode && (
+              {!finalIsEditMode && successAction !== "draft" && (
                 <Link
                   href={`/create/event`}
                   className="w-full sm:w-auto px-6 py-3 bg-[#FFCC00] text-[#063168] rounded-lg font-medium hover:bg-opacity-90 transition-all duration-150 ease-in-out text-center text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-[#FFCC00] focus:ring-offset-2 flex items-center justify-center"
@@ -2857,6 +2886,16 @@ function CreateFestForm(props?: CreateFestProps) {
                     </button>
                   )}
                   <button
+                    type="button"
+                    onClick={handleSaveDraft}
+                    disabled={isSubmitting || isNavigating}
+                    className="w-full sm:w-auto px-5 py-2.5 border border-amber-400 text-amber-800 bg-amber-50 text-sm font-medium rounded-md hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {isSubmitting && submitIntent === "draft"
+                      ? "Saving Draft..."
+                      : "Save as Draft"}
+                  </button>
+                  <button
                     type="submit"
                     disabled={isSubmitting || isNavigating}
                     className="w-full sm:w-auto px-6 py-2.5 bg-[#154CB3] text-white text-sm font-medium rounded-md hover:bg-[#0f3a7a] focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
@@ -2887,11 +2926,13 @@ function CreateFestForm(props?: CreateFestProps) {
                       {isUploadingImage
                         ? "Uploading image..."
                         : isSubmitting
-                        ? finalIsEditMode
-                          ? isDraftFest
-                            ? "Publishing..."
-                            : "Updating..."
-                          : "Publishing..."
+                        ? submitIntent === "draft"
+                          ? "Saving Draft..."
+                          : finalIsEditMode
+                            ? isDraftFest
+                              ? "Publishing..."
+                              : "Updating..."
+                            : "Publishing..."
                         : finalIsEditMode
                         ? isDraftFest
                           ? "Publish Fest"
