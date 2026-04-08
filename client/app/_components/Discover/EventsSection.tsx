@@ -22,6 +22,7 @@ interface EventsSectionProps {
   events: Event[];
   showAll?: boolean;
   baseUrl?: string;
+  archivedVisualMode?: "tag" | "muted";
   onArchiveToggle?: (eventId: string, shouldArchive: boolean) => Promise<void>;
   archiveLoadingIds?: Set<string>;
 }
@@ -30,6 +31,7 @@ export const EventsSection = ({
   title,
   events,
   baseUrl = "event",
+  archivedVisualMode = "tag",
   onArchiveToggle,
   archiveLoadingIds = new Set(),
 }: EventsSectionProps) => {
@@ -53,6 +55,7 @@ export const EventsSection = ({
             baseUrl={baseUrl}
             idForLink={event.event_id}
             isArchived={Boolean(event.is_archived)}
+            archivedVisualMode={archivedVisualMode}
             onArchiveToggle={onArchiveToggle}
             isArchiveLoading={archiveLoadingIds.has(event.event_id)}
           />

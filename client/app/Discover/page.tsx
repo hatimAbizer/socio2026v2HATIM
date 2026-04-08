@@ -458,6 +458,7 @@ const DiscoverPageContent = () => {
                   title="Trending events"
                   events={campusTrendingEventsFiltered}
                   baseUrl="event"
+                  archivedVisualMode="muted"
                   onArchiveToggle={handleToggleArchive}
                   archiveLoadingIds={archiveUpdatingIds}
                 />
@@ -504,6 +505,7 @@ const DiscoverPageContent = () => {
                       fest_image_url: fest.fest_image_url || "",
                       opening_date: openingDate,
                       closing_date: closingDate,
+                      is_archived: Boolean(fest.is_archived),
                     };
                   })}
                   showAll={true}
@@ -543,6 +545,7 @@ const DiscoverPageContent = () => {
                 events={campusUpcomingEventsFiltered}
                 showAll={false}
                 baseUrl="event"
+                archivedVisualMode="muted"
                 onArchiveToggle={handleToggleArchive}
                 archiveLoadingIds={archiveUpdatingIds}
               />
