@@ -10,6 +10,7 @@ import {
 import { generateQRCodeData, generateQRCodeImage } from "../utils/qrCodeUtils.js";
 import { resolveGatedEvent, createGatedVisitor, getGatedVerifyUrl, isGatedEnabled, pushEventToGated } from "../utils/gatedSync.js";
 import { sendRegistrationEmail } from "../utils/emailService.js";
+import { createOrUpdateTeammateUsers } from "../utils/teammateService.js";
 import { 
   authenticateUser, 
   getUserInfo, 
@@ -209,6 +210,14 @@ router.post("/register", async (req, res) => {
         error: "Event is archived",
         details: "This event has been archived and is no longer accepting registrations.",
         code: "EVENT_ARCHIVED"
+      });
+    }
+
+    if (event.is_draft === true || event.is_draft === 1 || event.is_draft === "1" || event.is_draft === "true") {
+      return res.status(403).json({
+        error: "Event is in draft mode",
+        details: "This event is not published yet and is not accepting registrations.",
+        code: "EVENT_DRAFT",
       });
     }
     
@@ -474,6 +483,39 @@ router.post("/register", async (req, res) => {
           : 1;
     }
 
+    // ===== TEAM SIZE VALIDATION (NEW) =====
+    if (normalizedRegistrationType === "team") {
+      const minPerTeam = event.min_participants || 2;
+      const maxPerTeam = event.participants_per_team || 10; // default to 10 if not set
+
+      if (participantCount < minPerTeam) {
+        return res.status(400).json({
+          error: "Team size too small",
+          details: `This event requires a minimum of ${minPerTeam} participants per team. You provided ${participantCount}.`,
+          code: "TEAM_TOO_SMALL"
+        });
+      }
+
+      if (participantCount > maxPerTeam) {
+        return res.status(400).json({
+          error: "Team size too large",
+          details: `This event allows a maximum of ${maxPerTeam} participants per team. You provided ${participantCount}.`,
+          code: "TEAM_TOO_LARGE"
+        });
+      }
+    } else {
+      // Individual registration check: If participants_per_team > 1, the user MUST register as a team?
+      // Actually, usually individual means 1, but let's check if the event forces teams.
+      if ((event.participants_per_team || 1) > 1 && (event.min_participants || 1) > 1) {
+        // If min > 1, then individual registration (size 1) is not allowed.
+        return res.status(400).json({
+          error: "Individual registration not allowed",
+          details: `This event requires a minimum of ${event.min_participants} participants per team. Please register as a team.`,
+          code: "TEAM_REQUIRED"
+        });
+      }
+    }
+
     console.log('📋 Processed Data:', processedData);
     console.log('🎟️  Registration ID:', registration_id);
     console.log('🎪 Event ID:', normalizedEventId);
@@ -505,6 +547,19 @@ router.post("/register", async (req, res) => {
     });
 
     console.log('✅ Registration saved:', registration);
+
+    // ===== AUTO-CREATE USER RECORDS FOR TEAMMATES (NEW) =====
+    // Ensure teammates have their own user records in the users table
+    const result = await createOrUpdateTeammateUsers(
+      processedTeammates || teammates || [], 
+      participantOrganization
+    );
+    
+    if (result.failed > 0) {
+      console.warn(`⚠️ ${result.failed} teammate(s) failed to create user records:`, result.errors);
+    } else if (result.success > 0) {
+      console.log(`✅ Created/updated user records for ${result.success} teammate(s)`);
+    }
 
     // Auto-create Gated visitor pass for outsiders (non-blocking)
     if (participantOrganization === 'outsider' && isGatedEnabled()) {
@@ -652,6 +707,14 @@ router.post(
           error: "Event is archived",
           details: "This event has been archived and is no longer accepting registrations.",
           code: "EVENT_ARCHIVED",
+        });
+      }
+
+      if (event.is_draft === true || event.is_draft === 1 || event.is_draft === "1" || event.is_draft === "true") {
+        return res.status(403).json({
+          error: "Event is in draft mode",
+          details: "This event is not published yet and is not accepting registrations.",
+          code: "EVENT_DRAFT",
         });
       }
 

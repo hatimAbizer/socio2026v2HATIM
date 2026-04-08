@@ -97,6 +97,55 @@ const normalizeJsonField = (value) => {
   return [];
 };
 
+const normalizeStringListField = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => typeof item === "string" || typeof item === "number")
+      .map((item) => String(item).trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item) => typeof item === "string" || typeof item === "number")
+          .map((item) => String(item).trim())
+          .filter(Boolean);
+      }
+
+      if (typeof parsed === "string" || typeof parsed === "number") {
+        const parsedValue = String(parsed).trim();
+        return parsedValue ? [parsedValue] : [];
+      }
+    } catch {
+      if (trimmed.includes(",")) {
+        return trimmed
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean);
+      }
+
+      return [trimmed];
+    }
+  }
+
+  if (typeof value === "number") {
+    return [String(value)];
+  }
+
+  return [];
+};
+
+const normalizeSingleStringField = (value) => {
+  const normalizedList = normalizeStringListField(value);
+  return normalizedList[0] || "";
+};
+
 const normalizeFestReference = (value) => {
   if (value === undefined || value === null) return null;
   const normalized = String(value).trim();
@@ -243,10 +292,14 @@ const persistAutoArchivedEvents = async (events) => {
 
 
 // GET all events - PUBLIC ACCESS (no auth required)
-router.get("/", async (req, res) => {
+router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
   try {
-    const { page, pageSize, search, status, sortBy, sortOrder, archive } = req.query;
+    const { page, pageSize, search, status, sortBy, sortOrder, archive, include_drafts } = req.query;
     const today = new Date().toISOString().split('T')[0];
+    const includeDraftsRequested =
+      typeof include_drafts === "string" && include_drafts.toLowerCase() === "true";
+    const canViewDrafts = Boolean(req.userInfo?.is_masteradmin || req.userInfo?.is_organiser);
+    const shouldIncludeDrafts = includeDraftsRequested && canViewDrafts;
     
     let queryOptions = { 
       order: { column: "created_at", ascending: false } 
@@ -282,6 +335,8 @@ router.get("/", async (req, res) => {
         schedule: normalizeJsonField(event.schedule),
         prizes: normalizeJsonField(event.prizes),
         custom_fields: normalizeJsonField(event.custom_fields),
+        campus_hosted_at: normalizeSingleStringField(event.campus_hosted_at),
+        allowed_campuses: normalizeStringListField(event.allowed_campuses),
         registration_count: eventRegistrationCounts[event.event_id] || 0,
         ...archiveState,
       };
@@ -319,6 +374,10 @@ router.get("/", async (req, res) => {
       processedEvents = processedEvents.filter((event) => event.archived_effective);
     } else if (normalizedArchive === "active") {
       processedEvents = processedEvents.filter((event) => !event.archived_effective);
+    }
+
+    if (!shouldIncludeDrafts) {
+      processedEvents = processedEvents.filter((event) => !asBoolean(event.is_draft));
     }
 
     const normalizedSortBy = typeof sortBy === "string" ? sortBy : "date";
@@ -417,6 +476,8 @@ router.get("/:eventId", async (req, res) => {
       schedule: normalizeJsonField(event.schedule),
       prizes: normalizeJsonField(event.prizes),
       custom_fields: normalizeJsonField(event.custom_fields),
+      campus_hosted_at: normalizeSingleStringField(event.campus_hosted_at),
+      allowed_campuses: normalizeStringListField(event.allowed_campuses),
       ...archiveState,
     };
 
@@ -473,8 +534,25 @@ router.post(
         rules,
         schedule,
         prizes,
-        max_participants
+        max_participants,
+        send_notifications,
+        is_draft,
+        is_archived,
+        save_as_draft
       } = req.body;
+
+      const shouldSaveAsDraft =
+        asBoolean(is_draft) ||
+        asBoolean(save_as_draft);
+      const shouldArchiveOnCreate =
+        asBoolean(is_archived) && !shouldSaveAsDraft;
+      const hasExplicitNotificationPreference =
+        send_notifications !== undefined &&
+        send_notifications !== null &&
+        String(send_notifications).trim() !== "";
+      const shouldSendNotifications =
+        !shouldSaveAsDraft &&
+        (hasExplicitNotificationPreference ? asBoolean(send_notifications) : true);
 
       // Validation
       if (!title || typeof title !== "string" || title.trim() === "") {
@@ -562,6 +640,24 @@ router.post(
       const parsedSchedule = parseJsonField(schedule, []);
       const parsedPrizes = parseJsonField(prizes, []);
       const parsedCustomFields = parseJsonField(req.body.custom_fields, []);
+      const campusHostedAt = normalizeSingleStringField(
+        req.body.campus_hosted_at || req.body.campusHostedAt || ""
+      );
+      const parsedAllowedCampuses = normalizeStringListField(
+        req.body.allowed_campuses
+      );
+
+      if (!campusHostedAt) {
+        return res.status(400).json({
+          error: "Campus hosted at is required.",
+        });
+      }
+
+      if (!Array.isArray(parsedAllowedCampuses) || parsedAllowedCampuses.length === 0) {
+        return res.status(400).json({
+          error: "At least one allowed campus is required.",
+        });
+      }
 
       console.log("✅ JSON fields parsed successfully");
       console.log("About to insert event into database with:", {
@@ -602,15 +698,20 @@ router.post(
         auth_uuid: req.userId,
         registration_deadline: req.body.registration_deadline || null,
         total_participants: 0,
+        is_draft: shouldSaveAsDraft,
+        is_archived: shouldArchiveOnCreate,
+        archived_at: shouldArchiveOnCreate ? new Date().toISOString() : null,
+        archived_by: shouldArchiveOnCreate
+          ? req.userInfo?.email || req.userId || "system:create_archive"
+          : null,
         // Outsider & campus fields
         allow_outsiders: req.body.allow_outsiders === "true" || req.body.allow_outsiders === true ? 1 : 0,
         on_spot: req.body.on_spot === "true" || req.body.on_spot === true ? 1 : 0,
         outsider_registration_fee: parseOptionalFloat(req.body.outsider_registration_fee || req.body.outsiderRegistrationFee, null),
         outsider_max_participants: parseOptionalInt(req.body.outsider_max_participants || req.body.outsiderMaxParticipants, null),
-        campus_hosted_at: req.body.campus_hosted_at || req.body.campusHostedAt || null,
-        allowed_campuses: Array.isArray(req.body.allowed_campuses)
-          ? req.body.allowed_campuses
-          : parseJsonField(req.body.allowed_campuses, []),
+        campus_hosted_at: campusHostedAt,
+        allowed_campuses: parsedAllowedCampuses,
+        min_participants: parseOptionalInt(req.body.min_participants || req.body.minParticipants, 1),
       }]);
 
       if (!created || created.length === 0) {
@@ -620,21 +721,25 @@ router.post(
       console.log("✅ Event inserted successfully:", event_id);
 
       // Send notifications to all users about the new event (non-blocking)
-      sendBroadcastNotification({
-        title: 'New Event Published',
-        message: `${title} — Check out this new event!`,
-        type: 'info',
-        event_id: event_id,
-        event_title: title,
-        action_url: `/event/${event_id}`
-      }).then(() => {
-        console.log(`✅ Sent notifications for new event: ${title}`);
-      }).catch((notifError) => {
-        console.error('❌ Failed to send event notifications:', notifError);
-      });
+      if (shouldSendNotifications) {
+        sendBroadcastNotification({
+          title: 'New Event Published',
+          message: `${title} — Check out this new event!`,
+          type: 'info',
+          event_id: event_id,
+          event_title: title,
+          action_url: `/event/${event_id}`
+        }).then(() => {
+          console.log(`✅ Sent notifications for new event: ${title}`);
+        }).catch((notifError) => {
+          console.error('❌ Failed to send event notifications:', notifError);
+        });
+      } else {
+        console.log(`ℹ️ Notifications skipped for event ${event_id} (draft or notifications disabled).`);
+      }
 
       // Push to UniversityGated if outsiders are enabled (non-blocking)
-      if (isGatedEnabled()) {
+      if (!shouldSaveAsDraft && !shouldArchiveOnCreate && isGatedEnabled()) {
         const createdEvent = created[0];
         shouldPushEventToGated(createdEvent, queryOne).then(async (shouldPush) => {
           if (shouldPush) {
@@ -770,7 +875,7 @@ router.patch(
       const archiveState = deriveArchiveState(updatedEvent);
 
       return res.status(200).json({
-        message: archiveValue ? "Event archived successfully." : "Event moved back to active list.",
+        message: archiveValue ? "Event archived successfully." : "Event restored successfully.",
         event: {
           ...updatedEvent,
           fest: updatedEvent.fest_id || null, // Map fest_id to fest for frontend compatibility
@@ -897,8 +1002,41 @@ router.put(
         rules,
         schedule,
         prizes,
-        max_participants
+        max_participants,
+        send_notifications,
+        is_draft,
+        is_archived,
+        save_as_draft
       } = req.body;
+
+      const rawArchivePreference =
+        is_archived !== undefined && is_archived !== null && String(is_archived).trim() !== ""
+          ? is_archived
+          : undefined;
+      const hasArchivePreference =
+        rawArchivePreference !== undefined &&
+        rawArchivePreference !== null &&
+        String(rawArchivePreference).trim() !== "";
+      const shouldArchiveFromRequest = asBoolean(rawArchivePreference);
+      const rawDraftPreference =
+        is_draft !== undefined && is_draft !== null && String(is_draft).trim() !== ""
+          ? is_draft
+          : save_as_draft;
+      const hasDraftPreference =
+        rawDraftPreference !== undefined &&
+        rawDraftPreference !== null &&
+        String(rawDraftPreference).trim() !== "";
+      const shouldDraftFromRequest = asBoolean(rawDraftPreference);
+      const hasExplicitNotificationPreference =
+        send_notifications !== undefined &&
+        send_notifications !== null &&
+        String(send_notifications).trim() !== "";
+      const wasDraftBeforeUpdate = asBoolean(event?.is_draft);
+      const isPublishTransition =
+        hasDraftPreference && !shouldDraftFromRequest && wasDraftBeforeUpdate;
+      const shouldSendPublishNotifications =
+        isPublishTransition &&
+        (hasExplicitNotificationPreference ? asBoolean(send_notifications) : true);
 
       // ─── AUTO-UNARCHIVE LOGIC ───────────────────────────────────────────
       // If an event was auto-archived (date passed) but then the date is changed
@@ -953,9 +1091,50 @@ router.put(
       const parsedSchedule = parseJsonField(schedule, []);
       const parsedPrizes = parseJsonField(prizes, []);
       const parsedCustomFields = parseJsonField(req.body.custom_fields, []);
+      const campusHostedAt = normalizeSingleStringField(
+        req.body.campus_hosted_at || req.body.campusHostedAt || ""
+      );
+      const parsedAllowedCampuses = normalizeStringListField(
+        req.body.allowed_campuses
+      );
+
+      if (!campusHostedAt) {
+        return res.status(400).json({
+          error: "Campus hosted at is required.",
+        });
+      }
+
+      if (!Array.isArray(parsedAllowedCampuses) || parsedAllowedCampuses.length === 0) {
+        return res.status(400).json({
+          error: "At least one allowed campus is required.",
+        });
+      }
 
       // Prepare update payload
       // Note: Only include event_id if it's NOT changing (to avoid primary key update issues)
+      const archiveOverridePayload = hasArchivePreference
+        ? {
+            is_archived: shouldArchiveFromRequest,
+            archived_at: shouldArchiveFromRequest ? new Date().toISOString() : null,
+            archived_by: shouldArchiveFromRequest
+              ? req.userInfo?.email || req.userId || "system:manual_archive"
+              : MANUAL_UNARCHIVE_OVERRIDE,
+          }
+        : shouldAutoUnarchive
+          ? { is_archived: false, archived_at: null, archived_by: null }
+          : {};
+
+      const draftOverridePayload = hasDraftPreference
+        ? shouldDraftFromRequest
+          ? { is_draft: true, is_archived: false, archived_at: null, archived_by: null }
+          : {
+              is_draft: false,
+              ...(wasDraftBeforeUpdate
+                ? { is_archived: false, archived_at: null, archived_by: null }
+                : {}),
+            }
+        : {};
+
       const updateData = {
         title: title.trim(),
         description: description || null,
@@ -987,13 +1166,12 @@ router.put(
         on_spot: req.body.on_spot === "true" || req.body.on_spot === true ? 1 : 0,
         outsider_registration_fee: parseOptionalFloat(req.body.outsider_registration_fee || req.body.outsiderRegistrationFee, null),
         outsider_max_participants: parseOptionalInt(req.body.outsider_max_participants || req.body.outsiderMaxParticipants, null),
-        campus_hosted_at: req.body.campus_hosted_at || req.body.campusHostedAt || null,
-        allowed_campuses: Array.isArray(req.body.allowed_campuses)
-          ? req.body.allowed_campuses
-          : parseJsonField(req.body.allowed_campuses, []),
+        campus_hosted_at: campusHostedAt,
+        allowed_campuses: parsedAllowedCampuses,
+        min_participants: parseOptionalInt(req.body.min_participants || req.body.minParticipants, 1),
         updated_at: new Date().toISOString(),
-        // Auto-unarchive if date changed to future
-        ...(shouldAutoUnarchive ? { is_archived: false, archived_at: null, archived_by: null } : {})
+        ...archiveOverridePayload,
+        ...draftOverridePayload
       };
 
       console.log("🔄 UPDATE DATA - File URLs being saved to database:");
@@ -1034,6 +1212,34 @@ router.put(
 
       const updated = await update("events", updateData, { event_id: eventId });
 
+      const notifyPublishIfNeeded = (eventRecord) => {
+        if (!shouldSendPublishNotifications) {
+          return;
+        }
+
+        const eventTitle = eventRecord?.title || title.trim() || "An event";
+        const publishedEventId = eventRecord?.event_id || newEventId || eventId;
+        sendBroadcastNotification({
+          title: "Event Published",
+          message: `${eventTitle} is now live! Check it out.`,
+          type: "info",
+          event_id: publishedEventId,
+          event_title: eventTitle,
+          action_url: `/event/${publishedEventId}`,
+        })
+          .then(() => {
+            console.log(
+              `✅ Sent publish notifications for updated event: ${eventTitle}`
+            );
+          })
+          .catch((notifError) => {
+            console.error(
+              "❌ Failed to send publish notifications during update:",
+              notifError
+            );
+          });
+      };
+
       console.log("💾 Database update result:");
       if (updated && updated.length > 0) {
         console.log(`✅ Event updated successfully`);
@@ -1050,9 +1256,10 @@ router.put(
             throw new Error("Could not fetch updated event after update");
           }
           console.log(`✅ Event updated and refetched successfully: ${eventId}`);
+          notifyPublishIfNeeded(refetchedEvent);
           
           // Push to UniversityGated if outsiders were enabled/changed (non-blocking)
-          if (isGatedEnabled()) {
+          if (isGatedEnabled() && !asBoolean(refetchedEvent?.is_draft)) {
             shouldPushEventToGated(refetchedEvent, queryOne).then(async (shouldPush) => {
               if (shouldPush) {
                 try {
@@ -1085,9 +1292,10 @@ router.put(
 
       // At this point, updated is guaranteed to have data (either from update or refetch)
       const updatedEvent = updated[0];
+      notifyPublishIfNeeded(updatedEvent);
 
       // Push to UniversityGated if outsiders were enabled/changed (non-blocking)
-      if (isGatedEnabled()) {
+      if (isGatedEnabled() && !asBoolean(updatedEvent?.is_draft)) {
         shouldPushEventToGated(updatedEvent, queryOne).then(async (shouldPush) => {
           if (shouldPush) {
             try {

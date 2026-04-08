@@ -9,6 +9,7 @@ interface FestCardProps {
   dateRange: string;
   image: string | null;
   baseUrl?: string;
+  isArchived?: boolean;
 }
 
 export const FestCard = ({
@@ -19,6 +20,7 @@ export const FestCard = ({
   dateRange,
   image,
   baseUrl = "fest",
+  isArchived = false,
 }: FestCardProps) => {
   const formattedTitle = (title || "")
     .toLowerCase()
@@ -31,7 +33,9 @@ export const FestCard = ({
 
   return (
     <Link href={`/${baseUrl}/${slug}`} className="block w-full h-full min-w-0">
-      <div className="bg-[#F9F9F9] rounded-lg overflow-hidden border-2 border-gray-200 cursor-pointer transition-all duration-300 hover:-translate-y-1 hover:shadow-lg shadow-md flex flex-col group w-full h-full min-w-0">
+      <div className={`bg-[#F9F9F9] rounded-lg overflow-hidden border-2 border-gray-200 cursor-pointer transition-all duration-300 hover:-translate-y-1 hover:shadow-lg shadow-md flex flex-col group w-full h-full min-w-0 ${
+        isArchived ? "opacity-60 grayscale" : ""
+      }`}>
         <div className="relative h-40 bg-gray-200 overflow-hidden rounded-t-lg">
           {image ? (
             <>

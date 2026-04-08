@@ -55,6 +55,27 @@ interface FestDetails {
   faqs?: { question: string; answer: string }[];
 }
 
+const buildTeamSizeTag = (event: ContextFetchedEvent): string | null => {
+  const maxRaw = Number(
+    event.participants_per_team ?? (event as any).max_participants ?? 1
+  );
+
+  if (!Number.isFinite(maxRaw) || maxRaw <= 1) {
+    return null;
+  }
+
+  const normalizedMax = Math.max(2, Math.floor(maxRaw));
+  const minRaw = Number((event as any).min_participants ?? 2);
+  const normalizedMin = Math.min(
+    Math.max(Number.isFinite(minRaw) ? Math.floor(minRaw) : 2, 2),
+    normalizedMax
+  );
+
+  return normalizedMin === normalizedMax
+    ? `${normalizedMax} members`
+    : `${normalizedMin}-${normalizedMax} members`;
+};
+
 // Helper function to generate Google Calendar URL
 const generateGoogleCalendarUrl = (eventTitle: string, eventDate: string, eventTime?: string): string | null => {
   try {
@@ -640,8 +661,11 @@ const FestPage = () => {
                 {festSpecificEvents.map((event) => {
                   const displayEventDate = formatDateFull(event.event_date, "Date TBD");
                   const displayEventTime = formatTime(event.event_time, "Time TBD");
-                  const tags = [];
+                  const tags: string[] = [];
+                  const teamSizeTag = buildTeamSizeTag(event);
+
                   if (event.category) tags.push(event.category);
+                  if (teamSizeTag) tags.push(teamSizeTag);
                   if (event.claims_applicable) tags.push("Claims");
                   if (
                     event.registration_fee === 0 ||

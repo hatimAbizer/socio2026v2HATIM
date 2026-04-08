@@ -97,7 +97,9 @@ const Page = () => {
   const [eventPageError, setEventPageError] = useState<string | null>(null);
 
   const [isIndividualEvent, setIsIndividualEvent] = useState(false);
+  const [minTeammates, setMinTeammates] = useState(1);
   const [maxTeammates, setMaxTeammates] = useState(1);
+  const [visibleTeammateCount, setVisibleTeammateCount] = useState(1);
 
   const [submitLoading, setSubmitLoading] = useState(false);
   const [formData, setFormData] = useState<{
@@ -116,6 +118,9 @@ const Page = () => {
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
   const [registrationId, setRegistrationId] = useState<string | null>(null);
   const [registrationError, setRegistrationError] = useState<string | null>(
+    null
+  );
+  const [openVisitorHelpFor, setOpenVisitorHelpFor] = useState<number | null>(
     null
   );
 
@@ -189,6 +194,10 @@ const Page = () => {
         });
         setEventPageError(null);
         const teamSize = foundEvent.participants_per_team ?? 1;
+        const minTeamSizeRaw = Number((foundEvent as any).min_participants ?? (teamSize > 1 ? 2 : 1));
+        const minTeamSize =
+          teamSize > 1 ? Math.min(Math.max(minTeamSizeRaw, 2), teamSize) : 1;
+        setMinTeammates(minTeamSize);
         setMaxTeammates(teamSize);
         setIsIndividualEvent(teamSize <= 1);
       } else {
@@ -202,6 +211,11 @@ const Page = () => {
   useEffect(() => {
     if (selectedEvent && !authIsLoading && userData) {
       const teamSize = selectedEvent.participants_per_team ?? 1;
+      const minTeamSizeRaw = Number(
+        (selectedEvent as any).min_participants ?? (teamSize > 1 ? 2 : 1)
+      );
+      const minimumVisibleTeammates =
+        teamSize > 1 ? Math.min(Math.max(minTeamSizeRaw, 2), teamSize) : 1;
       const individual = teamSize <= 1;
 
       const firstTeammateData: Teammate = {
@@ -222,7 +236,7 @@ const Page = () => {
       if (!individual) {
         for (let i = 1; i < teamSize; i++) {
           initialTeammates.push({ name: "", registerNumber: "", email: "" });
-          initialErrorsTeammates.push({ registerNumber: "" });
+          initialErrorsTeammates.push({});
         }
       }
 
@@ -234,8 +248,16 @@ const Page = () => {
         teamName: individual ? "" : prev.teamName,
         teammates: initialErrorsTeammates,
       }));
+      setVisibleTeammateCount(minimumVisibleTeammates);
     }
   }, [selectedEvent, userData, authIsLoading]);
+
+  const isRequiredTeammate = (index: number): boolean => {
+    if (isIndividualEvent) {
+      return index === 0;
+    }
+    return index < minTeammates;
+  };
 
   const validateField = (
     field: keyof Teammate | "teamName",
@@ -247,7 +269,11 @@ const Page = () => {
 
     if (!trimmedValue) {
       const isFirstTeammate = index === 0;
-      if (
+      if (field === "registerNumber" && typeof index === "number") {
+        if (isRequiredTeammate(index)) {
+          error = "This field is required";
+        }
+      } else if (
         (field === "name" || field === "email") &&
         typeof index === "number" &&
         !isFirstTeammate
@@ -303,6 +329,46 @@ const Page = () => {
     }
   };
 
+  const handleAddTeammate = () => {
+    setVisibleTeammateCount((prev) => Math.min(prev + 1, maxTeammates));
+  };
+
+  const handleRemoveTeammate = () => {
+    if (visibleTeammateCount <= minTeammates) {
+      return;
+    }
+
+    const removedIndex = visibleTeammateCount - 1;
+
+    setVisibleTeammateCount((prev) => Math.max(minTeammates, prev - 1));
+
+    setFormData((prev) => {
+      const updatedTeammates = [...prev.teammates];
+      if (updatedTeammates[removedIndex]) {
+        updatedTeammates[removedIndex] = {
+          name: "",
+          registerNumber: "",
+          email: "",
+        };
+      }
+      return {
+        ...prev,
+        teammates: updatedTeammates,
+      };
+    });
+
+    setErrors((prev) => {
+      const updatedTeammateErrors = [...prev.teammates];
+      if (updatedTeammateErrors[removedIndex]) {
+        updatedTeammateErrors[removedIndex] = {};
+      }
+      return {
+        ...prev,
+        teammates: updatedTeammateErrors,
+      };
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegistrationError(null);
@@ -332,12 +398,20 @@ const Page = () => {
       }
     }
 
-    formData.teammates.forEach((teammate, i) => {
+    const activeTeammates = formData.teammates.slice(0, visibleTeammateCount);
+
+    activeTeammates.forEach((teammate, i) => {
       const currentTeammateErrors: FormErrors["teammates"][0] = {};
-      const fieldsToValidate: (keyof Teammate)[] = ["registerNumber"];
+      const fieldsToValidate: (keyof Teammate)[] = [];
 
       if (i === 0) {
         fieldsToValidate.push("name", "email");
+      }
+
+      const shouldValidateRegisterNumber =
+        isRequiredTeammate(i) || teammate.registerNumber.trim().length > 0;
+      if (shouldValidateRegisterNumber) {
+        fieldsToValidate.push("registerNumber");
       }
 
       fieldsToValidate.forEach((field) => {
@@ -352,7 +426,7 @@ const Page = () => {
     });
 
     const registerNumberUsage = new Map<string, number[]>();
-    formData.teammates.forEach((teammate, index) => {
+    activeTeammates.forEach((teammate, index) => {
       const regNum = teammate.registerNumber.trim();
 
       if (regNum && !newErrors.teammates[index]?.registerNumber) {
@@ -380,14 +454,25 @@ const Page = () => {
     if (!hasErrors && selectedEvent?.event_id) {
       setSubmitLoading(true);
 
-      const payload = {
-        eventId: selectedEvent.event_id,
-        teamName: isIndividualEvent ? null : formData.teamName.trim() || null,
-        teammates: formData.teammates.map((tm) => ({
+      const teammatesToSubmit = activeTeammates
+        .map((tm, index) => ({
           name: tm.name.trim(),
           registerNumber: tm.registerNumber.trim(),
           email: tm.email.trim(),
-        })),
+          isRequired: isRequiredTeammate(index),
+        }))
+        .filter((tm) => {
+          if (tm.isRequired) {
+            return true;
+          }
+          return Boolean(tm.name || tm.registerNumber || tm.email);
+        })
+        .map(({ isRequired, ...teammate }) => teammate);
+
+      const payload = {
+        eventId: selectedEvent.event_id,
+        teamName: isIndividualEvent ? null : formData.teamName.trim() || null,
+        teammates: teammatesToSubmit,
         custom_field_responses: Object.keys(customFieldResponses).length > 0 ? customFieldResponses : null,
       };
 
@@ -634,7 +719,9 @@ const Page = () => {
           <p className="text-xs sm:text-sm text-gray-300 mt-2">
             {isIndividualEvent
               ? "Individual Event"
-              : `Team Event (Up to ${maxTeammates} members)`}
+              : minTeammates === maxTeammates
+              ? `Team Event (${maxTeammates} members)`
+              : `Team Event (${minTeammates}-${maxTeammates} members)`}
           </p>
         </div>
       </div>
@@ -715,7 +802,12 @@ const Page = () => {
               </div>
             )}
 
-            {formData.teammates.map((teammate, index) => (
+            {formData.teammates
+              .slice(0, visibleTeammateCount)
+              .map((teammate, index) => {
+                const isMandatoryMember = isRequiredTeammate(index);
+
+                return (
               <div
                 key={index}
                 className="mb-6 sm:mb-8 p-4 border border-gray-200 rounded-lg bg-gray-50/50"
@@ -729,7 +821,9 @@ const Page = () => {
                       ? "Participant Details"
                       : index === 0
                       ? "Participant 1 Details (Team Leader)"
-                      : `Participant ${index + 1} Details:`}
+                      : `Participant ${index + 1} Details${
+                          isMandatoryMember ? ":" : " (Optional):"
+                        }`}
                   </h3>
                 </div>
 
@@ -828,9 +922,24 @@ const Page = () => {
                   <div>
                     <label
                       htmlFor={`register-${index}`}
-                      className="block mb-1 sm:mb-2 text-xs sm:text-sm font-medium text-gray-700"
+                      className="mb-1 sm:mb-2 flex items-center text-xs sm:text-sm font-medium text-gray-700"
                     >
-                      Register number: <span className="text-red-500">*</span>
+                      Register Number / Visitor ID:{" "}
+                      {isMandatoryMember && (
+                        <span className="text-red-500">*</span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setOpenVisitorHelpFor((prev) =>
+                            prev === index ? null : index
+                          )
+                        }
+                        aria-label="What is a Visitor ID?"
+                        className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-[#154CB3] text-[11px] font-bold text-[#154CB3] transition-colors hover:bg-[#154CB3] hover:text-white"
+                      >
+                        ?
+                      </button>
                     </label>
                     <input
                       type="text"
@@ -865,9 +974,29 @@ const Page = () => {
                       } focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent ${
                         index === 0 ? "bg-gray-100 cursor-not-allowed" : ""
                       }`}
-                      placeholder="Enter register number or VIS/STF ID..."
+                      placeholder="Enter Register number or Visitor ID..."
                       disabled={index === 0}
                     />
+                    {openVisitorHelpFor === index && (
+                      <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs sm:text-sm text-blue-900">
+                        <p className="font-semibold">What is a Visitor ID?</p>
+                        <p className="mt-1">
+                          Visitor ID is for external participants and usually
+                          starts with <span className="font-semibold">VIS</span>.
+                        </p>
+                        <p className="mt-1">
+                          You will get it after registering on SOCIO. Open your
+                          profile page and check the ID badge (like in your
+                          second screenshot).
+                        </p>
+                        <Link
+                          href="/profile"
+                          className="mt-2 inline-block font-semibold text-[#154CB3] hover:underline"
+                        >
+                          Go to Profile
+                        </Link>
+                      </div>
+                    )}
                     {errors.teammates[index]?.registerNumber && (
                       <p className="text-red-500 text-xs sm:text-sm mt-1">
                         {errors.teammates[index].registerNumber}
@@ -876,7 +1005,40 @@ const Page = () => {
                   </div>
                 </div>
               </div>
-            ))}
+                );
+              })}
+
+            {/* Team Member Management Info Box */}
+            {!isIndividualEvent && (
+              <div className="mt-6 flex flex-col gap-3 rounded-lg border border-blue-100 bg-blue-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-[#063168]">
+                    Minimum members required: {minTeammates}
+                  </p>
+                  <p className="text-xs text-gray-600">
+                    Add optional members only if needed (up to {maxTeammates}).
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRemoveTeammate}
+                    disabled={visibleTeammateCount <= minTeammates}
+                    className="rounded-full border border-gray-300 px-4 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Remove Member
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddTeammate}
+                    disabled={visibleTeammateCount >= maxTeammates}
+                    className="rounded-full bg-[#154CB3] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#154cb3eb] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Add Member
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Custom Fields Section - Additional fields created by event organiser */}
             {Array.isArray(selectedEvent?.custom_fields) && selectedEvent.custom_fields.length > 0 && (
@@ -909,17 +1071,6 @@ const Page = () => {
                   <span className="text-xs bg-amber-100 text-amber-700 px-3 py-1.5 rounded-full font-medium border border-amber-200 w-fit">
                     {selectedEvent.custom_fields.length} {selectedEvent.custom_fields.length === 1 ? 'Field' : 'Fields'}
                   </span>
-                </div>
-                
-                {/* Info Banner */}
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-5 flex items-start gap-3">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                  </svg>
-                  <p className="text-sm text-blue-800">
-                    The event organiser requires the following additional information from all participants. 
-                    Fields marked with <span className="text-red-500 font-bold">*</span> are mandatory.
-                  </p>
                 </div>
                 
                 {/* Custom Fields Container */}

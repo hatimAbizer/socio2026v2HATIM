@@ -33,6 +33,7 @@ export default function EditEventPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isArchived, setIsArchived] = useState(false);
+  const [isDraft, setIsDraft] = useState(false);
   const [isArchiveUpdating, setIsArchiveUpdating] = useState(false);
 
   useEffect(() => {
@@ -170,6 +171,56 @@ export default function EditEventPage() {
             return stringArray.map((item) => ({ value: item }));
           };
 
+          const normalizeStringList = (items: any): string[] => {
+            if (Array.isArray(items)) {
+              return items
+                .filter(
+                  (item): item is string | number =>
+                    typeof item === "string" || typeof item === "number"
+                )
+                .map((item) => String(item).trim())
+                .filter(Boolean);
+            }
+
+            if (typeof items === "string") {
+              const trimmed = items.trim();
+              if (!trimmed) return [];
+
+              try {
+                const parsed = JSON.parse(trimmed);
+                if (Array.isArray(parsed)) {
+                  return parsed
+                    .filter(
+                      (item): item is string | number =>
+                        typeof item === "string" || typeof item === "number"
+                    )
+                    .map((item) => String(item).trim())
+                    .filter(Boolean);
+                }
+
+                if (typeof parsed === "string" || typeof parsed === "number") {
+                  const parsedValue = String(parsed).trim();
+                  return parsedValue ? [parsedValue] : [];
+                }
+              } catch {
+                if (trimmed.includes(",")) {
+                  return trimmed
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean);
+                }
+
+                return [trimmed];
+              }
+            }
+
+            if (typeof items === "number") {
+              return [String(items)];
+            }
+
+            return [];
+          };
+
           const transformScheduleForForm = (
             schedule: any
           ): ScheduleItemType[] => {
@@ -217,7 +268,11 @@ export default function EditEventPage() {
               : "",
             location: data.venue || "",
             registrationFee: data.registration_fee?.toString() ?? "0",
+            isTeamEvent: Number(data.participants_per_team ?? 1) > 1,
             maxParticipants: data.participants_per_team?.toString() ?? "1",
+            minParticipants:
+              data.min_participants?.toString() ??
+              (Number(data.participants_per_team ?? 1) > 1 ? "2" : "1"),
             contactEmail: data.organizer_email || "",
             contactPhone: data.organizer_phone?.toString() ?? "",
             whatsappLink: data.whatsapp_invite_link || "",
@@ -226,8 +281,8 @@ export default function EditEventPage() {
             allowOutsiders: data.allow_outsiders || false,
             outsiderRegistrationFee: data.outsider_registration_fee?.toString() ?? "",
             outsiderMaxParticipants: data.outsider_max_participants?.toString() ?? "",
-            campusHostedAt: data.campus_hosted_at || "",
-            allowedCampuses: data.allowed_campuses || [],
+            campusHostedAt: normalizeStringList(data.campus_hosted_at)[0] || "",
+            allowedCampuses: normalizeStringList(data.allowed_campuses),
             scheduleItems: transformScheduleForForm(data.schedule),
             rules: transformSimpleListForForm(data.rules),
             prizes: transformSimpleListForForm(data.prizes),
@@ -248,7 +303,13 @@ export default function EditEventPage() {
             data.archived_effective === 1 ||
             data.archived_effective === "1" ||
             data.archived_effective === "true";
+          const draftValue =
+            data.is_draft === true ||
+            data.is_draft === 1 ||
+            data.is_draft === "1" ||
+            data.is_draft === "true";
           setIsArchived(Boolean(manualArchived || effectiveArchived));
+          setIsDraft(Boolean(draftValue));
           setExistingImageFileUrl(data.event_image_url || null);
           setExistingBannerFileUrl(data.banner_url || null);
           setExistingPdfFileUrl(data.pdf_url || null);
@@ -318,7 +379,50 @@ export default function EditEventPage() {
     }
   };
 
-  const handleUpdateEvent: SubmitHandler<EventFormData> = async (formData) => {
+  const submitEventUpdate = async (
+    formData: EventFormData,
+    options?: { archiveAsDraft?: boolean }
+  ) => {
+    const normalizeStringArrayPayload = (value: unknown): string[] => {
+      if (Array.isArray(value)) {
+        return value
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter(Boolean);
+      }
+
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (!trimmed) return [];
+
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed)) {
+            return parsed
+              .filter((item): item is string => typeof item === "string")
+              .map((item) => item.trim())
+              .filter(Boolean);
+          }
+        } catch {
+          if (trimmed.includes(",")) {
+            return trimmed
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean);
+          }
+        }
+
+        return [trimmed];
+      }
+
+      return [];
+    };
+
+    const archiveAsDraft = Boolean(options?.archiveAsDraft);
+    const publishFromDraft = !archiveAsDraft && isDraft;
+    const shouldSendPublishNotifications =
+      publishFromDraft && formData.sendNotifications !== false;
+
     if (!session) {
       setErrorMessage(
         "Authentication session expired or not found. Please log in again."
@@ -352,12 +456,30 @@ export default function EditEventPage() {
     payload.append("registration_deadline", formData.registrationDeadline || "");
     payload.append("venue", formData.location);
     payload.append("registration_fee", formData.registrationFee || "0");
-    payload.append("max_participants", formData.maxParticipants || "1");
+    payload.append(
+      "max_participants",
+      formData.isTeamEvent ? (formData.maxParticipants || "2") : "1"
+    );
+    payload.append(
+      "min_participants",
+      formData.isTeamEvent ? (formData.minParticipants || "2") : "1"
+    );
     payload.append("organizer_email", formData.contactEmail);
     payload.append("organizer_phone", formData.contactPhone || "");
     payload.append("whatsapp_invite_link", formData.whatsappLink || "");
     payload.append("claims_applicable", String(formData.provideClaims));
     payload.append("on_spot", String(formData.onSpot || false));
+    if (archiveAsDraft) {
+      payload.append("is_draft", "true");
+      payload.append("is_archived", "false");
+    } else if (publishFromDraft) {
+      payload.append("is_draft", "false");
+      payload.append("is_archived", "false");
+      payload.append(
+        "send_notifications",
+        String(shouldSendPublishNotifications)
+      );
+    }
 
     payload.append("department_access", JSON.stringify(formData.department || []));
     payload.append(
@@ -379,8 +501,12 @@ export default function EditEventPage() {
     payload.append("outsider_max_participants", formData.outsiderMaxParticipants || "");
 
     // Campus fields
-    payload.append("campus_hosted_at", formData.campusHostedAt || "");
-    payload.append("allowed_campuses", JSON.stringify(formData.allowedCampuses || []));
+    const normalizedCampusHostedAt = String(formData.campusHostedAt || "").trim();
+    const normalizedAllowedCampuses = normalizeStringArrayPayload(
+      formData.allowedCampuses
+    );
+    payload.append("campus_hosted_at", normalizedCampusHostedAt);
+    payload.append("allowed_campuses", JSON.stringify(normalizedAllowedCampuses));
 
     // Custom fields
     payload.append("custom_fields", JSON.stringify(formData.customFields || []));
@@ -487,7 +613,25 @@ export default function EditEventPage() {
           setExistingImageFileUrl(resultJson.event.event_image_url || null);
           setExistingBannerFileUrl(resultJson.event.banner_url || null);
           setExistingPdfFileUrl(resultJson.event.pdf_url || null);
+          const stillArchived =
+            resultJson.event.is_archived === true ||
+            resultJson.event.is_archived === 1 ||
+            resultJson.event.is_archived === "1" ||
+            resultJson.event.is_archived === "true";
+          const stillDraft =
+            resultJson.event.is_draft === true ||
+            resultJson.event.is_draft === 1 ||
+            resultJson.event.is_draft === "1" ||
+            resultJson.event.is_draft === "true";
+          setIsArchived(Boolean(stillArchived));
+          setIsDraft(Boolean(stillDraft));
         }
+
+        const successMessage = archiveAsDraft
+          ? "Draft saved successfully!"
+          : publishFromDraft
+            ? "Event published successfully!"
+            : "Event updated successfully!";
         
         // If the event_id changed (title was updated), show success message and redirect to new URL
         if (resultJson.id_changed && resultJson.event_id) {
@@ -496,7 +640,7 @@ export default function EditEventPage() {
           console.log(`Event ID changed from '${oldId}' to '${newId}', redirecting...`);
           
           toast.success(
-            `Event updated successfully! The event link has changed from /event/${oldId} to /event/${newId}`,
+            `${successMessage} The event link has changed from /event/${oldId} to /event/${newId}`,
             { duration: 5000 }
           );
           
@@ -504,14 +648,19 @@ export default function EditEventPage() {
           return;
         } else {
           // Show regular success message
-          toast.success("Event updated successfully!", { duration: 3000 });
+          toast.success(successMessage, { duration: 3000 });
         }
       } catch (e) {
         console.warn(
           "Could not parse update response as JSON, or event data missing in response."
         );
         // Still show success if response was ok
-        toast.success("Event updated successfully!", { duration: 3000 });
+        const fallbackMessage = archiveAsDraft
+          ? "Draft saved successfully!"
+          : publishFromDraft
+            ? "Event published successfully!"
+            : "Event updated successfully!";
+        toast.success(fallbackMessage, { duration: 3000 });
       }
     } catch (error: any) {
       console.error("Error in handleUpdateEvent:", error);
@@ -524,6 +673,12 @@ export default function EditEventPage() {
       setIsSubmitting(false);
     }
   };
+
+  const handleUpdateEvent: SubmitHandler<EventFormData> = async (formData) =>
+    submitEventUpdate(formData, { archiveAsDraft: false });
+
+  const handleSaveDraft: SubmitHandler<EventFormData> = async (formData) =>
+    submitEventUpdate(formData, { archiveAsDraft: true });
 
   if (authIsLoading || (isLoading && !initialData && !errorMessage)) {
     return (
@@ -593,6 +748,7 @@ export default function EditEventPage() {
       )}
       <EventForm
         onSubmit={handleUpdateEvent}
+        onSubmitDraft={handleSaveDraft}
         defaultValues={initialData}
         isSubmittingProp={isSubmitting}
         isEditMode={true}
@@ -600,6 +756,7 @@ export default function EditEventPage() {
         existingBannerFileUrl={existingBannerFileUrl}
         existingPdfFileUrl={existingPdfFileUrl}
         isArchived={isArchived}
+        isDraft={isDraft}
         isArchiveUpdating={isArchiveUpdating}
         onToggleArchive={handleToggleArchive}
       />

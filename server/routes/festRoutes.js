@@ -78,6 +78,34 @@ const parseComparableDate = (value) => {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
+const asBoolean = (value) =>
+  value === true || value === 1 || value === "1" || value === "true";
+
+const deriveFestStatusFromDates = (
+  openingDateValue,
+  closingDateValue,
+  fallbackStatus = "upcoming"
+) => {
+  const openingDate = parseComparableDate(openingDateValue);
+  const closingDate = parseComparableDate(closingDateValue) || openingDate;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (!openingDate && !closingDate) {
+    return fallbackStatus;
+  }
+
+  if (openingDate && today < openingDate) {
+    return "upcoming";
+  }
+
+  if (closingDate && today > closingDate) {
+    return "past";
+  }
+
+  return "ongoing";
+};
+
 const isMissingColumnError = (error) => String(error?.code || "") === "42703";
 const isMissingRelationError = (error) => {
   const code = String(error?.code || "").toUpperCase();
@@ -162,8 +190,6 @@ const getFestByIdFromCandidates = async (festId, primaryTable) => {
 
 const deriveFestsFromEvents = (events, festRegistrationCounts = {}) => {
   const derivedFestMap = new Map();
-  const asBoolean = (value) => value === true || value === 1 || value === "1" || value === "true";
-
   for (const event of events || []) {
     const festKey = String(event?.fest_id || event?.fest || "").trim();
     if (!festKey) continue;
@@ -227,7 +253,8 @@ const mapFestResponse = (fest) => {
       timeline: normalizeJsonField(fest.timeline),
       sponsors: normalizeJsonField(fest.sponsors),
       social_links: normalizeJsonField(fest.social_links),
-      faqs: normalizeJsonField(fest.faqs)
+      faqs: normalizeJsonField(fest.faqs),
+      custom_fields: normalizeJsonField(fest.custom_fields)
     };
   } catch (error) {
     console.error("Error mapping fest response:", error.message, fest);
@@ -384,7 +411,7 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
     const isAdminOrOrganizer = userInfo && (userInfo.is_masteradmin || userInfo.is_organiser);
     
     if (!isAdminOrOrganizer) {
-      processedFests = processedFests.filter((fest) => !fest.is_archived);
+      processedFests = processedFests.filter((fest) => !fest.is_archived && !asBoolean(fest.is_draft));
 
       console.log(`[Archive Filter] Non-organizer viewing ${processedFests.length} non-archived fests`);
     } else {
@@ -394,7 +421,7 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
     if (normalizedArchive === "archived") {
       processedFests = processedFests.filter((fest) => Boolean(fest.is_archived));
     } else if (normalizedArchive === "active") {
-      processedFests = processedFests.filter((fest) => !fest.is_archived);
+      processedFests = processedFests.filter((fest) => !fest.is_archived && !asBoolean(fest.is_draft));
     }
 
     const hasExplicitSortBy = typeof sortBy === "string" && sortBy.trim() !== "";
@@ -556,14 +583,53 @@ router.post(
     try {
       const festTable = await getFestTableForDatabase(queryAll);
       const festData = req.body;
+      const draftPreferenceInput = pickDefined(
+        festData.is_draft,
+        festData.isDraft,
+        festData.save_as_draft
+      );
+      const hasDraftPreference =
+        draftPreferenceInput !== undefined &&
+        draftPreferenceInput !== null &&
+        String(draftPreferenceInput).trim() !== "";
+      const shouldSaveAsDraft = hasDraftPreference && asBoolean(draftPreferenceInput);
+      const sendNotificationsInput = pickDefined(
+        festData.send_notifications,
+        festData.sendNotifications
+      );
+      const hasExplicitNotificationPreference =
+        sendNotificationsInput !== undefined &&
+        sendNotificationsInput !== null &&
+        String(sendNotificationsInput).trim() !== "";
+      const shouldSendNotifications =
+        !shouldSaveAsDraft &&
+        (hasExplicitNotificationPreference ? asBoolean(sendNotificationsInput) : true);
 
       // Basic validation
       const title = festData.festTitle || festData.title;
       const dept = festData.organizingDept || festData.organizing_dept;
+      const eventHeadsInput = pickDefined(festData.eventHeads, festData.event_heads);
+      const eventHeads = Array.isArray(eventHeadsInput)
+        ? eventHeadsInput
+        : parseJsonLikeField(eventHeadsInput, []);
+      const normalizedEventHeads = Array.isArray(eventHeads) ? eventHeads : [];
 
       if (!title || !dept) {
         console.log("Validation failed. Received:", JSON.stringify(festData));
         return res.status(400).json({ error: "Fest title and organizing department are required" });
+      }
+
+      const missingHeadExpiry = normalizedEventHeads.some((head) => {
+        if (!head || typeof head !== "object" || Array.isArray(head)) return false;
+        const email = String(head.email || "").trim();
+        if (!email) return false;
+        return !head.expiresAt;
+      });
+
+      if (missingHeadExpiry) {
+        return res.status(400).json({
+          error: "Each event head must have an expiry date and time.",
+        });
       }
 
       // Generate slug-based ID from title
@@ -590,40 +656,49 @@ router.post(
       }
 
       // Proceed with insertion
+      const openingDateValue = festData.openingDate || festData.opening_date || null;
+      const closingDateValue = festData.closingDate || festData.closing_date || null;
+      const derivedStatus = deriveFestStatusFromDates(openingDateValue, closingDateValue, "upcoming");
+
       const festPayload = {
         fest_id,
         fest_title: festData.festTitle || festData.title || "",
         description: festData.description || festData.detailed_description || festData.detailedDescription || "",
-        opening_date: festData.openingDate || festData.opening_date || null,
-        closing_date: festData.closingDate || festData.closing_date || null,
+        opening_date: openingDateValue,
+        closing_date: closingDateValue,
         fest_image_url: festData.festImageUrl || festData.fest_image_url || null,
         organizing_dept: festData.organizingDept || festData.organizing_dept || "",
         department_access: festData.departmentAccess || festData.department_access || [],
         category: festData.category || "",
         contact_email: festData.contactEmail || festData.contact_email || "",
         contact_phone: festData.contactPhone || festData.contact_phone || "",
-        event_heads: festData.eventHeads || festData.event_heads || [],
+        event_heads: normalizedEventHeads,
         created_by: req.userInfo?.email,
         auth_uuid: req.userId,
         // New enhanced fest fields
         venue: festData.venue || null,
-        status: festData.status || "upcoming",
+        status: derivedStatus,
         registration_deadline: festData.registration_deadline || null,
         timeline: festData.timeline || [],
         sponsors: festData.sponsors || [],
         social_links: festData.social_links || [],
         faqs: festData.faqs || [],
+        custom_fields: parseJsonLikeField(
+          pickDefined(festData.custom_fields, festData.customFields),
+          []
+        ),
         campus_hosted_at: festData.campus_hosted_at || festData.campusHostedAt || null,
         allowed_campuses: festData.allowed_campuses || festData.allowedCampuses || [],
+        department_hosted_at: festData.department_hosted_at || festData.departmentHostedAt || null,
         allow_outsiders: festData.allow_outsiders === true || festData.allow_outsiders === 'true' || festData.allowOutsiders === true || festData.allowOutsiders === 'true' ? true : false,
+        is_draft: shouldSaveAsDraft,
       };
 
       const inserted = await insert(festTable, [festPayload]);
       const createdFest = inserted?.[0];
 
       // Grant organiser access to event heads with expiration dates
-      const eventHeads = festData.eventHeads || festData.event_heads || [];
-      for (const head of eventHeads) {
+      for (const head of normalizedEventHeads) {
         if (head && head.email) {
           try {
             // Find the user by email
@@ -645,21 +720,23 @@ router.post(
       }
 
       // Send notifications to all users about the new fest (non-blocking)
-      sendBroadcastNotification({
-        title: 'New Fest Announced',
-        message: `${festPayload.fest_title} — Don't miss this fest!`,
-        type: 'info',
-        event_id: fest_id,
-        event_title: festPayload.fest_title,
-        action_url: `/fest/${fest_id}`
-      }).then(() => {
-        console.log(`✅ Sent notifications for new fest: ${festPayload.fest_title}`);
-      }).catch((notifError) => {
-        console.error('❌ Failed to send fest notifications:', notifError);
-      });
+      if (shouldSendNotifications) {
+        sendBroadcastNotification({
+          title: 'New Fest Announced',
+          message: `${festPayload.fest_title} — Don't miss this fest!`,
+          type: 'info',
+          event_id: fest_id,
+          event_title: festPayload.fest_title,
+          action_url: `/fest/${fest_id}`
+        }).then(() => {
+          console.log(`✅ Sent notifications for new fest: ${festPayload.fest_title}`);
+        }).catch((notifError) => {
+          console.error('❌ Failed to send fest notifications:', notifError);
+        });
+      }
 
       // Push to UniversityGated if outsiders are enabled (non-blocking)
-      if (isGatedEnabled() && festPayload.allow_outsiders) {
+      if (!shouldSaveAsDraft && isGatedEnabled() && festPayload.allow_outsiders) {
         pushFestToGated(
           festPayload,
           req.userInfo?.email || festPayload.created_by,
@@ -678,6 +755,18 @@ router.post(
 
     } catch (error) {
       console.error("Error creating fest:", error);
+
+      const missingCustomFieldsColumn =
+        isMissingColumnError(error) &&
+        String(error?.message || "").toLowerCase().includes("custom_fields");
+
+      if (missingCustomFieldsColumn) {
+        return res.status(500).json({
+          error:
+            "Database migration required: fests.custom_fields is missing. Run server migrations before creating fests with custom fields.",
+        });
+      }
+
       return res.status(500).json({ error: "Internal server error while creating fest." });
     }
   });
@@ -703,9 +792,59 @@ router.put(
 
       const departmentAccessInput = pickDefined(updateData.department_access, updateData.departmentAccess);
       const eventHeadsInput = pickDefined(updateData.event_heads, updateData.eventHeads);
+      const customFieldsInput = pickDefined(updateData.custom_fields, updateData.customFields);
       const campusHostedAtInput = pickDefined(updateData.campus_hosted_at, updateData.campusHostedAt);
       const allowedCampusesInput = pickDefined(updateData.allowed_campuses, updateData.allowedCampuses);
+      const departmentHostedAtInput = pickDefined(updateData.department_hosted_at, updateData.departmentHostedAt);
       const allowOutsidersInput = pickDefined(updateData.allow_outsiders, updateData.allowOutsiders);
+      const draftPreferenceInput = pickDefined(updateData.is_draft, updateData.isDraft, updateData.save_as_draft);
+      const hasDraftPreference =
+        draftPreferenceInput !== undefined &&
+        draftPreferenceInput !== null &&
+        String(draftPreferenceInput).trim() !== "";
+      const shouldSaveAsDraft = hasDraftPreference ? asBoolean(draftPreferenceInput) : false;
+      const sendNotificationsInput = pickDefined(updateData.send_notifications, updateData.sendNotifications);
+      const hasExplicitNotificationPreference =
+        sendNotificationsInput !== undefined &&
+        sendNotificationsInput !== null &&
+        String(sendNotificationsInput).trim() !== "";
+      const wasDraftBeforeUpdate = asBoolean(existingFest?.is_draft);
+      const isPublishTransition = hasDraftPreference && !shouldSaveAsDraft && wasDraftBeforeUpdate;
+      const shouldSendPublishNotifications =
+        isPublishTransition &&
+        (hasExplicitNotificationPreference ? asBoolean(sendNotificationsInput) : true);
+      const parsedEventHeadsInput =
+        eventHeadsInput !== undefined
+          ? parseJsonLikeField(eventHeadsInput, [])
+          : undefined;
+      const normalizedEventHeadsInput = Array.isArray(parsedEventHeadsInput)
+        ? parsedEventHeadsInput
+        : [];
+      const hasEventHeadsUpdate = eventHeadsInput !== undefined;
+
+      if (hasEventHeadsUpdate) {
+        const missingHeadExpiry = normalizedEventHeadsInput.some((head) => {
+          if (!head || typeof head !== "object" || Array.isArray(head)) return false;
+          const email = String(head.email || "").trim();
+          if (!email) return false;
+          return !head.expiresAt;
+        });
+
+        if (missingHeadExpiry) {
+          return res.status(400).json({
+            error: "Each event head must have an expiry date and time.",
+          });
+        }
+      }
+      const incomingOpeningDate = pickDefined(updateData.opening_date, updateData.openingDate);
+      const incomingClosingDate = pickDefined(updateData.closing_date, updateData.closingDate);
+      const resolvedOpeningDate = incomingOpeningDate !== undefined ? incomingOpeningDate : existingFest.opening_date;
+      const resolvedClosingDate = incomingClosingDate !== undefined ? incomingClosingDate : existingFest.closing_date;
+      const derivedStatus = deriveFestStatusFromDates(
+        resolvedOpeningDate,
+        resolvedClosingDate,
+        existingFest.status || "upcoming"
+      );
 
       const updatePayload = {};
 
@@ -722,18 +861,19 @@ router.put(
       const mapFields = [
         ["fest_title", newTitle],
         ["description", updateData.description ?? updateData.detailed_description ?? updateData.detailedDescription],
-        ["opening_date", updateData.opening_date ?? updateData.openingDate],
-        ["closing_date", updateData.closing_date ?? updateData.closingDate],
+        ["opening_date", incomingOpeningDate],
+        ["closing_date", incomingClosingDate],
         ["fest_image_url", incomingImageUrl],
         ["organizing_dept", updateData.organizing_dept ?? updateData.organizingDept],
         ["category", updateData.category],
         ["contact_email", updateData.contact_email ?? updateData.contactEmail],
         ["contact_phone", updateData.contact_phone ?? updateData.contactPhone],
         ["department_access", parseJsonLikeField(departmentAccessInput, [])],
-        ["event_heads", parseJsonLikeField(eventHeadsInput, [])],
+        ["event_heads", hasEventHeadsUpdate ? normalizedEventHeadsInput : undefined],
+        ["custom_fields", parseJsonLikeField(customFieldsInput, [])],
         // New enhanced fest fields - parse JSON safely
         ["venue", updateData.venue],
-        ["status", updateData.status],
+        ["status", derivedStatus],
         ["registration_deadline", updateData.registration_deadline],
         ["timeline", parseJsonLikeField(updateData.timeline, [])],
         ["sponsors", parseJsonLikeField(updateData.sponsors, [])],
@@ -741,7 +881,9 @@ router.put(
         ["faqs", parseJsonLikeField(updateData.faqs, [])],
         ["campus_hosted_at", campusHostedAtInput],
         ["allowed_campuses", parseJsonLikeField(allowedCampusesInput, [])],
+        ["department_hosted_at", departmentHostedAtInput],
         ["allow_outsiders", allowOutsidersInput !== undefined ? (allowOutsidersInput === true || allowOutsidersInput === 'true') : undefined],
+        ["is_draft", hasDraftPreference ? shouldSaveAsDraft : undefined],
       ];
 
       for (const [key, value] of mapFields) {
@@ -814,7 +956,7 @@ router.put(
       // Push to UniversityGated if outsiders are now enabled (non-blocking)
       if (isGatedEnabled() && updatedFest) {
         const outsidersEnabled = updatedFest.allow_outsiders === true || updatedFest.allow_outsiders === 'true';
-        if (outsidersEnabled) {
+        if (outsidersEnabled && !asBoolean(updatedFest.is_draft)) {
           pushFestToGated(
             updatedFest,
             req.userInfo?.email || updatedFest.created_by,
@@ -827,9 +969,22 @@ router.put(
         }
       }
 
+      if (shouldSendPublishNotifications) {
+        sendBroadcastNotification({
+          title: "Fest Published",
+          message: `${updatedFest.fest_title} is now live!`,
+          type: "info",
+          event_id: festId,
+          event_title: updatedFest.fest_title,
+          action_url: `/fest/${festId}`,
+        }).catch((notifError) => {
+          console.error("❌ Failed to send fest publish notifications:", notifError);
+        });
+      }
+
       // Grant organiser access to event heads with expiration dates
       try {
-        const eventHeads = updateData.eventHeads || updateData.event_heads || [];
+        const eventHeads = hasEventHeadsUpdate ? normalizedEventHeadsInput : [];
         console.log(`[EventHeads] Processing ${eventHeads.length} event heads`);
         
         for (const head of eventHeads) {
@@ -880,6 +1035,18 @@ router.put(
         isOrganiser: req.userInfo?.is_organiser,
         festId: req.params.festId
       });
+
+      const missingCustomFieldsColumn =
+        isMissingColumnError(error) &&
+        String(error?.message || "").toLowerCase().includes("custom_fields");
+
+      if (missingCustomFieldsColumn) {
+        return res.status(500).json({
+          error:
+            "Database migration required: fests.custom_fields is missing. Run server migrations before updating fest custom fields.",
+        });
+      }
+
       return res.status(500).json({ 
         error: "Internal server error while updating fest.",
         details: error.message,

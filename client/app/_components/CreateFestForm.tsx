@@ -5,12 +5,130 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "../../context/AuthContext"; // Adjust path as needed
 import { departments as baseDepartments, christCampuses } from "../lib/eventFormSchema";
+import {
+  buildFestPreviewData,
+  saveFestPreviewDraft,
+} from "../lib/festPreviewDraft";
 import toast from "react-hot-toast";
 import PublishingOverlay from "./UI/PublishingOverlay";
-const hasSupabaseConfig = Boolean(
-  process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
 const API_URL = process.env.NEXT_PUBLIC_API_URL!.replace(/\/api\/?$/, "");
+const ALLOWED_FEST_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+];
+
+const FEST_TEAM_SETTINGS_KEY = "__team_event_settings__";
+
+interface FestTeamSettings {
+  isTeamEvent: boolean;
+  minParticipants: string;
+  maxParticipants: string;
+}
+
+const parseFestCustomFields = (value: unknown): any[] => {
+  if (Array.isArray(value)) return value;
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+};
+
+const extractTeamSettingsFromCustomFields = (
+  customFields: unknown
+): FestTeamSettings | null => {
+  const parsedFields = parseFestCustomFields(customFields);
+  const settingsEntry = parsedFields.find(
+    (field) =>
+      field &&
+      typeof field === "object" &&
+      !Array.isArray(field) &&
+      field.key === FEST_TEAM_SETTINGS_KEY
+  );
+
+  if (!settingsEntry || typeof settingsEntry !== "object" || Array.isArray(settingsEntry)) {
+    return null;
+  }
+
+  const rawValue = (settingsEntry as { value?: unknown }).value;
+  if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) {
+    return null;
+  }
+
+  const value = rawValue as {
+    isTeamEvent?: unknown;
+    minParticipants?: unknown;
+    maxParticipants?: unknown;
+  };
+
+  const isTeamEvent =
+    value.isTeamEvent === true || value.isTeamEvent === "true";
+
+  const toClampedValue = (input: unknown, fallback: number) => {
+    const parsed = Number(input);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(1, Math.floor(parsed));
+  };
+
+  const rawMin = toClampedValue(value.minParticipants, isTeamEvent ? 2 : 1);
+  const rawMax = toClampedValue(value.maxParticipants, isTeamEvent ? 2 : 1);
+
+  if (!isTeamEvent) {
+    return {
+      isTeamEvent: false,
+      minParticipants: "1",
+      maxParticipants: "1",
+    };
+  }
+
+  const normalizedMax = Math.max(2, rawMax);
+  const normalizedMin = Math.min(Math.max(2, rawMin), normalizedMax);
+
+  return {
+    isTeamEvent: true,
+    minParticipants: String(normalizedMin),
+    maxParticipants: String(normalizedMax),
+  };
+};
+
+const upsertTeamSettingsInCustomFields = (
+  customFields: unknown,
+  teamSettings: FestTeamSettings
+): any[] => {
+  const parsedFields = parseFestCustomFields(customFields).filter(
+    (field) =>
+      !(
+        field &&
+        typeof field === "object" &&
+        !Array.isArray(field) &&
+        field.key === FEST_TEAM_SETTINGS_KEY
+      )
+  );
+
+  if (!teamSettings.isTeamEvent) {
+    return parsedFields;
+  }
+
+  return [
+    ...parsedFields,
+    {
+      key: FEST_TEAM_SETTINGS_KEY,
+      value: {
+        isTeamEvent: true,
+        minParticipants: teamSettings.minParticipants,
+        maxParticipants: teamSettings.maxParticipants,
+      },
+    },
+  ];
+};
 
 const formatDateToYYYYMMDD = (date: Date): string => {
   const year = date.getFullYear();
@@ -31,6 +149,26 @@ const parseYYYYMMDD = (dateString: string): Date | null => {
     return date;
   }
   return null;
+};
+
+const deriveFestStatusFromDates = (
+  openingDateValue: string,
+  closingDateValue: string
+): "upcoming" | "ongoing" | "past" => {
+  const openingDate = parseYYYYMMDD(openingDateValue);
+  const closingDate = parseYYYYMMDD(closingDateValue) || openingDate;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (openingDate && today < openingDate) {
+    return "upcoming";
+  }
+
+  if (closingDate && today > closingDate) {
+    return "past";
+  }
+
+  return "ongoing";
 };
 
 interface CustomDateInputProps {
@@ -306,6 +444,9 @@ interface CreateFestState {
   title: string;
   openingDate: string;
   closingDate: string;
+  isTeamEvent: boolean;
+  minParticipants: string;
+  maxParticipants: string;
   detailedDescription: string;
   department: string[];
   category: string;
@@ -314,7 +455,7 @@ interface CreateFestState {
   eventHeads: { email: string; expiresAt: string | null }[];
   organizingDept: string;
   venue: string;
-  status: "draft" | "upcoming" | "ongoing" | "completed" | "cancelled";
+  status: "draft" | "upcoming" | "ongoing" | "completed" | "cancelled" | "past";
   registration_deadline: string;
   timeline: { time: string; title: string; description: string }[];
   sponsors: { name: string; logo_url: string; website?: string }[];
@@ -322,7 +463,10 @@ interface CreateFestState {
   faqs: { question: string; answer: string }[];
   campusHostedAt: string;
   allowedCampuses: string[];
+  departmentHostedAt: string;
+  allowedDepartments: string[];
   allowOutsiders: boolean;
+  customFields: any[];
 }
 
 function DepartmentAndCategoryInputs({
@@ -401,6 +545,9 @@ function DepartmentAndCategoryInputs({
         >
           Department accessibility: <span className="text-red-500">*</span>
         </label>
+        <p className="text-xs text-gray-500 mb-2 min-h-[18px]">
+          Departments allowed to access this fest
+        </p>
         <button
           type="button"
           id="department-trigger"
@@ -494,6 +641,7 @@ function DepartmentAndCategoryInputs({
         >
           Category: <span className="text-red-500">*</span>
         </label>
+        <p className="text-xs text-gray-500 mb-2 min-h-[18px]">Classify this fest for discovery</p>
         <button
           type="button"
           id="category-trigger"
@@ -573,6 +721,9 @@ interface CreateFestProps {
   title?: string;
   openingDate?: string;
   closingDate?: string;
+  isTeamEvent?: boolean;
+  minParticipants?: string;
+  maxParticipants?: string;
   detailedDescription?: string;
   department?: string[];
   category?: string;
@@ -587,13 +738,15 @@ interface CreateFestProps {
   existingImageFileUrl?: string | null;
   existingBannerFileUrl?: string | null;
   existingPdfFileUrl?: string | null;
+  isDraft?: boolean;
   venue?: string;
-  status?: "draft" | "upcoming" | "ongoing" | "completed" | "cancelled";
+  status?: "draft" | "upcoming" | "ongoing" | "completed" | "cancelled" | "past";
   registration_deadline?: string;
   timeline?: { time: string; title: string; description: string }[];
   sponsors?: { name: string; logo_url: string; website?: string }[];
   social_links?: { platform: string; url: string }[];
   faqs?: { question: string; answer: string }[];
+  customFields?: any[];
 }
 
 const FullPageSpinner: React.FC<{ text: string }> = ({ text }) => (
@@ -629,6 +782,9 @@ function CreateFestForm(props?: CreateFestProps) {
   const title = props?.title || "";
   const openingDate = props?.openingDate || "";
   const closingDate = props?.closingDate || "";
+  const isTeamEvent = false;
+  const minParticipants = "1";
+  const maxParticipants = "1";
   const detailedDescription = props?.detailedDescription || "";
   const department: string[] = props?.department || [];
   const category = props?.category || "";
@@ -636,6 +792,7 @@ function CreateFestForm(props?: CreateFestProps) {
   const contactPhone = props?.contactPhone || "";
   const organizingDept = props?.organizingDept || "";
   const initialEventHeads: { email: string; expiresAt: string | null }[] = props?.eventHeads || [];
+  const customFields = parseFestCustomFields(props?.customFields);
   // New props for edit mode
   const isEditMode = props?.isEditMode || false;
   const existingImageFileUrl = props?.existingImageFileUrl || null;
@@ -643,19 +800,23 @@ function CreateFestForm(props?: CreateFestProps) {
   const existingPdfFileUrl = props?.existingPdfFileUrl || null;
   // New fest enhancement fields
   const venue = props?.venue || "";
-  const status = props?.status || "upcoming";
-  const registration_deadline = props?.registration_deadline || "";
+  const status = deriveFestStatusFromDates(openingDate, closingDate);
+  const registration_deadline = "";
   const timeline = props?.timeline || [];
   const sponsors = props?.sponsors || [];
   const social_links = props?.social_links || [];
   const faqs = props?.faqs || [];
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [isDraftFest, setIsDraftFest] = useState(Boolean(props?.isDraft));
   const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const [formData, setFormData] = useState<CreateFestState>({
     title,
     openingDate,
     closingDate,
+    isTeamEvent,
+    minParticipants,
+    maxParticipants,
     detailedDescription,
     department,
     category,
@@ -672,14 +833,23 @@ function CreateFestForm(props?: CreateFestProps) {
     faqs,
     campusHostedAt: "",
     allowedCampuses: [],
+    departmentHostedAt: "",
+    allowedDepartments: [],
     allowOutsiders: false,
+    customFields,
   });
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false); // Used for delete operation
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitIntent, setSubmitIntent] = useState<"publish" | "draft">("publish");
+  const [isActionsDropdownOpen, setIsActionsDropdownOpen] = useState(false);
+  const actionsDropdownRef = useRef<HTMLDivElement>(null);
   const [isLoadingFestData, setIsLoadingFestData] = useState(false);
   const [pendingFestSuccess, setPendingFestSuccess] = useState(false);
+  const [wasDraftOnSubmit, setWasDraftOnSubmit] = useState(false);
+  const [successAction, setSuccessAction] = useState<"publish" | "draft">("publish");
   const [festModalVisible, setFestModalVisible] = useState(false);
+  const [isOpeningPreview, setIsOpeningPreview] = useState(false);
 
   const { session } = useAuth();
   const currentDateRef = useRef(new Date());
@@ -693,6 +863,13 @@ function CreateFestForm(props?: CreateFestProps) {
   const router = useRouter();
   const isEditModeFromPath = pathname.startsWith("/edit/fest");
   const festIdFromPath = isEditModeFromPath ? pathname.split("/").pop() : null;
+  const finalIsEditMode = isEditMode || isEditModeFromPath;
+
+  useEffect(() => {
+    if (typeof props?.isDraft === "boolean") {
+      setIsDraftFest(props.isDraft);
+    }
+  }, [props?.isDraft]);
 
   useEffect(() => {
     if (isEditModeFromPath && festIdFromPath && session?.access_token) {
@@ -726,15 +903,22 @@ function CreateFestForm(props?: CreateFestProps) {
               }
               return { email: head.email || '', expiresAt: head.expiresAt || null };
             });
-            
+
+            const parsedCustomFields = parseFestCustomFields(data.fest.custom_fields);
+            const loadedOpeningDate = data.fest.opening_date
+              ? formatDateToYYYYMMDD(new Date(data.fest.opening_date))
+              : "";
+            const loadedClosingDate = data.fest.closing_date
+              ? formatDateToYYYYMMDD(new Date(data.fest.closing_date))
+              : "";
+
             setFormData({
               title: data.fest.fest_title || "",
-              openingDate: data.fest.opening_date
-                ? formatDateToYYYYMMDD(new Date(data.fest.opening_date))
-                : "",
-              closingDate: data.fest.closing_date
-                ? formatDateToYYYYMMDD(new Date(data.fest.closing_date))
-                : "",
+              openingDate: loadedOpeningDate,
+              closingDate: loadedClosingDate,
+              isTeamEvent: false,
+              minParticipants: "1",
+              maxParticipants: "1",
               detailedDescription: data.fest.description || "",
               department: data.fest.department_access || [],
               category: data.fest.category || "",
@@ -743,18 +927,25 @@ function CreateFestForm(props?: CreateFestProps) {
               eventHeads: transformedEventHeads,
               organizingDept: data.fest.organizing_dept || "",
               venue: data.fest.venue || "",
-              status: data.fest.status || "upcoming",
-              registration_deadline: data.fest.registration_deadline
-                ? formatDateToYYYYMMDD(new Date(data.fest.registration_deadline))
-                : "",
+              status: deriveFestStatusFromDates(loadedOpeningDate, loadedClosingDate),
+              registration_deadline: "",
               timeline: data.fest.timeline || [],
               sponsors: data.fest.sponsors || [],
               social_links: data.fest.social_links || [],
               faqs: data.fest.faqs || [],
               campusHostedAt: data.fest.campus_hosted_at || "",
               allowedCampuses: data.fest.allowed_campuses || [],
+              departmentHostedAt: data.fest.department_hosted_at || "",
+              allowedDepartments: data.fest.department_access || [],
               allowOutsiders: data.fest.allow_outsiders === true || data.fest.allow_outsiders === 'true' || false,
+              customFields: parsedCustomFields,
             });
+            setIsDraftFest(
+              data.fest.is_draft === true ||
+                data.fest.is_draft === 1 ||
+                data.fest.is_draft === "1" ||
+                data.fest.is_draft === "true"
+            );
           } else {
             throw new Error("Fest data not found in response.");
           }
@@ -770,6 +961,30 @@ function CreateFestForm(props?: CreateFestProps) {
       fetchFestData();
     }
   }, [isEditModeFromPath, festIdFromPath, session, pathname]); // Use isEditModeFromPath here
+
+  useEffect(() => {
+    const derivedStatus = deriveFestStatusFromDates(
+      formData.openingDate,
+      formData.closingDate
+    );
+
+    setFormData((prev) =>
+      prev.status === derivedStatus ? prev : { ...prev, status: derivedStatus }
+    );
+  }, [formData.openingDate, formData.closingDate]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        actionsDropdownRef.current &&
+        !actionsDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsActionsDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const deleteFest = async () => {
     if (
@@ -818,12 +1033,23 @@ function CreateFestForm(props?: CreateFestProps) {
         "eventHead" in value
       ) {
         const { index, eventHead } = value;
-        if (eventHead.trim() === "") delete newErrors[`eventHead_${index}`];
-        else if (!emailRegex.test(eventHead))
+        const expiryValue = formData.eventHeads[index]?.expiresAt || null;
+
+        if (eventHead.trim() === "") {
+          delete newErrors[`eventHead_${index}`];
+          delete newErrors[`eventHeadExpiry_${index}`];
+        } else if (!emailRegex.test(eventHead))
           newErrors[`eventHead_${index}`] = "Invalid email format.";
         else if (eventHead.length > 100)
           newErrors[`eventHead_${index}`] = "Max 100 chars.";
         else delete newErrors[`eventHead_${index}`];
+
+        if (eventHead.trim() !== "" && !expiryValue) {
+          newErrors[`eventHeadExpiry_${index}`] =
+            "Expiry date and time is required.";
+        } else {
+          delete newErrors[`eventHeadExpiry_${index}`];
+        }
       } else {
         switch (name) {
           case "title":
@@ -891,6 +1117,68 @@ function CreateFestForm(props?: CreateFestProps) {
               delete newErrors.closingDate;
             }
             break;
+          case "minParticipants": {
+            if (!formData.isTeamEvent) {
+              delete newErrors.minParticipants;
+              break;
+            }
+
+            const minRaw = String(value || "").trim();
+            if (!minRaw) {
+              newErrors.minParticipants = "Min is required";
+              break;
+            }
+            if (!/^\d+$/.test(minRaw)) {
+              newErrors.minParticipants = "Enter a number";
+              break;
+            }
+
+            const minValue = Number(minRaw);
+            if (minValue < 2) {
+              newErrors.minParticipants = "Min 2 for teams";
+              break;
+            }
+
+            const maxRaw = String(formData.maxParticipants || "").trim();
+            if (maxRaw && /^\d+$/.test(maxRaw) && minValue > Number(maxRaw)) {
+              newErrors.minParticipants = "Min ≤ Max";
+              break;
+            }
+
+            delete newErrors.minParticipants;
+            break;
+          }
+          case "maxParticipants": {
+            if (!formData.isTeamEvent) {
+              delete newErrors.maxParticipants;
+              break;
+            }
+
+            const maxRaw = String(value || "").trim();
+            if (!maxRaw) {
+              newErrors.maxParticipants = "Max is required";
+              break;
+            }
+            if (!/^\d+$/.test(maxRaw)) {
+              newErrors.maxParticipants = "Enter a number";
+              break;
+            }
+
+            const maxValue = Number(maxRaw);
+            if (maxValue < 2) {
+              newErrors.maxParticipants = "Max 2 for teams";
+              break;
+            }
+
+            const minRaw = String(formData.minParticipants || "").trim();
+            if (minRaw && /^\d+$/.test(minRaw) && maxValue < Number(minRaw)) {
+              newErrors.maxParticipants = "Max ≥ Min";
+              break;
+            }
+
+            delete newErrors.maxParticipants;
+            break;
+          }
           case "detailedDescription":
             if (!(value as string).trim())
               newErrors.detailedDescription = "Description is required";
@@ -929,139 +1217,306 @@ function CreateFestForm(props?: CreateFestProps) {
               newErrors.organizingDept = "Max 100 characters";
             else delete newErrors.organizingDept;
             break;
+          case "campusHostedAt":
+            if (!(value as string).trim())
+              newErrors.campusHostedAt = "Hosted campus is required";
+            else delete newErrors.campusHostedAt;
+            break;
+          case "allowedCampuses":
+            if (!Array.isArray(value) || value.length === 0)
+              newErrors.allowedCampuses = "Select at least one campus";
+            else delete newErrors.allowedCampuses;
+            break;
         }
       }
       setErrors(newErrors);
     },
-    [errors, formData.openingDate, formData.closingDate, isEditMode] // Use prop isEditMode here
+    [
+      errors,
+      formData.openingDate,
+      formData.closingDate,
+      formData.isTeamEvent,
+      formData.minParticipants,
+      formData.maxParticipants,
+      isEditMode,
+    ] // Use prop isEditMode here
   );
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrors((prev) => ({ ...prev, submit: undefined }));
+  const getValidationErrors = useCallback(
+    (options?: { validateImage?: boolean }) => {
+      const shouldValidateImage = options?.validateImage ?? true;
+      const currentValidationErrors: Record<string, string | undefined> = {};
+      const fieldsToValidate: (keyof CreateFestState)[] = [
+        "title",
+        "openingDate",
+        "closingDate",
+        "minParticipants",
+        "maxParticipants",
+        "detailedDescription",
+        "department",
+        "category",
+        "contactEmail",
+        "contactPhone",
+        "organizingDept",
+        "campusHostedAt",
+        "allowedCampuses",
+      ];
 
-    const currentValidationErrors: Record<string, string | undefined> = {};
-    const fieldsToValidate: (keyof CreateFestState)[] = [
-      "title",
-      "openingDate",
-      "closingDate",
-      "detailedDescription",
-      "department",
-      "category",
-      "contactEmail",
-      "contactPhone",
-      "organizingDept",
-    ];
+      const validateSync = (name: string, value: any) => {
+        const currentDate = new Date(currentDateRef.current);
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const phoneRegex = /^\+?[\d\s-]{10,14}$/;
+        let errorMsg: string | undefined = undefined;
 
-    const validateSync = (name: string, value: any) => {
-      const currentDate = new Date(currentDateRef.current);
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      const phoneRegex = /^\+?[\d\s-]{10,14}$/;
-      let errorMsg: string | undefined = undefined;
-      switch (name) {
-        case "title":
-          if (!String(value).trim()) errorMsg = "Fest title is required";
-          else if (String(value).length > 100) errorMsg = "Max 100 characters";
-          break;
-        case "openingDate":
-        case "closingDate":
-          const dateType = name === "openingDate" ? "Opening" : "Closing";
-          if (!String(value).trim()) errorMsg = `${dateType} date is required`;
-          else if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value)))
-            errorMsg = "Format YYYY-MM-DD";
-          else {
-            const inputDate = parseYYYYMMDD(String(value));
-            if (!inputDate) errorMsg = "Invalid date value";
-            else if (
-              inputDate < currentDate &&
-              !isEditMode &&
-              name === "openingDate"
-            )
-              errorMsg = `${dateType} must be on or after today`;
-            else if (
-              name === "closingDate" &&
-              formData.openingDate &&
-              parseYYYYMMDD(formData.openingDate)
-            ) {
-              if (inputDate < parseYYYYMMDD(formData.openingDate)!)
-                errorMsg = "Must be on/after opening date";
+        switch (name) {
+          case "title":
+            if (!String(value).trim()) errorMsg = "Fest title is required";
+            else if (String(value).length > 100) errorMsg = "Max 100 characters";
+            break;
+          case "openingDate":
+          case "closingDate": {
+            const dateType = name === "openingDate" ? "Opening" : "Closing";
+            if (!String(value).trim()) errorMsg = `${dateType} date is required`;
+            else if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) {
+              errorMsg = "Format YYYY-MM-DD";
+            } else {
+              const inputDate = parseYYYYMMDD(String(value));
+              if (!inputDate) errorMsg = "Invalid date value";
+              else if (
+                inputDate < currentDate &&
+                !isEditMode &&
+                name === "openingDate"
+              ) {
+                errorMsg = `${dateType} must be on or after today`;
+              } else if (
+                name === "closingDate" &&
+                formData.openingDate &&
+                parseYYYYMMDD(formData.openingDate)
+              ) {
+                if (inputDate < parseYYYYMMDD(formData.openingDate)!) {
+                  errorMsg = "Must be on/after opening date";
+                }
+              }
             }
-          }
-          if (
-            name === "openingDate" &&
-            formData.closingDate &&
-            parseYYYYMMDD(String(value)) &&
-            parseYYYYMMDD(formData.closingDate) &&
-            parseYYYYMMDD(String(value))! > parseYYYYMMDD(formData.closingDate)!
-          ) {
-            if (!currentValidationErrors.closingDate)
-              currentValidationErrors.closingDate =
-                "Closing date must be on/after opening date";
-          }
-          break;
-        case "detailedDescription":
-          if (!String(value).trim()) errorMsg = "Description is required";
-          else if (String(value).length > 1000)
-            errorMsg = "Max 1000 characters";
-          break;
-        case "department":
-          if (!Array.isArray(value) || value.length === 0)
-            errorMsg = "Select at least one department";
-          break;
-        case "category":
-          if (!String(value).trim()) errorMsg = "Category is required";
-          break;
-        case "contactEmail":
-          if (!String(value).trim()) errorMsg = "Contact email is required";
-          else if (!emailRegex.test(String(value)))
-            errorMsg = "Invalid email format";
-          break;
-        case "contactPhone":
-          if (!String(value).trim()) errorMsg = "Contact phone is required";
-          else if (!phoneRegex.test(String(value)))
-            errorMsg = "Must be 10-14 digits";
-          break;
-        case "organizingDept":
-          if (!String(value).trim())
-            errorMsg = "Organizing department is required";
-          else if (String(value).length > 100) errorMsg = "Max 100 characters";
-          break;
-      }
-      if (errorMsg) currentValidationErrors[name] = errorMsg;
-    };
 
-    fieldsToValidate.forEach((field) => validateSync(field, formData[field]));
-    formData.eventHeads.forEach((head, index) => {
-      if (head.email.trim() !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(head.email)) {
-        currentValidationErrors[`eventHead_${index}`] = "Invalid email format.";
-      } else if (head.email.length > 100) {
-        currentValidationErrors[`eventHead_${index}`] = "Max 100 chars.";
-      }
-    });
+            if (
+              name === "openingDate" &&
+              formData.closingDate &&
+              parseYYYYMMDD(String(value)) &&
+              parseYYYYMMDD(formData.closingDate) &&
+              parseYYYYMMDD(String(value))! > parseYYYYMMDD(formData.closingDate)!
+            ) {
+              if (!currentValidationErrors.closingDate) {
+                currentValidationErrors.closingDate =
+                  "Closing date must be on/after opening date";
+              }
+            }
+            break;
+          }
+          case "minParticipants": {
+            if (!formData.isTeamEvent) break;
+            const minRaw = String(value || "").trim();
+            if (!minRaw) {
+              errorMsg = "Min is required";
+              break;
+            }
+            if (!/^\d+$/.test(minRaw)) {
+              errorMsg = "Enter a number";
+              break;
+            }
+            const minValue = Number(minRaw);
+            if (minValue < 2) {
+              errorMsg = "Min 2 for teams";
+              break;
+            }
+            const maxRaw = String(formData.maxParticipants || "").trim();
+            if (maxRaw && /^\d+$/.test(maxRaw) && minValue > Number(maxRaw)) {
+              errorMsg = "Min ≤ Max";
+            }
+            break;
+          }
+          case "maxParticipants": {
+            if (!formData.isTeamEvent) break;
+            const maxRaw = String(value || "").trim();
+            if (!maxRaw) {
+              errorMsg = "Max is required";
+              break;
+            }
+            if (!/^\d+$/.test(maxRaw)) {
+              errorMsg = "Enter a number";
+              break;
+            }
+            const maxValue = Number(maxRaw);
+            if (maxValue < 2) {
+              errorMsg = "Max 2 for teams";
+              break;
+            }
+            const minRaw = String(formData.minParticipants || "").trim();
+            if (minRaw && /^\d+$/.test(minRaw) && maxValue < Number(minRaw)) {
+              errorMsg = "Max ≥ Min";
+            }
+            break;
+          }
+          case "detailedDescription":
+            if (!String(value).trim()) errorMsg = "Description is required";
+            else if (String(value).length > 1000) errorMsg = "Max 1000 characters";
+            break;
+          case "department":
+            if (!Array.isArray(value) || value.length === 0) {
+              errorMsg = "Select at least one department";
+            }
+            break;
+          case "category":
+            if (!String(value).trim()) errorMsg = "Category is required";
+            break;
+          case "contactEmail":
+            if (!String(value).trim()) errorMsg = "Contact email is required";
+            else if (!emailRegex.test(String(value))) errorMsg = "Invalid email format";
+            break;
+          case "contactPhone":
+            if (!String(value).trim()) errorMsg = "Contact phone is required";
+            else if (!phoneRegex.test(String(value))) errorMsg = "Must be 10-14 digits";
+            break;
+          case "organizingDept":
+            if (!String(value).trim()) errorMsg = "Organizing department is required";
+            else if (String(value).length > 100) errorMsg = "Max 100 characters";
+            break;
+          case "campusHostedAt":
+            if (!String(value).trim()) errorMsg = "Hosted campus is required";
+            break;
+          case "allowedCampuses":
+            if (!Array.isArray(value) || value.length === 0) {
+              errorMsg = "Select at least one campus";
+            }
+            break;
+        }
 
-    if (!imageFile && !isEditMode && !existingImageFileUrl) {
-      currentValidationErrors.imageFile = "Fest image is required";
-    } else if (imageFile) {
-      if (imageFile.size > 3 * 1024 * 1024)
-        currentValidationErrors.imageFile = "Image file must be less than 3MB";
-      else if (!["image/jpeg", "image/png"].includes(imageFile.type))
-        currentValidationErrors.imageFile = "Invalid file type. JPG/PNG only.";
-    }
+        if (errorMsg) currentValidationErrors[name] = errorMsg;
+      };
+
+      fieldsToValidate.forEach((field) => validateSync(field, formData[field]));
+
+      formData.eventHeads.forEach((head, index) => {
+        if (head.email.trim() !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(head.email)) {
+          currentValidationErrors[`eventHead_${index}`] = "Invalid email format.";
+        } else if (head.email.length > 100) {
+          currentValidationErrors[`eventHead_${index}`] = "Max 100 chars.";
+        }
+
+        if (head.email.trim() !== "" && !head.expiresAt) {
+          currentValidationErrors[`eventHeadExpiry_${index}`] =
+            "Expiry date and time is required.";
+        }
+      });
+
+      if (shouldValidateImage) {
+        if (!imageFile && !isEditMode && !existingImageFileUrl) {
+          currentValidationErrors.imageFile = "Fest image is required";
+        } else if (imageFile) {
+          if (imageFile.size > 3 * 1024 * 1024) {
+            currentValidationErrors.imageFile = "Image file must be less than 3MB";
+          } else if (!ALLOWED_FEST_IMAGE_TYPES.includes(imageFile.type)) {
+            currentValidationErrors.imageFile =
+              "Invalid file type. JPG/PNG/WEBP/GIF only.";
+          }
+        }
+      }
+
+      return currentValidationErrors;
+    },
+    [formData, imageFile, isEditMode, existingImageFileUrl]
+  );
+
+  const scrollToFirstFestError = useCallback(
+    (validationErrors: Record<string, string | undefined>) => {
+      const keysWithErrors = Object.keys(validationErrors).filter(
+        (key) => Boolean(validationErrors[key])
+      );
+      if (!keysWithErrors.length) return;
+
+      const priorityOrder = [
+        "title",
+        "openingDate",
+        "closingDate",
+        "detailedDescription",
+        "campusHostedAt",
+        "allowedCampuses",
+        "organizingDept",
+        "department",
+        "category",
+        "imageFile",
+        "contactEmail",
+        "contactPhone",
+      ];
+
+      const firstKey =
+        priorityOrder.find((key) => keysWithErrors.includes(key)) ||
+        keysWithErrors[0];
+
+      let selector = `#${firstKey}`;
+      if (firstKey === "openingDate") selector = "#openingDate-trigger";
+      if (firstKey === "closingDate") selector = "#closingDate-trigger";
+      if (firstKey === "department") selector = "#department-trigger";
+      if (firstKey === "category") selector = "#category-trigger";
+      if (firstKey === "allowedCampuses") selector = "#allowedCampuses-group";
+      if (firstKey === "imageFile") selector = "#image-upload-input";
+
+      if (firstKey.startsWith("eventHead_")) {
+        const index = firstKey.replace("eventHead_", "");
+        selector = `#event-head-email-${index}`;
+      }
+
+      if (firstKey.startsWith("eventHeadExpiry_")) {
+        const index = firstKey.replace("eventHeadExpiry_", "");
+        selector = `#event-head-expiration-${index}`;
+      }
+
+      const targetElement = document.querySelector<HTMLElement>(selector);
+      if (!targetElement) return;
+
+      targetElement.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+
+      const focusableSelector =
+        "input,select,textarea,button,[tabindex]:not([tabindex='-1'])";
+      const focusTarget = targetElement.matches(focusableSelector)
+        ? targetElement
+        : targetElement.querySelector<HTMLElement>(focusableSelector);
+
+      if (focusTarget) {
+        window.setTimeout(() => {
+          focusTarget.focus({ preventScroll: true });
+        }, 120);
+      }
+    },
+    []
+  );
+
+  const submitFest = async (saveAsDraft: boolean) => {
+    setErrors((prev) => ({ ...prev, submit: undefined }));
+    setSubmitIntent(saveAsDraft ? "draft" : "publish");
+
+    const currentValidationErrors = getValidationErrors({ validateImage: true });
 
     if (
       Object.keys(currentValidationErrors).some(
         (key) => currentValidationErrors[key] !== undefined
       )
     ) {
-      setErrors(currentValidationErrors);
-      setErrors((prev) => ({
-        ...prev,
+      setErrors({
+        ...currentValidationErrors,
         submit: "Please correct the errors in the form.",
-      }));
+      });
+      requestAnimationFrame(() => {
+        scrollToFirstFestError(currentValidationErrors);
+      });
       return;
     }
 
     setIsSubmitting(true);
+    setWasDraftOnSubmit(Boolean(!saveAsDraft && finalIsEditMode && isDraftFest));
     let uploadedFestImageUrl: string | null = null;
 
     if (imageFile) {
@@ -1116,11 +1571,31 @@ function CreateFestForm(props?: CreateFestProps) {
     try {
       if (!session) throw new Error("You must be logged in.");
 
+      const normalizedTeamMin = formData.isTeamEvent
+        ? Math.max(2, Number(formData.minParticipants || "2"))
+        : 1;
+      const normalizedTeamMax = formData.isTeamEvent
+        ? Math.max(
+            normalizedTeamMin,
+            Math.max(2, Number(formData.maxParticipants || "2"))
+          )
+        : 1;
+
+      const customFieldsWithTeamSettings = upsertTeamSettingsInCustomFields(
+        formData.customFields,
+        {
+          isTeamEvent: formData.isTeamEvent,
+          minParticipants: String(normalizedTeamMin),
+          maxParticipants: String(normalizedTeamMax),
+        }
+      );
+
       // Determine the final image URL:
       // - If a new file was uploaded, use the new URL
       // - If in edit mode with no new file, keep the existing URL
       // - Otherwise null (new fest with no image - already caught above)
       const finalImageUrl = uploadedFestImageUrl ?? (isEditMode ? existingImageFileUrl : null);
+      const isPublishingDraft = !saveAsDraft && finalIsEditMode && isDraftFest;
 
       console.log(`[Fest Submit] isEditMode=${isEditMode}, uploadedFestImageUrl=${uploadedFestImageUrl}, existingImageFileUrl=${existingImageFileUrl}, finalImageUrl=${finalImageUrl}`);
 
@@ -1128,8 +1603,13 @@ function CreateFestForm(props?: CreateFestProps) {
         festTitle: formData.title,
         openingDate: formData.openingDate,
         closingDate: formData.closingDate,
+        participants_per_team: normalizedTeamMax,
+        min_participants: normalizedTeamMin,
         detailedDescription: formData.detailedDescription,
-        departmentAccess: formData.department,
+        departmentAccess:
+          formData.allowedDepartments.length > 0
+            ? formData.allowedDepartments
+            : formData.department,
         category: formData.category,
         contactEmail: formData.contactEmail,
         contactPhone: formData.contactPhone,
@@ -1137,21 +1617,28 @@ function CreateFestForm(props?: CreateFestProps) {
         organizingDept: formData.organizingDept,
         createdBy: session.user.email,
         venue: formData.venue,
-        status: formData.status,
-        registration_deadline: formData.registration_deadline || null,
+        status: deriveFestStatusFromDates(
+          formData.openingDate,
+          formData.closingDate
+        ),
+        registration_deadline: null,
         timeline: formData.timeline,
         sponsors: formData.sponsors,
         social_links: formData.social_links,
         faqs: formData.faqs,
         campus_hosted_at: formData.campusHostedAt || null,
         allowed_campuses: formData.allowedCampuses || [],
+        department_hosted_at: formData.departmentHostedAt || null,
         allow_outsiders: formData.allowOutsiders,
+        custom_fields: customFieldsWithTeamSettings,
         // Always include festImageUrl so backend always updates the DB column
         festImageUrl: finalImageUrl,
+        is_draft: saveAsDraft,
+        ...(isPublishingDraft ? { send_notifications: true } : {}),
       };
 
       let response;
-      if (isEditMode && festIdFromPath) {
+      if (finalIsEditMode && festIdFromPath) {
         response = await fetch(
           `${API_URL}/api/fests/${festIdFromPath}`,
           {
@@ -1184,32 +1671,134 @@ function CreateFestForm(props?: CreateFestProps) {
 
       // Handle response - check if fest_id changed
       const responseData = await response.json();
+      if (responseData?.fest) {
+        setIsDraftFest(
+          responseData.fest.is_draft === true ||
+            responseData.fest.is_draft === 1 ||
+            responseData.fest.is_draft === "1" ||
+            responseData.fest.is_draft === "true"
+        );
+      }
       
       // If the fest_id changed (title was updated), show success message and redirect to new URL
-      if (isEditMode && responseData.id_changed && responseData.fest_id) {
+      if (finalIsEditMode && responseData.id_changed && responseData.fest_id) {
         const oldId = festIdFromPath;
         const newId = responseData.fest_id;
         console.log(`Fest ID changed from '${oldId}' to '${newId}', redirecting...`);
+        const successLabel = saveAsDraft
+          ? "saved as draft"
+          : isPublishingDraft
+            ? "published"
+            : "updated";
         
         toast.success(
-          `Fest updated successfully! The fest link has changed from /fest/${oldId} to /fest/${newId}`,
+          `Fest ${successLabel} successfully! The fest link has changed from /fest/${oldId} to /fest/${newId}`,
           { duration: 5000 }
         );
 
         router.replace(`/edit/fest/${newId}`);
         return;
-      } else if (isEditMode) {
+      } else if (finalIsEditMode) {
         // Show regular success message for edit
-        toast.success("Fest updated successfully!", { duration: 3000 });
+        toast.success(
+          saveAsDraft
+            ? "Fest draft saved successfully!"
+            : isPublishingDraft
+              ? "Fest published successfully!"
+              : "Fest updated successfully!",
+          { duration: 3000 }
+        );
       }
 
       // Defer modal until overlay animation finishes
+      setSuccessAction(saveAsDraft ? "draft" : "publish");
       setPendingFestSuccess(true);
     } catch (error: any) {
       setErrors((prev) => ({ ...prev, submit: error.message }));
     } finally {
       setIsSubmitting(false);
+      setSubmitIntent("publish");
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await submitFest(false);
+  };
+
+  const handlePreview = async () => {
+    if (isSubmitting || isNavigating || isUploadingImage || isOpeningPreview) {
+      return;
+    }
+
+    setErrors((prev) => ({ ...prev, submit: undefined }));
+    setIsOpeningPreview(true);
+
+    try {
+      const currentValidationErrors = getValidationErrors({ validateImage: true });
+      if (
+        Object.keys(currentValidationErrors).some(
+          (key) => currentValidationErrors[key] !== undefined
+        )
+      ) {
+        setErrors({
+          ...currentValidationErrors,
+          submit: "Please correct the errors in the form.",
+        });
+        requestAnimationFrame(() => {
+          scrollToFirstFestError(currentValidationErrors);
+        });
+        return;
+      }
+
+      const previewData = buildFestPreviewData({
+        formData: {
+          title: formData.title,
+          openingDate: formData.openingDate,
+          closingDate: formData.closingDate,
+          detailedDescription: formData.detailedDescription,
+          organizingDept: formData.organizingDept,
+          category: formData.category,
+          contactEmail: formData.contactEmail,
+          contactPhone: formData.contactPhone,
+          eventHeads: formData.eventHeads,
+          venue: formData.venue,
+          timeline: formData.timeline,
+          sponsors: formData.sponsors,
+          social_links: formData.social_links,
+          faqs: formData.faqs,
+          isTeamEvent: formData.isTeamEvent,
+          minParticipants: formData.minParticipants,
+          maxParticipants: formData.maxParticipants,
+          campusHostedAt: formData.campusHostedAt,
+          allowedCampuses: formData.allowedCampuses,
+          allowOutsiders: formData.allowOutsiders,
+          imageFile,
+        },
+        sourcePath: pathname || "/create/fest",
+        existingImageFileUrl,
+      });
+
+      const previewDraftKey = saveFestPreviewDraft(previewData);
+      const previewUrl = `/fest/preview?draft=${encodeURIComponent(previewDraftKey)}`;
+      const previewTab = window.open("", "_blank");
+
+      if (!previewTab) {
+        window.alert("Preview was blocked. Please allow pop-ups and try again.");
+        return;
+      }
+
+      previewTab.opener = null;
+      previewTab.location.href = previewUrl;
+    } catch (previewError) {
+      console.error("CreateFestForm: Failed to open preview", previewError);
+    } finally {
+      setIsOpeningPreview(false);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    await submitFest(true);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1218,8 +1807,8 @@ function CreateFestForm(props?: CreateFestProps) {
       setImageFile(file);
       if (file.size > 3 * 1024 * 1024)
         setErrors((prev) => ({ ...prev, imageFile: "Max 3MB" }));
-      else if (!["image/jpeg", "image/png"].includes(file.type))
-        setErrors((prev) => ({ ...prev, imageFile: "JPG/PNG only" }));
+      else if (!ALLOWED_FEST_IMAGE_TYPES.includes(file.type))
+        setErrors((prev) => ({ ...prev, imageFile: "JPG/PNG/WEBP/GIF only" }));
       else
         setErrors((prev) => {
           const newE = { ...prev };
@@ -1249,6 +1838,52 @@ function CreateFestForm(props?: CreateFestProps) {
     const { id, value } = e.target;
     setFormData((prev) => ({ ...prev, [id]: value }));
   };
+
+  const handleTeamEventToggle = (enabled: boolean) => {
+    setFormData((prev) => {
+      if (!enabled) {
+        return {
+          ...prev,
+          isTeamEvent: false,
+          minParticipants: "1",
+          maxParticipants: "1",
+        };
+      }
+
+      const nextMin = Math.max(2, Number(prev.minParticipants || "2"));
+      const nextMax = Math.max(nextMin, Math.max(2, Number(prev.maxParticipants || "2")));
+
+      return {
+        ...prev,
+        isTeamEvent: true,
+        minParticipants: String(nextMin),
+        maxParticipants: String(nextMax),
+      };
+    });
+
+    if (!enabled) {
+      setErrors((prev) => {
+        const nextErrors = { ...prev };
+        delete nextErrors.minParticipants;
+        delete nextErrors.maxParticipants;
+        return nextErrors;
+      });
+    }
+  };
+
+  const handleTeamParticipantChange = (
+    field: "minParticipants" | "maxParticipants",
+    value: string
+  ) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleTeamParticipantBlur = (
+    field: "minParticipants" | "maxParticipants"
+  ) => {
+    validateField(field, formData[field]);
+  };
+
   const handleInputBlur = (
     e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>
   ) => validateField(e.target.id, e.target.value);
@@ -1270,6 +1905,17 @@ function CreateFestForm(props?: CreateFestProps) {
     const newEventHeads = [...formData.eventHeads];
     newEventHeads[index] = { ...newEventHeads[index], expiresAt: value };
     setFormData((prev) => ({ ...prev, eventHeads: newEventHeads }));
+
+    setErrors((prev) => {
+      const next = { ...prev };
+      const hasEmail = newEventHeads[index].email.trim() !== "";
+      if (hasEmail && !value) {
+        next[`eventHeadExpiry_${index}`] = "Expiry date and time is required.";
+      } else {
+        delete next[`eventHeadExpiry_${index}`];
+      }
+      return next;
+    });
   };
   const handleEventHeadBlur = (index: number) =>
     validateField(`eventHead_${index}`, {
@@ -1291,6 +1937,7 @@ function CreateFestForm(props?: CreateFestProps) {
     setErrors((prev) => {
       const newE = { ...prev };
       delete newE[`eventHead_${index}`];
+      delete newE[`eventHeadExpiry_${index}`];
       return newE;
     });
   };
@@ -1305,8 +1952,6 @@ function CreateFestForm(props?: CreateFestProps) {
   if (minClosingDate < currentDateRef.current && !isEditMode)
     minClosingDate.setDate(currentDateRef.current.getDate());
   minClosingDate.setHours(0, 0, 0, 0);
-
-  const finalIsEditMode = isEditMode || isEditModeFromPath;
 
   const showMainLoader = (isLoadingFestData && finalIsEditMode) || isNavigating;
   const mainLoaderText = isLoadingFestData
@@ -1365,19 +2010,27 @@ function CreateFestForm(props?: CreateFestProps) {
                 id="modal-title"
                 className="text-2xl sm:text-3xl font-semibold text-[#063168] mb-3"
               >
-                Fest {finalIsEditMode ? "Updated" : "Published"}!
+                {successAction === "draft"
+                  ? "Draft Saved!"
+                  : `Fest ${finalIsEditMode ? (wasDraftOnSubmit ? "Published" : "Updated") : "Published"}!`}
               </h2>
               <p
                 id="modal-description"
                 className="text-gray-500 mb-8 text-sm sm:text-base px-4"
               >
-                Your fest has been successfully{" "}
-                {finalIsEditMode ? "updated" : "published"}.<br />
-                What would you like to do next?
+                {successAction === "draft"
+                  ? "Your fest has been saved as a draft. It is hidden until you publish it."
+                  : (
+                    <>
+                      Your fest has been successfully{" "}
+                      {finalIsEditMode ? (wasDraftOnSubmit ? "published" : "updated") : "published"}.<br />
+                      What would you like to do next?
+                    </>
+                  )}
               </p>
             </div>
             <div className="flex flex-col sm:flex-row-reverse sm:justify-center gap-3">
-              {!finalIsEditMode && (
+              {!finalIsEditMode && successAction !== "draft" && (
                 <Link
                   href={`/create/event`}
                   className="w-full sm:w-auto px-6 py-3 bg-[#FFCC00] text-[#063168] rounded-lg font-medium hover:bg-opacity-90 transition-all duration-150 ease-in-out text-center text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-[#FFCC00] focus:ring-offset-2 flex items-center justify-center"
@@ -1525,6 +2178,7 @@ function CreateFestForm(props?: CreateFestProps) {
                     />
                   </div>
                 </div>
+
                 <div>
                   <label
                     htmlFor="detailedDescription"
@@ -1617,8 +2271,8 @@ function CreateFestForm(props?: CreateFestProps) {
                             Specify where the fest takes place and who can attend
                           </p>
                         </div>
-                        <span className="text-xs bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap">
-                          Optional
+                        <span className="text-xs bg-red-100 text-red-800 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap">
+                          Required
                         </span>
                       </div>
 
@@ -1626,28 +2280,44 @@ function CreateFestForm(props?: CreateFestProps) {
                         {/* Hosted At */}
                         <div>
                           <label className="block text-xs font-semibold text-gray-700 mb-2">
-                            Where is the fest Hosted at?
+                            Where is the fest Hosted at? <span className="text-red-500">*</span>
                           </label>
                           <select
                             id="campusHostedAt"
                             value={formData.campusHostedAt}
-                            onChange={(e) => setFormData(prev => ({ ...prev, campusHostedAt: e.target.value }))}
+                            onChange={(e) => {
+                              const selectedCampus = e.target.value;
+                              setFormData(prev => ({ ...prev, campusHostedAt: selectedCampus }));
+                              validateField("campusHostedAt", selectedCampus);
+                            }}
+                            onBlur={(e) => validateField("campusHostedAt", e.target.value)}
                             aria-label="Fest hosted campus"
-                            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-0 focus:border-transparent bg-white transition-all"
+                            className={`w-full px-3.5 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-0 focus:border-transparent bg-white transition-all ${
+                              errors.campusHostedAt ? "border-red-500" : "border-gray-300"
+                            }`}
                           >
                             <option value="">Select campus</option>
                             {christCampuses.map((campus) => (
                               <option key={campus} value={campus}>{campus}</option>
                             ))}
                           </select>
+                          {errors.campusHostedAt && (
+                            <p className="text-red-500 text-xs mt-2">{errors.campusHostedAt}</p>
+                          )}
                         </div>
 
                         {/* Who Can Register */}
                         <div>
                           <label className="block text-xs font-semibold text-gray-700 mb-2">
-                            Who can register?
+                            Who can register? <span className="text-red-500">*</span>
                           </label>
-                          <div className="space-y-1.5 h-[102px] overflow-y-auto pr-2">
+                          <div
+                            id="allowedCampuses-group"
+                            tabIndex={-1}
+                            className={`space-y-1.5 h-[102px] overflow-y-auto pr-2 rounded-md ${
+                              errors.allowedCampuses ? "border border-red-500 p-2" : ""
+                            }`}
+                          >
                             {christCampuses.map((campus) => (
                               <label
                                 key={campus}
@@ -1658,11 +2328,14 @@ function CreateFestForm(props?: CreateFestProps) {
                                   checked={formData.allowedCampuses.includes(campus)}
                                   onChange={(e) => {
                                     const current = formData.allowedCampuses;
+                                    let updatedCampuses: string[];
                                     if (e.target.checked) {
-                                      setFormData(prev => ({ ...prev, allowedCampuses: [...current, campus] }));
+                                      updatedCampuses = [...current, campus];
                                     } else {
-                                      setFormData(prev => ({ ...prev, allowedCampuses: current.filter(c => c !== campus) }));
+                                      updatedCampuses = current.filter(c => c !== campus);
                                     }
+                                    setFormData(prev => ({ ...prev, allowedCampuses: updatedCampuses }));
+                                    validateField("allowedCampuses", updatedCampuses);
                                   }}
                                   className="h-4 w-4 rounded border-gray-300 text-[#154CB3] focus:ring-[#154CB3] cursor-pointer"
                                 />
@@ -1671,28 +2344,24 @@ function CreateFestForm(props?: CreateFestProps) {
                             ))}
                           </div>
                           <p className="text-xs text-gray-500 mt-2">
-                            {!formData.allowOutsiders 
-                              ? "All campuses or select specific campuses where this fest will be held (Mandatory)"
-                              : "Leave all unchecked to allow all campuses"}
+                            Select at least one campus that can register for this fest.
                           </p>
+                          {errors.allowedCampuses && (
+                            <p className="text-red-500 text-xs mt-2">{errors.allowedCampuses}</p>
+                          )}
                         </div>
                       </div>
                     </div>
+
                   </div>
                 </div>
 
-                <DepartmentAndCategoryInputs
-                  formData={formData}
-                  errors={errors}
-                  setFormData={setFormData}
-                  validateField={validateField}
-                />
                 <div>
                   <label
                     htmlFor="organizingDept"
                     className="block mb-2 text-sm font-medium text-gray-700"
                   >
-                    Organizing department:{" "}
+                    Organizing department (Select or Type):{" "}
                     <span className="text-red-500">*</span>
                   </label>
                   <datalist id="organizing-dept-list">
@@ -1706,7 +2375,7 @@ function CreateFestForm(props?: CreateFestProps) {
                     type="text"
                     id="organizingDept"
                     list="organizing-dept-list"
-                    placeholder="Enter or select organizing department"
+                    placeholder="Select or type organizing department"
                     value={formData.organizingDept}
                     onChange={handleInputChange}
                     onBlur={handleInputBlur}
@@ -1729,10 +2398,18 @@ function CreateFestForm(props?: CreateFestProps) {
                     </p>
                   )}
                 </div>
+
+                <DepartmentAndCategoryInputs
+                  formData={formData}
+                  errors={errors}
+                  setFormData={setFormData}
+                  validateField={validateField}
+                />
+
                 <div>
                   <label className="block mb-2 text-sm font-medium text-gray-700">
                     Fest image: <span className="text-red-500">*</span> (max
-                    3MB, JPG/PNG)
+                    3MB, JPG/PNG/WEBP/GIF)
                   </label>
                   <div className="border border-dashed border-gray-400 rounded-xl p-6 sm:p-8 text-center hover:border-gray-500 transition-colors">
                     {/* Display existing file info if in edit mode, an existing image URL is provided, and no new file has been selected yet */}
@@ -1770,7 +2447,7 @@ function CreateFestForm(props?: CreateFestProps) {
                     <input
                       type="file"
                       id="image-upload-input"
-                      accept="image/jpeg,image/png"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
                       onChange={handleFileChange}
                       className="hidden"
                       required={!finalIsEditMode && !existingImageFileUrl}
@@ -1865,19 +2542,10 @@ function CreateFestForm(props?: CreateFestProps) {
                     )}
                   </div>
                 </div>
-
-                {/* Custom Fields Section - After Contact Phone */}
-                <div className="bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 rounded-2xl p-6 sm:p-7 shadow-sm">
-                  <div className="p-4 bg-white rounded-lg border border-indigo-100 text-sm text-gray-600">
-                    <p className="font-medium text-gray-700 mb-1">Custom Fields Coming Soon</p>
-                    <p className="text-xs">You'll be able to add specific registration fields for your fest participants.</p>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-4 sm:mb-6">
-                    <div className="flex items-center mb-4 sm:mb-0">
-                      <div className="bg-[#FFCC00] rounded-full w-8 h-8 flex items-center justify-center mr-3 shrink-0">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-6">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+                    <div className="flex items-start gap-3">
+                      <div className="bg-[#FFCC00] rounded-full w-8 h-8 flex items-center justify-center shrink-0 mt-0.5">
                         <svg
                           xmlns="http://www.w3.org/2000/svg"
                           viewBox="0 0 16 16"
@@ -1889,10 +2557,10 @@ function CreateFestForm(props?: CreateFestProps) {
                       </div>
                       <div>
                         <h3 className="text-base sm:text-lg font-bold text-[#063168]">
-                          Event heads: (optional, max 5)
+                          Event heads (optional, max 5)
                         </h3>
-                        <p className="text-xs sm:text-sm text-gray-500">
-                          Add event head emails
+                        <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
+                          Assign organizer access with mandatory expiry.
                         </p>
                       </div>
                     </div>
@@ -1902,133 +2570,134 @@ function CreateFestForm(props?: CreateFestProps) {
                       disabled={formData.eventHeads.length >= 5}
                       aria-label="Add event head"
                       title="Add event head"
-                      className="bg-[#063168] p-3 rounded-full text-white cursor-pointer"
+                      className="bg-[#063168] px-4 py-2.5 rounded-full text-white cursor-pointer text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-4 w-4"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M12 4v16m8-8H4"
-                        />
-                      </svg>
+                      + Add Head
                     </button>
                   </div>
-                  {formData.eventHeads.map((eventHead, index) => (
-                    <div key={index} className="mb-4 p-4 border border-gray-200 rounded-lg bg-gray-50">
-                      <div className="flex items-start gap-3">
-                        <div className="flex-1">
-                          <input
-                            type="email"
-                            placeholder="Enter event head email"
-                            value={eventHead.email}
-                            onChange={(e) =>
-                              handleEventHeadChange(index, e.target.value)
-                            }
-                            onBlur={() => handleEventHeadBlur(index)}
-                            aria-describedby={
-                              errors[`eventHead_${index}`]
-                                ? `eventHead-error-${index}`
-                                : undefined
-                            }
-                            className={`w-full px-4 py-3 sm:py-3.5 rounded-lg border ${
-                              errors[`eventHead_${index}`]
-                                ? "border-red-500"
-                                : "border-gray-300"
-                            } focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent transition-all text-sm sm:text-base bg-white`}
-                          />
-                          {errors[`eventHead_${index}`] && (
-                            <p
-                              id={`eventHead-error-${index}`}
-                              className="text-red-500 text-xs mt-1"
-                            >
-                              {errors[`eventHead_${index}`]}
+
+                  {formData.eventHeads.length === 0 && (
+                    <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-5 text-sm text-slate-500">
+                      No event heads added yet.
+                    </div>
+                  )}
+
+                  <div className="space-y-4">
+                    {formData.eventHeads.map((eventHead, index) => (
+                      <div key={index} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <div className="flex items-center justify-between mb-3">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Head {index + 1}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => removeEventHead(index)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+                            aria-label={`Remove event head ${index + 1}`}
+                          >
+                            Remove
+                          </button>
+                        </div>
+
+                        <label
+                          htmlFor={`event-head-email-${index}`}
+                          className="block text-xs font-semibold text-gray-600 mb-1.5"
+                        >
+                          Event head email
+                        </label>
+                        <input
+                          id={`event-head-email-${index}`}
+                          type="email"
+                          placeholder="name@christuniversity.in"
+                          value={eventHead.email}
+                          onChange={(e) => handleEventHeadChange(index, e.target.value)}
+                          onBlur={() => handleEventHeadBlur(index)}
+                          aria-describedby={
+                            errors[`eventHead_${index}`]
+                              ? `eventHead-error-${index}`
+                              : undefined
+                          }
+                          className={`w-full px-4 py-2.5 rounded-lg border ${
+                            errors[`eventHead_${index}`] ? "border-red-500" : "border-gray-300"
+                          } focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent transition-all text-sm bg-white`}
+                        />
+                        {errors[`eventHead_${index}`] && (
+                          <p id={`eventHead-error-${index}`} className="text-red-500 text-xs mt-1">
+                            {errors[`eventHead_${index}`]}
+                          </p>
+                        )}
+
+                        <div className="mt-3 pt-3 border-t border-slate-200">
+                          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">
+                            <div>
+                              <label
+                                htmlFor={`event-head-expiration-${index}`}
+                                className="block text-xs font-semibold text-gray-600 mb-1.5"
+                              >
+                                Organizer access expiry <span className="text-red-500">*</span>
+                              </label>
+                              <input
+                                id={`event-head-expiration-${index}`}
+                                type="datetime-local"
+                                value={eventHead.expiresAt ? new Date(eventHead.expiresAt).toISOString().slice(0, 16) : ""}
+                                onChange={(e) =>
+                                  handleEventHeadExpirationChange(
+                                    index,
+                                    e.target.value ? new Date(e.target.value).toISOString() : null
+                                  )
+                                }
+                                onBlur={() => handleEventHeadBlur(index)}
+                                aria-label={`Event head ${index + 1} expiration date and time`}
+                                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent bg-white"
+                              />
+                              {errors[`eventHeadExpiry_${index}`] && (
+                                <p className="text-red-500 text-xs mt-1">
+                                  {errors[`eventHeadExpiry_${index}`]}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-1.5 lg:justify-end">
+                              {["1 week", "1 month", "3 months"].map((preset) => (
+                                <button
+                                  key={preset}
+                                  type="button"
+                                  onClick={() => {
+                                    const date = new Date();
+                                    if (preset === "1 week") date.setDate(date.getDate() + 7);
+                                    else if (preset === "1 month") date.setMonth(date.getMonth() + 1);
+                                    else if (preset === "3 months") date.setMonth(date.getMonth() + 3);
+                                    handleEventHeadExpirationChange(index, date.toISOString());
+                                  }}
+                                  className="px-2.5 py-1.5 text-xs font-medium rounded-md border border-gray-300 hover:bg-gray-100 transition-colors text-gray-600"
+                                >
+                                  {preset}
+                                </button>
+                              ))}
+                              {eventHead.expiresAt && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleEventHeadExpirationChange(index, null)}
+                                  className="px-2.5 py-1.5 text-xs font-medium rounded-md border border-red-300 hover:bg-red-50 transition-colors text-red-600"
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {eventHead.expiresAt ? (
+                            <p className="text-xs text-green-600 mt-2">
+                              Access expires: {new Date(eventHead.expiresAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-red-600 mt-2">
+                              Expiry is required for each event head.
                             </p>
                           )}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => removeEventHead(index)}
-                          className="p-2 text-gray-400 hover:text-red-500 focus:outline-none focus:ring-1 focus:ring-red-500 rounded-full cursor-pointer"
-                          aria-label={`Remove event head ${index + 1}`}
-                        >
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 16 16"
-                            fill="currentColor"
-                            className="size-5"
-                          >
-                            <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
-                          </svg>
-                        </button>
                       </div>
-                      
-                      {/* Organiser Access Expiration */}
-                      <div className="mt-3 pt-3 border-t border-gray-200">
-                        <label htmlFor={`event-head-expiration-${index}`} className="block text-xs font-semibold text-gray-600 mb-2">
-                          Organiser Access Expiration (optional)
-                        </label>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <input
-                            id={`event-head-expiration-${index}`}
-                            type="datetime-local"
-                            value={eventHead.expiresAt ? new Date(eventHead.expiresAt).toISOString().slice(0, 16) : ""}
-                            onChange={(e) =>
-                              handleEventHeadExpirationChange(
-                                index,
-                                e.target.value ? new Date(e.target.value).toISOString() : null
-                              )
-                            }
-                            aria-label={`Event head ${index + 1} expiration date and time`}
-                            className="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent bg-white"
-                          />
-                          <div className="flex gap-1">
-                            {["1 week", "1 month", "3 months"].map((preset) => (
-                              <button
-                                key={preset}
-                                type="button"
-                                onClick={() => {
-                                  const date = new Date();
-                                  if (preset === "1 week") date.setDate(date.getDate() + 7);
-                                  else if (preset === "1 month") date.setMonth(date.getMonth() + 1);
-                                  else if (preset === "3 months") date.setMonth(date.getMonth() + 3);
-                                  handleEventHeadExpirationChange(index, date.toISOString());
-                                }}
-                                className="px-2 py-1 text-xs font-medium rounded border border-gray-300 hover:bg-gray-100 transition-colors text-gray-600"
-                              >
-                                {preset}
-                              </button>
-                            ))}
-                            {eventHead.expiresAt && (
-                              <button
-                                type="button"
-                                onClick={() => handleEventHeadExpirationChange(index, null)}
-                                className="px-2 py-1 text-xs font-medium rounded border border-red-300 hover:bg-red-50 transition-colors text-red-600"
-                              >
-                                Clear
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        {eventHead.expiresAt && (
-                          <p className="text-xs text-green-600 mt-1">
-                            ✓ Access expires: {new Date(eventHead.expiresAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-                          </p>
-                        )}
-                        {!eventHead.expiresAt && (
-                          <p className="text-xs text-amber-600 mt-1">
-                            ⚠ No expiration set - access will be permanent
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
 
                 {/* Additional Fest Details Section */}
@@ -2059,34 +2728,35 @@ function CreateFestForm(props?: CreateFestProps) {
                       />
                     </div>
 
-                    {/* Status */}
+                    {/* Status (auto from dates) */}
                     <div>
-                      <label htmlFor="status" className="block mb-2 text-sm font-medium text-gray-700">
-                        Status
+                      <label className="block mb-2 text-sm font-medium text-gray-700">
+                        Status (Auto from dates)
                       </label>
-                      <select
-                        id="status"
-                        value={formData.status}
-                        onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as CreateFestState["status"] }))}
-                        className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent transition-all text-sm"
-                      >
-                        <option value="draft">Draft</option>
-                        <option value="upcoming">Upcoming</option>
-                        <option value="ongoing">Ongoing</option>
-                        <option value="completed">Completed</option>
-                        <option value="cancelled">Cancelled</option>
-                      </select>
+                      <div className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-slate-50 flex items-center justify-between text-sm">
+                        <span className="text-gray-700">
+                          {formData.status === "upcoming"
+                            ? "Before opening date"
+                            : formData.status === "ongoing"
+                              ? "Within fest duration"
+                              : "After closing date"}
+                        </span>
+                        <span
+                          className={`px-2.5 py-1 rounded-full text-xs font-semibold tracking-wide ${
+                            formData.status === "upcoming"
+                              ? "bg-emerald-100 text-emerald-700"
+                              : formData.status === "ongoing"
+                                ? "bg-blue-100 text-blue-700"
+                                : "bg-slate-200 text-slate-700"
+                          }`}
+                        >
+                          {formData.status.toUpperCase()}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-2">
+                        Upcoming: before opening date, Ongoing: between opening and closing, Past: after closing.
+                      </p>
                     </div>
-                  </div>
-
-                  <div className="mb-6">
-                    <CustomDateInput
-                      id="registration_deadline"
-                      label="Registration Deadline"
-                      value={formData.registration_deadline}
-                      onChange={(value) => setFormData(prev => ({ ...prev, registration_deadline: value }))}
-                      placeholder="Select registration deadline"
-                    />
                   </div>
 
                   {/* Social Links */}
@@ -2363,41 +3033,66 @@ function CreateFestForm(props?: CreateFestProps) {
                   >
                     Cancel
                   </Link>
-                  {finalIsEditMode && (
+                  
+                  <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                     <button
                       type="button"
-                      onClick={deleteFest}
-                      disabled={isNavigating || isSubmitting}
-                      className="w-full sm:w-auto px-4 py-2.5 border border-red-300 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                      onClick={handleSaveDraft}
+                      disabled={isSubmitting || isNavigating || isOpeningPreview}
+                      className="w-full sm:w-auto px-5 py-2.5 border border-amber-400 text-amber-800 bg-amber-50 text-sm font-medium rounded-md hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                     >
-                      {isNavigating && (
-                        <svg
-                          className="animate-spin h-4 w-4 text-white"
-                          xmlns="http://www.w3.org/2000/svg"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                        >
-                          <circle
-                            className="opacity-25"
-                            cx="12"
-                            cy="12"
-                            r="10"
-                            stroke="currentColor"
-                            strokeWidth="4"
-                          ></circle>
-                          <path
-                            className="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                          ></path>
-                        </svg>
-                      )}
-                      <span>{isNavigating ? "Deleting..." : "Delete"}</span>
+                      {isSubmitting && submitIntent === "draft"
+                        ? "Saving Draft..."
+                        : "Save as Draft"}
                     </button>
-                  )}
+
+                    <button
+                      type="button"
+                      onClick={handlePreview}
+                      disabled={isSubmitting || isNavigating || isOpeningPreview}
+                      className="w-full sm:w-auto px-5 py-2.5 border border-[#154CB3] text-[#154CB3] bg-white text-sm font-medium rounded-md hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      {isOpeningPreview ? "Opening preview..." : "Preview"}
+                    </button>
+                    
+                    {finalIsEditMode && (
+                      <div className="relative" ref={actionsDropdownRef}>
+                        <button
+                          type="button"
+                          onClick={() => setIsActionsDropdownOpen(!isActionsDropdownOpen)}
+                          disabled={isNavigating || isSubmitting || isOpeningPreview}
+                          className="w-full sm:w-auto px-4 py-2.5 border border-gray-300 text-gray-700 bg-white text-sm font-medium rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <span>More actions</span>
+                          <svg className={`w-4 h-4 transition-transform ${isActionsDropdownOpen ? 'rotate-180' : ''}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                          </svg>
+                        </button>
+                        {isActionsDropdownOpen && (
+                          <div className="absolute right-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-10">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                deleteFest();
+                                setIsActionsDropdownOpen(false);
+                              }}
+                              disabled={isNavigating || isSubmitting || isOpeningPreview}
+                              className="w-full text-left px-4 py-3 text-red-600 hover:bg-red-50 text-sm font-medium border-b border-gray-100 first:rounded-t-lg last:border-b-0 last:rounded-b-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                              <svg className="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                              {isNavigating ? "Deleting..." : "Delete Fest"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  
                   <button
                     type="submit"
-                    disabled={isSubmitting || isNavigating || (!!imageFile && !hasSupabaseConfig && !finalIsEditMode)}
+                    disabled={isSubmitting || isNavigating || isOpeningPreview}
                     className="w-full sm:w-auto px-6 py-2.5 bg-[#154CB3] text-white text-sm font-medium rounded-md hover:bg-[#0f3a7a] focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
                   >
                     {(isSubmitting || isUploadingImage) && (
@@ -2426,11 +3121,17 @@ function CreateFestForm(props?: CreateFestProps) {
                       {isUploadingImage
                         ? "Uploading image..."
                         : isSubmitting
-                        ? finalIsEditMode
-                          ? "Updating..."
-                          : "Publishing..."
+                        ? submitIntent === "draft"
+                          ? "Saving Draft..."
+                          : finalIsEditMode
+                            ? isDraftFest
+                              ? "Publishing..."
+                              : "Updating..."
+                            : "Publishing..."
                         : finalIsEditMode
-                        ? "Update Fest"
+                        ? isDraftFest
+                          ? "Publish Fest"
+                          : "Update Fest"
                         : "Publish Fest"}
                     </span>
                   </button>

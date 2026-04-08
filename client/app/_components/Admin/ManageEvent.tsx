@@ -8,8 +8,9 @@ import {
   ControllerRenderProps,
   useWatch,
   Control,
+  FieldErrors,
 } from "react-hook-form";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import {
   EventFormData,
@@ -34,6 +35,10 @@ import { DynamicCustomFieldBuilder, CustomField } from "@/app/_components/UI/Dyn
 import { useAuth } from "@/context/AuthContext";
 import LoadingIndicator from "@/app/_components/UI/LoadingIndicator";
 import PublishingOverlay from "@/app/_components/UI/PublishingOverlay";
+import {
+  buildEventPreviewData,
+  saveEventPreviewDraft,
+} from "@/app/lib/eventPreviewDraft";
 
 export const formatDateToYYYYMMDD = (date: Date): string => {
   const year = date.getFullYear();
@@ -709,6 +714,7 @@ const CustomTimePicker: React.FC<CustomTimePickerProps> = ({
 
 interface EventFormProps {
   onSubmit: SubmitHandler<EventFormData>;
+  onSubmitDraft?: SubmitHandler<EventFormData>;
   defaultValues?: Partial<EventFormData>;
   isSubmittingProp: boolean;
   isEditMode: boolean;
@@ -716,6 +722,7 @@ interface EventFormProps {
   existingBannerFileUrl?: string | null;
   existingPdfFileUrl?: string | null;
   isArchived?: boolean;
+  isDraft?: boolean;
   isArchiveUpdating?: boolean;
   onToggleArchive?: () => void;
 }
@@ -727,8 +734,240 @@ const secondaryButtonClasses = `${baseButtonClasses} border border-gray-300 text
 const toggleTrackClass =
   "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-[#154CB3]/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#154CB3]";
 
+interface FestOption {
+  value: string;
+  label: string;
+  departmentAccess: string[];
+  organizingDept: string;
+  category: string;
+  campusHostedAt: string;
+  allowedCampuses: string[];
+  allowOutsiders: boolean;
+}
+
+const toCanonical = (value: string): string =>
+  value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const normalizeStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return Array.from(
+      new Set(
+        value
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter(Boolean)
+      )
+    );
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return normalizeStringArray(parsed);
+      } catch {
+        // Fall through to plain string handling.
+      }
+    }
+
+    if (trimmed.includes(",")) {
+      return Array.from(
+        new Set(
+          trimmed
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+        )
+      );
+    }
+
+    return [trimmed];
+  }
+
+  return [];
+};
+
+const normalizeDepartmentAccess = (value: unknown): string[] =>
+  Array.from(
+    new Set(
+      normalizeStringArray(value).map((entry) => {
+        const directValueMatch = departmentOptions.find((dept) => dept.value === entry);
+        if (directValueMatch) return directValueMatch.value;
+
+        const canonicalEntry = toCanonical(entry);
+        const mapped = departmentOptions.find(
+          (dept) =>
+            toCanonical(dept.value) === canonicalEntry ||
+            toCanonical(dept.label) === canonicalEntry
+        );
+
+        return mapped?.value || entry;
+      })
+    )
+  );
+
+const normalizeCategoryValue = (value: unknown): string => {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  const directValueMatch = categoryOptions.find((category) => category.value === trimmed);
+  if (directValueMatch) return directValueMatch.value;
+
+  const canonicalEntry = toCanonical(trimmed);
+  const mapped = categoryOptions.find(
+    (category) =>
+      toCanonical(category.value) === canonicalEntry ||
+      toCanonical(category.label) === canonicalEntry
+  );
+
+  return mapped?.value || "";
+};
+
+const normalizeCampusEntry = (value: string): string | null => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const directMatch = christCampuses.find((campus) => campus === trimmed);
+  if (directMatch) return directMatch;
+
+  const canonicalEntry = toCanonical(trimmed);
+  const mapped = christCampuses.find(
+    (campus) => toCanonical(campus) === canonicalEntry
+  );
+
+  return mapped || null;
+};
+
+const normalizeCampusHostedAt = (value: unknown): string => {
+  const first = normalizeStringArray(value)[0];
+  if (!first) return "";
+  return normalizeCampusEntry(first) || "";
+};
+
+const normalizeAllowedCampuses = (value: unknown): string[] =>
+  Array.from(
+    new Set(
+      normalizeStringArray(value)
+        .map((entry) => normalizeCampusEntry(entry))
+        .filter((entry): entry is string => Boolean(entry))
+    )
+  );
+
+const normalizeBoolean = (value: unknown): boolean =>
+  value === true || value === "true" || value === 1 || value === "1";
+
+const isArchivedFest = (fest: any): boolean =>
+  normalizeBoolean(fest?.is_archived) || normalizeBoolean(fest?.archived_effective);
+
+const normalizeFestOptionValue = (fest: any): string => {
+  const rawValue = fest?.fest_id ?? fest?.id ?? fest?.fest_title ?? fest?.title;
+  const normalized = String(rawValue ?? "").trim();
+  return normalized || "Untitled Fest";
+};
+
+const normalizeFestOptionLabel = (fest: any): string => {
+  const normalized = String(fest?.fest_title ?? fest?.title ?? "").trim();
+  return normalized || "Untitled Fest";
+};
+
+const EVENT_ERROR_SCROLL_ORDER: string[] = [
+  "eventTitle",
+  "eventDate",
+  "endDate",
+  "registrationDeadline",
+  "eventTime",
+  "festEvent",
+  "isTeamEvent",
+  "minParticipants",
+  "maxParticipants",
+  "detailedDescription",
+  "allowOutsiders",
+  "outsiderRegistrationFee",
+  "outsiderMaxParticipants",
+  "campusHostedAt",
+  "allowedCampuses",
+  "organizingDept",
+  "department",
+  "category",
+  "provideClaims",
+  "imageFile",
+  "bannerFile",
+  "pdfFile",
+  "whatsappLink",
+  "location",
+  "registrationFee",
+  "contactEmail",
+  "contactPhone",
+  "rules",
+  "scheduleItems",
+  "prizes",
+];
+
+const EVENT_ERROR_SELECTOR_MAP: Record<string, string> = {
+  eventTitle: "#eventTitle",
+  eventDate: "#eventDate",
+  endDate: "#endDate",
+  registrationDeadline: "#registrationDeadline",
+  eventTime: "#eventTime",
+  festEvent: "#festEvent",
+  isTeamEvent: "#isTeamEvent",
+  minParticipants: "#minParticipants",
+  maxParticipants: "#maxParticipants",
+  detailedDescription: "#detailedDescription",
+  allowOutsiders: "#allowOutsiders",
+  outsiderRegistrationFee: "#outsiderRegistrationFee",
+  outsiderMaxParticipants: "#outsiderMaxParticipants",
+  campusHostedAt: "#campusHostedAt",
+  allowedCampuses: "#allowedCampuses-group",
+  organizingDept: "#organizingDept",
+  department: "#department",
+  category: "#category",
+  provideClaims: "#provideClaims",
+  imageFile: "#imageFile",
+  bannerFile: "#bannerFile",
+  pdfFile: "#pdfFile",
+  whatsappLink: "#whatsappLink",
+  location: "#location",
+  registrationFee: "#registrationFee",
+  contactEmail: "#contactEmail",
+  contactPhone: "#contactPhone",
+};
+
+const getFirstErrorPath = (errorNode: unknown, prefix = ""): string | null => {
+  if (!errorNode || typeof errorNode !== "object") return null;
+
+  if (Array.isArray(errorNode)) {
+    for (let index = 0; index < errorNode.length; index += 1) {
+      const nestedPath = getFirstErrorPath(
+        errorNode[index],
+        prefix ? `${prefix}.${index}` : String(index)
+      );
+      if (nestedPath) return nestedPath;
+    }
+    return null;
+  }
+
+  const nodeRecord = errorNode as Record<string, unknown>;
+  if (typeof nodeRecord.message === "string" || typeof nodeRecord.type === "string") {
+    return prefix || null;
+  }
+
+  for (const key of Object.keys(nodeRecord)) {
+    const value = nodeRecord[key];
+    const nestedPath = getFirstErrorPath(value, prefix ? `${prefix}.${key}` : key);
+    if (nestedPath) return nestedPath;
+  }
+
+  return null;
+};
+
 export default function EventForm({
   onSubmit,
+  onSubmitDraft,
   defaultValues,
   isSubmittingProp,
   isEditMode,
@@ -736,21 +975,43 @@ export default function EventForm({
   existingBannerFileUrl,
   existingPdfFileUrl,
   isArchived,
+  isDraft,
   isArchiveUpdating,
   onToggleArchive,
 }: EventFormProps) {
-  const [fetchedFests, setFetchedFests] = useState<{ value: string; label: string }[]>([]);
+  const [fetchedFests, setFetchedFests] = useState<FestOption[]>([]);
 
   useEffect(() => {
     async function fetchFests() {
       try {
         const fests = await getFests();
         if (fests) {
-          const options = fests.map((f: any) => ({
-            value: f.fest_id || f.id || f.fest_title || f.title || "Untitled Fest",
-            label: f.fest_title || f.title || "Untitled Fest"
-          }));
-          setFetchedFests([{ value: "none", label: "None" }, ...options]);
+          const options: FestOption[] = fests
+            .filter((f: any) => !isArchivedFest(f))
+            .map((f: any) => ({
+              value: normalizeFestOptionValue(f),
+              label: normalizeFestOptionLabel(f),
+              departmentAccess: normalizeDepartmentAccess(f.department_access),
+              organizingDept:
+                typeof f.organizing_dept === "string" ? f.organizing_dept.trim() : "",
+              category: normalizeCategoryValue(f.category),
+              campusHostedAt: normalizeCampusHostedAt(f.campus_hosted_at),
+              allowedCampuses: normalizeAllowedCampuses(f.allowed_campuses),
+              allowOutsiders: normalizeBoolean(f.allow_outsiders ?? f.allowOutsiders),
+            }));
+          setFetchedFests([
+            {
+              value: "none",
+              label: "None",
+              departmentAccess: [],
+              organizingDept: "",
+              category: "",
+              campusHostedAt: "",
+              allowedCampuses: [],
+              allowOutsiders: false,
+            },
+            ...options,
+          ]);
         }
       } catch (error) {
         console.error("Failed to fetch fests:", error);
@@ -760,6 +1021,7 @@ export default function EventForm({
   }, []);
 
   const router = useRouter();
+  const pathname = usePathname();
   const {
     register,
     handleSubmit,
@@ -768,6 +1030,8 @@ export default function EventForm({
     setValue,
     watch,
     reset,
+    trigger,
+    getValues,
   } = useForm<EventFormData>({
     // Schema resolver can be re-enabled later if validation is restored here.
     defaultValues: {
@@ -783,7 +1047,9 @@ export default function EventForm({
       registrationDeadline: "",
       location: "",
       registrationFee: "",
+      isTeamEvent: false,
       maxParticipants: "",
+      minParticipants: "",
       contactEmail: "",
       contactPhone: "",
       whatsappLink: "",
@@ -804,6 +1070,86 @@ export default function EventForm({
     },
   });
 
+  const scrollToFirstValidationError = React.useCallback(
+    (formErrors: FieldErrors<EventFormData>) => {
+      const errorsRecord = formErrors as Record<string, unknown>;
+      const prioritizedKey = EVENT_ERROR_SCROLL_ORDER.find(
+        (fieldKey) => Boolean(errorsRecord[fieldKey])
+      );
+      const firstErrorPath = getFirstErrorPath(formErrors);
+      const fallbackKey = firstErrorPath ? firstErrorPath.split(".")[0] : null;
+      const targetKey = prioritizedKey || fallbackKey;
+
+      const selectors: string[] = [];
+
+      if (targetKey && EVENT_ERROR_SELECTOR_MAP[targetKey]) {
+        selectors.push(EVENT_ERROR_SELECTOR_MAP[targetKey]);
+      }
+
+      if (firstErrorPath) {
+        selectors.push(`[id="${firstErrorPath}"]`);
+
+        if (firstErrorPath.startsWith("scheduleItems.")) {
+          const scheduleParts = firstErrorPath.split(".");
+          const scheduleIndex = scheduleParts[1] || "0";
+          const scheduleField = scheduleParts[2] || "activity";
+          selectors.push(`[id="scheduleItems.${scheduleIndex}.${scheduleField}"]`);
+          selectors.push(`[id="scheduleItems.${scheduleIndex}.activity"]`);
+          selectors.push(`[id="scheduleItems.${scheduleIndex}.time"]`);
+        }
+
+        if (firstErrorPath.startsWith("rules.") || firstErrorPath.startsWith("prizes.")) {
+          const listParts = firstErrorPath.split(".");
+          const listName = listParts[0];
+          const listIndex = listParts[1] || "0";
+          selectors.push(`[id="${listName}.${listIndex}.value"]`);
+        }
+      }
+
+      if (targetKey) {
+        selectors.push(`[id="${targetKey}"]`);
+        selectors.push(`[name="${targetKey}"]`);
+      }
+
+      let targetElement: HTMLElement | null = null;
+      for (const selector of selectors) {
+        const found = document.querySelector<HTMLElement>(selector);
+        if (found) {
+          targetElement = found;
+          break;
+        }
+      }
+
+      if (!targetElement) return;
+
+      targetElement.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+
+      const focusableSelector =
+        "input,select,textarea,button,[tabindex]:not([tabindex='-1'])";
+      const focusTarget = targetElement.matches(focusableSelector)
+        ? targetElement
+        : targetElement.querySelector<HTMLElement>(focusableSelector);
+
+      if (focusTarget) {
+        window.setTimeout(() => {
+          focusTarget.focus({ preventScroll: true });
+        }, 120);
+      }
+    },
+    []
+  );
+
+  const handleInvalidSubmit = React.useCallback(
+    (formErrors: FieldErrors<EventFormData>) => {
+      console.warn("EventForm: Validation errors present:", formErrors);
+      scrollToFirstValidationError(formErrors);
+    },
+    [scrollToFirstValidationError]
+  );
+
   const { session } = useAuth();
   const [isDeleting, setIsDeleting] = React.useState(false);
   const [showDeleteConfirmation, setShowDeleteConfirmation] =
@@ -812,6 +1158,9 @@ export default function EventForm({
     React.useState(false);
   const [showRegistrationsClosedModal, setShowRegistrationsClosedModal] =
     React.useState(false);
+  const [isOpeningPreview, setIsOpeningPreview] = React.useState(false);
+  const [isActionsDropdownOpen, setIsActionsDropdownOpen] = React.useState(false);
+  const actionsDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (
@@ -820,6 +1169,16 @@ export default function EventForm({
     ) {
       const transformedDefaults = {
         ...defaultValues,
+        isTeamEvent:
+          typeof defaultValues.isTeamEvent === "boolean"
+            ? defaultValues.isTeamEvent
+            : Number(defaultValues.maxParticipants || 1) > 1,
+        minParticipants:
+          typeof defaultValues.minParticipants === "string"
+            ? defaultValues.minParticipants
+            : Number(defaultValues.maxParticipants || 1) > 1
+            ? "2"
+            : "1",
         department: Array.isArray(defaultValues.department)
           ? defaultValues.department
           : [],
@@ -828,6 +1187,8 @@ export default function EventForm({
         scheduleItems: Array.isArray(defaultValues.scheduleItems)
           ? defaultValues.scheduleItems
           : [],
+        campusHostedAt: normalizeCampusHostedAt(defaultValues.campusHostedAt),
+        allowedCampuses: normalizeAllowedCampuses(defaultValues.allowedCampuses),
       };
       reset(transformedDefaults);
     }
@@ -835,6 +1196,31 @@ export default function EventForm({
 
   const watchedEventDate = useWatch({ control, name: "eventDate" });
   const watchedEndDate = useWatch({ control, name: "endDate" });
+  const watchedIsTeamEvent = useWatch({ control, name: "isTeamEvent" });
+  const watchedMaxParticipants = useWatch({ control, name: "maxParticipants" });
+  const watchedMinParticipants = useWatch({ control, name: "minParticipants" });
+  const watchedFestEvent = useWatch({ control, name: "festEvent" });
+  const lastAutoFilledFestRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!watchedIsTeamEvent) {
+      setValue("maxParticipants", "1", { shouldValidate: false });
+      setValue("minParticipants", "1", { shouldValidate: false });
+    } else {
+      // Auto-fill to 2 when team event is enabled (1 is just the registrant themselves), if not already set
+      if (!watch("minParticipants")) {
+        setValue("minParticipants", "2", { shouldValidate: false });
+      }
+      if (!watch("maxParticipants")) {
+        setValue("maxParticipants", "2", { shouldValidate: false });
+      }
+    }
+  }, [watchedIsTeamEvent, setValue, watch]);
+
+  useEffect(() => {
+    if (!watchedIsTeamEvent) return;
+    void trigger(["minParticipants", "maxParticipants"]);
+  }, [watchedIsTeamEvent, watchedMaxParticipants, watchedMinParticipants, trigger]);
 
   useEffect(() => {
     if (watchedEventDate && !isEditMode && watch("eventDate")) {
@@ -849,18 +1235,76 @@ export default function EventForm({
     }
   }, [watchedEventDate, setValue, isEditMode, watch]);
 
+  useEffect(() => {
+    const watchedFestEventValue = String(watchedFestEvent ?? "").trim();
+
+    if (!watchedFestEventValue || watchedFestEventValue.toLowerCase() === "none") {
+      // Do not clear user-entered values when fest is empty.
+      // This effect should only auto-fill when a fest is selected.
+      lastAutoFilledFestRef.current = null;
+      return;
+    }
+
+    const watchedFestCanonical = toCanonical(watchedFestEventValue);
+    const selectedFest = fetchedFests.find(
+      (fest) =>
+        fest.value === watchedFestEventValue ||
+        toCanonical(fest.value) === watchedFestCanonical ||
+        toCanonical(fest.label) === watchedFestCanonical
+    );
+    if (!selectedFest) return;
+
+    const selectedFestKey = toCanonical(
+      selectedFest.value || selectedFest.label || watchedFestEventValue
+    );
+
+    // Apply auto-fill only once per selected fest to avoid re-overwriting edits.
+    if (selectedFestKey && lastAutoFilledFestRef.current === selectedFestKey) {
+      return;
+    }
+
+    setValue("department", selectedFest.departmentAccess, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setValue("organizingDept", selectedFest.organizingDept, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setValue("category", selectedFest.category, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setValue("campusHostedAt", selectedFest.campusHostedAt, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setValue("allowedCampuses", selectedFest.allowedCampuses, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setValue("allowOutsiders", selectedFest.allowOutsiders, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+
+    if (selectedFestKey) {
+      lastAutoFilledFestRef.current = selectedFestKey;
+    }
+  }, [watchedFestEvent, fetchedFests, setValue]);
+
   const [isModalOpen, setIsModalOpen] = React.useState(false);
   const [isNavigating, setIsNavigating] = React.useState(false);
-  const [pendingSuccess, setPendingSuccess] = React.useState<"publish" | "delete" | null>(null);
+  const [pendingSuccess, setPendingSuccess] = React.useState<"publish" | "draft" | "delete" | null>(null);
+  const [successAction, setSuccessAction] = React.useState<"publish" | "draft">("publish");
+  const [wasDraftOnSubmit, setWasDraftOnSubmit] = React.useState(false);
   const [modalVisible, setModalVisible] = React.useState(false);
 
   const processSubmit: SubmitHandler<EventFormData> = async (data) => {
-    if (Object.keys(errors).length > 0) {
-      console.error("EventForm: Zod validation errors:", errors);
-      return;
-    }
     try {
+      setWasDraftOnSubmit(Boolean(isDraft));
       await onSubmit(data);
+      setSuccessAction("publish");
       // Don't show modal yet — let the overlay finish its animation first
       setPendingSuccess("publish");
     } catch (error: any) {
@@ -872,9 +1316,64 @@ export default function EventForm({
     }
   };
 
+  const processDraftSubmit: SubmitHandler<EventFormData> = async (data) => {
+    if (!onSubmitDraft) return;
+
+    try {
+      await onSubmitDraft(data);
+      setSuccessAction("draft");
+      setPendingSuccess("draft");
+    } catch (error: any) {
+      console.error(
+        "EventForm: Error from onSubmitDraft prop:",
+        error.message,
+        error
+      );
+    }
+  };
+
+  const handlePreview = async () => {
+    if (isSubmittingProp || rhfIsSubmitting || isDeleting || isOpeningPreview) {
+      return;
+    }
+
+    setIsOpeningPreview(true);
+    try {
+      const isValid = await trigger();
+      if (!isValid) {
+        scrollToFirstValidationError(errors);
+        return;
+      }
+
+      const formData = getValues();
+      const previewData = buildEventPreviewData({
+        formData,
+        sourcePath: pathname || "/create/event",
+        existingImageFileUrl,
+        existingBannerFileUrl,
+        existingPdfFileUrl,
+      });
+      const previewDraftKey = saveEventPreviewDraft(previewData);
+
+      const previewUrl = `/event/preview?draft=${encodeURIComponent(previewDraftKey)}`;
+      const previewTab = window.open("", "_blank");
+      if (!previewTab) {
+        window.alert("Preview was blocked. Please allow pop-ups and try again.");
+        return;
+      }
+
+      previewTab.opener = null;
+      previewTab.location.href = previewUrl;
+    } catch (previewError) {
+      console.error("EventForm: Failed to open preview", previewError);
+    } finally {
+      setIsOpeningPreview(false);
+    }
+  };
+
   // Called when PublishingOverlay finishes sprint + victory animation
   const handleOverlayComplete = React.useCallback(() => {
-    if (pendingSuccess === "publish") {
+    if (pendingSuccess === "publish" || pendingSuccess === "draft") {
       setIsModalOpen(true);
       setTimeout(() => setModalVisible(true), 30);
       setPendingSuccess(null);
@@ -887,6 +1386,8 @@ export default function EventForm({
 
   const handleNavigationToDashboard = () => {
     setModalVisible(false);
+    setSuccessAction("publish");
+    setWasDraftOnSubmit(false);
     setTimeout(() => {
       setIsNavigating(true);
       router.push("/manage");
@@ -1032,6 +1533,19 @@ export default function EventForm({
     }
   }, [errors]);
 
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        actionsDropdownRef.current &&
+        !actionsDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsActionsDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const BackIcon = () => (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -1159,11 +1673,18 @@ export default function EventForm({
                 </svg>
               </div>
               <h2 className="text-xl sm:text-2xl font-bold text-[#063168] mb-4">
-                Event {isEditMode ? "Updated!" : "Published!"}
+                {successAction === "draft"
+                  ? "Draft Saved!"
+                  : `Event ${
+                      isEditMode && wasDraftOnSubmit ? "Published!" : isEditMode ? "Updated!" : "Published!"
+                    }`}
               </h2>
               <p className="text-gray-600 mb-6 text-sm sm:text-base">
-                Your event has been successfully{" "}
-                {isEditMode ? "updated" : "published"}.
+                {successAction === "draft"
+                  ? "Your event has been saved as a draft. It is hidden until you publish it."
+                  : `Your event has been successfully ${
+                      isEditMode && wasDraftOnSubmit ? "published" : isEditMode ? "updated" : "published"
+                    }.`}
               </p>
               <button
                 onClick={handleNavigationToDashboard}
@@ -1231,7 +1752,7 @@ export default function EventForm({
                 Event details
               </h2>
               <form
-                onSubmit={handleSubmit(processSubmit)}
+                onSubmit={handleSubmit(processSubmit, handleInvalidSubmit)}
                 className="space-y-6 sm:space-y-8"
                 noValidate
               >
@@ -1350,7 +1871,151 @@ export default function EventForm({
                       />
                     )}
                   />
+                  <CustomDropdown
+                    name="festEvent"
+                    control={control}
+                    options={fetchedFests.length > 0 ? fetchedFests : [{ value: "none", label: "None" }]}
+                    placeholder="Select fest event (if any)"
+                    label="Is this event under any fest? (optional)"
+                    error={errors.festEvent}
+                  />
                 </div>
+
+                <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 sm:py-3.5">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-3">
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      <label
+                        htmlFor="isTeamEvent"
+                        className="text-sm font-medium text-gray-700 whitespace-nowrap"
+                      >
+                        Team event
+                      </label>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <Controller
+                          name="isTeamEvent"
+                          control={control}
+                          render={({ field }) => (
+                            <input
+                              type="checkbox"
+                              id="isTeamEvent"
+                              checked={!!field.value}
+                              onChange={(e) => field.onChange(e.target.checked)}
+                              className="sr-only peer"
+                            />
+                          )}
+                        />
+                        <div className={toggleTrackClass}></div>
+                      </label>
+                    </div>
+                    {watchedIsTeamEvent && (
+                      <div className="flex flex-col gap-3 w-full">
+                        <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+                          <div className="flex-1 sm:flex-none">
+                            <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                              Min
+                            </label>
+                            <Controller
+                              name="minParticipants"
+                              control={control}
+                              render={({ field, fieldState }) => (
+                                <input
+                                  id="minParticipants"
+                                  {...field}
+                                  type="text"
+                                  inputMode="numeric"
+                                  placeholder="e.g., 2"
+                                  className={`w-full px-3 py-2 text-sm rounded-lg border transition-all ${
+                                    fieldState.error
+                                      ? "border-red-500 focus:ring-red-500"
+                                      : "border-gray-300 focus:ring-[#154CB3]"
+                                  } focus:outline-none focus:ring-1 focus:border-transparent`}
+                                />
+                              )}
+                              rules={{
+                                validate: (value) => {
+                                  if (!watchedIsTeamEvent) return true;
+                                  const minRaw = String(value || "").trim();
+                                  if (!minRaw) return "Min is required";
+                                  if (!/^\d+$/.test(minRaw)) return "Enter a number";
+                                  const minValue = Number(minRaw);
+                                  if (minValue < 1) return "Min must be 1 or more";
+                                  const maxRaw = String(watchedMaxParticipants || "").trim();
+                                  if (maxRaw && /^\d+$/.test(maxRaw) && minValue > Number(maxRaw)) {
+                                    return "Min ≤ Max";
+                                  }
+                                  return true;
+                                },
+                              }}
+                            />
+                            {errors.minParticipants && (
+                              <p className="text-red-500 text-xs mt-1">
+                                {errors.minParticipants.message}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex-1 sm:flex-none">
+                            <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                              Max
+                            </label>
+                            <Controller
+                              name="maxParticipants"
+                              control={control}
+                              render={({ field, fieldState }) => (
+                                <input
+                                  id="maxParticipants"
+                                  {...field}
+                                  type="text"
+                                  inputMode="numeric"
+                                  placeholder="e.g., 5"
+                                  className={`w-full px-3 py-2 text-sm rounded-lg border transition-all ${
+                                    fieldState.error
+                                      ? "border-red-500 focus:ring-red-500"
+                                      : "border-gray-300 focus:ring-[#154CB3]"
+                                  } focus:outline-none focus:ring-1 focus:border-transparent`}
+                                />
+                              )}
+                              rules={{
+                                validate: (value) => {
+                                  if (!watchedIsTeamEvent) return true;
+                                  const maxRaw = String(value || "").trim();
+                                  if (!maxRaw) return "Max is required";
+                                  if (!/^\d+$/.test(maxRaw)) return "Enter a number";
+                                  const maxValue = Number(maxRaw);
+                                  if (maxValue < 1) return "Max must be 1 or more";
+                                  const minRaw = String(watchedMinParticipants || "").trim();
+                                  if (minRaw && /^\d+$/.test(minRaw) && maxValue < Number(minRaw)) {
+                                    return "Max ≥ Min";
+                                  }
+                                  return true;
+                                },
+                              }}
+                            />
+                            {errors.maxParticipants && (
+                              <p className="text-red-500 text-xs mt-1">
+                                {errors.maxParticipants.message}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        
+                        {/* Preview Display */}
+                        {watchedMinParticipants && watchedMaxParticipants && (
+                          <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                            <p className="text-sm text-blue-900 font-medium">
+                              Preview: <span className="text-[#154CB3]">
+                                {watchedMinParticipants === watchedMaxParticipants 
+                                  ? `${watchedMinParticipants} member${watchedMinParticipants !== '1' ? 's' : ''}`
+                                  : `${watchedMinParticipants}-${watchedMaxParticipants} members`
+                                }
+                              </span>
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <InputField
                   label="Detailed description:"
                   name="detailedDescription"
@@ -1443,8 +2108,8 @@ export default function EventForm({
                             Specify where the event takes place and who can attend
                           </p>
                         </div>
-                        <span className="text-xs bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap">
-                          Optional
+                        <span className="text-xs bg-red-100 text-red-800 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap">
+                          Required
                         </span>
                       </div>
 
@@ -1452,23 +2117,34 @@ export default function EventForm({
                         {/* Hosted At */}
                         <div>
                           <label className="block text-xs font-semibold text-gray-700 mb-2">
-                            Where is the event Hosted at?
+                            Where is the event Hosted at? <span className="text-red-500">*</span>
                           </label>
                           <Controller
                             name="campusHostedAt"
                             control={control}
+                            rules={{ required: "Hosted campus is required" }}
                             render={({ field }) => (
-                              <select
-                                {...field}
-                                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-0 focus:border-transparent bg-white transition-all"
-                              >
-                                <option value="">Select campus</option>
-                                {christCampuses.map((campus) => (
-                                  <option key={campus} value={campus}>
-                                    {campus}
-                                  </option>
-                                ))}
-                              </select>
+                              <>
+                                <select
+                                  id="campusHostedAt"
+                                  {...field}
+                                  className={`w-full px-3.5 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-0 focus:border-transparent bg-white transition-all ${
+                                    errors.campusHostedAt ? "border-red-500" : "border-gray-300"
+                                  }`}
+                                >
+                                  <option value="">Select campus</option>
+                                  {christCampuses.map((campus) => (
+                                    <option key={campus} value={campus}>
+                                      {campus}
+                                    </option>
+                                  ))}
+                                </select>
+                                {errors.campusHostedAt && (
+                                  <p className="text-red-500 text-xs mt-2">
+                                    {errors.campusHostedAt.message}
+                                  </p>
+                                )}
+                              </>
                             )}
                           />
                         </div>
@@ -1476,13 +2152,24 @@ export default function EventForm({
                         {/* Who Can Register */}
                         <div>
                           <label className="block text-xs font-semibold text-gray-700 mb-2">
-                            Who can register?
+                            Who can register? <span className="text-red-500">*</span>
                           </label>
                           <Controller
                             name="allowedCampuses"
                             control={control}
+                            rules={{
+                              validate: (value) =>
+                                (Array.isArray(value) && value.length > 0) ||
+                                "Select at least one campus",
+                            }}
                             render={({ field }) => (
-                              <div className="space-y-1.5 h-[102px] overflow-y-auto pr-2">
+                              <div
+                                id="allowedCampuses-group"
+                                tabIndex={-1}
+                                className={`space-y-1.5 h-[102px] overflow-y-auto pr-2 rounded-md ${
+                                  errors.allowedCampuses ? "border border-red-500 p-2" : ""
+                                }`}
+                              >
                                 {christCampuses.map((campus) => (
                                   <label
                                     key={campus}
@@ -1508,15 +2195,36 @@ export default function EventForm({
                             )}
                           />
                           <p className="text-xs text-gray-500 mt-2">
-                            {!watch("allowOutsiders") 
-                              ? "All campuses or select specific campuses where this event will be held (Mandatory)"
-                              : "Leave all unchecked to allow all campuses"}
+                            Select at least one campus that can register for this event.
                           </p>
+                          {errors.allowedCampuses && (
+                            <p className="text-red-500 text-xs mt-2">
+                              {errors.allowedCampuses.message as string}
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
+
+                <datalist id="organizing-dept-list-event">
+                  {departmentOptions
+                    .filter((d) => d.value !== "all_departments")
+                    .map((dept) => (
+                      <option key={dept.value} value={dept.label} />
+                    ))}
+                </datalist>
+
+                <InputField
+                  label="Organizing department / committee:"
+                  name="organizingDept"
+                  list="organizing-dept-list-event"
+                  register={register}
+                  error={errors.organizingDept}
+                  required
+                  placeholder="e.g., Department of Computer Science /  Student Welfare Organization"
+                />
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
                   <MultiSelectDropdown
@@ -1539,62 +2247,94 @@ export default function EventForm({
                   />
                 </div>
 
-                <datalist id="organizing-dept-list-event">
-                  {departmentOptions
-                    .filter((d) => d.value !== "all_departments")
-                    .map((dept) => (
-                      <option key={dept.value} value={dept.label} />
-                    ))}
-                </datalist>
-
-                <InputField
-                  label="Organizing department / committee:"
-                  name="organizingDept"
-                  list="organizing-dept-list-event"
-                  register={register}
-                  error={errors.organizingDept}
-                  required
-                  placeholder="e.g., Department of Computer Science /  Student Welfare Organization"
-                />
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
-                  <CustomDropdown
-                    name="festEvent"
-                    control={control}
-                    options={fetchedFests.length > 0 ? fetchedFests : [{ value: "none", label: "None" }]}
-                    placeholder="Select fest event (if any)"
-                    label="Fest event: (optional)"
-                    error={errors.festEvent}
-                  />
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between sm:justify-start">
-                    <label
-                      htmlFor="provideClaims"
-                      className="text-sm font-medium text-gray-700 mr-4"
-                    >
-                      Provide claims for periods missed
+                <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 sm:py-3.5">
+                  <div className="flex items-center justify-between gap-4">
+                    <label className="text-sm font-medium text-gray-700">
+                      Are claims provided for this fest?
                     </label>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <Controller
-                        name="provideClaims"
-                        control={control}
-                        render={({ field }) => (
-                          <input
-                            type="checkbox"
-                            id="provideClaims"
-                            checked={!!field.value}
-                            onChange={(e) => field.onChange(e.target.checked)}
-                            className="sr-only peer"
-                          />
-                        )}
-                      />
-                      <div className={toggleTrackClass}></div>
-                    </label>
+                    <Controller
+                      name="provideClaims"
+                      control={control}
+                      render={({ field }) => {
+                        const claimsEnabled = Boolean(field.value);
+
+                        return (
+                          <label
+                            htmlFor="provideClaims"
+                            className="relative inline-flex items-center cursor-pointer select-none"
+                          >
+                            <input
+                              type="checkbox"
+                              id="provideClaims"
+                              checked={claimsEnabled}
+                              onChange={(e) => field.onChange(e.target.checked)}
+                              className="sr-only"
+                            />
+
+                            <div
+                              className={`relative h-8 w-20 rounded-full border-2 transition-colors ${
+                                claimsEnabled
+                                  ? "border-green-500 bg-green-50"
+                                  : "border-red-500 bg-red-50"
+                              }`}
+                            >
+                              <span
+                                className={`absolute top-1/2 -translate-y-1/2 text-[10px] font-semibold tracking-wide ${
+                                  claimsEnabled
+                                    ? "left-2 text-green-700"
+                                    : "right-2 text-red-700"
+                                }`}
+                              >
+                                {claimsEnabled ? "YES" : "NO"}
+                              </span>
+
+                              <span
+                                className={`absolute top-0.5 left-0.5 flex h-6 w-6 items-center justify-center rounded-full border bg-white transition-transform ${
+                                  claimsEnabled
+                                    ? "translate-x-[3.25rem] border-green-500 text-green-600"
+                                    : "translate-x-0 border-red-500 text-red-600"
+                                }`}
+                              >
+                                {claimsEnabled ? (
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    strokeWidth={2.5}
+                                    stroke="currentColor"
+                                    className="h-3.5 w-3.5"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M4.5 12.75l6 6 9-13.5"
+                                    />
+                                  </svg>
+                                ) : (
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    strokeWidth={2.5}
+                                    stroke="currentColor"
+                                    className="h-3.5 w-3.5"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M6 18L18 6M6 6l12 12"
+                                    />
+                                  </svg>
+                                )}
+                              </span>
+                            </div>
+                          </label>
+                        );
+                      }}
+                    />
                   </div>
                   {errors.provideClaims && (
-                    <p className="text-red-500 text-xs mt-1">
+                    <p className="text-red-500 text-xs mt-2">
                       {errors.provideClaims.message}
                     </p>
                   )}
@@ -1636,7 +2376,7 @@ export default function EventForm({
                   error={errors.whatsappLink}
                   placeholder="https://chat.whatsapp.com/your-group-invite"
                 />
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
                   <InputField
                     label="Location / Venue:"
                     name="location"
@@ -1653,15 +2393,6 @@ export default function EventForm({
                     register={register}
                     error={errors.registrationFee}
                     placeholder="0 for free event"
-                  />
-                  <InputField
-                    label="Max participants / team:"
-                    name="maxParticipants"
-                    type="text"
-                    inputMode="numeric"
-                    register={register}
-                    error={errors.maxParticipants}
-                    placeholder="e.g., 1 (individual), 5 (team)"
                   />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
@@ -1730,60 +2461,141 @@ export default function EventForm({
                   <button
                     type="button"
                     onClick={handleNavigationToDashboard}
-                    disabled={isSubmittingProp || rhfIsSubmitting || isDeleting}
+                    disabled={
+                      isSubmittingProp ||
+                      rhfIsSubmitting ||
+                      isDeleting ||
+                      isOpeningPreview
+                    }
                     className="w-full sm:w-auto px-5 py-2.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                   >
                     Cancel
                   </button>
                   
-                  {isEditMode && (
-                    <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
-                      {onToggleArchive && (
+                  <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={handlePreview}
+                      disabled={
+                        isSubmittingProp ||
+                        rhfIsSubmitting ||
+                        isDeleting ||
+                        isOpeningPreview
+                      }
+                      className="w-full sm:w-auto px-5 py-2.5 border border-[#154CB3] text-[#154CB3] bg-white text-sm font-medium rounded-md hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      {isOpeningPreview ? "Opening preview..." : "Preview"}
+                    </button>
+
+                    {onSubmitDraft && (
+                      <button
+                        type="button"
+                        onClick={handleSubmit(processDraftSubmit, handleInvalidSubmit)}
+                        disabled={
+                          isSubmittingProp ||
+                          rhfIsSubmitting ||
+                          isDeleting ||
+                          isOpeningPreview
+                        }
+                        className="w-full sm:w-auto px-5 py-2.5 border border-amber-400 text-amber-800 bg-amber-50 text-sm font-medium rounded-md hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        {isSubmittingProp || rhfIsSubmitting
+                          ? "Saving Draft..."
+                          : "Save as Draft"}
+                      </button>
+                    )}
+
+                    {isEditMode && (
+                      <div className="relative" ref={actionsDropdownRef}>
                         <button
                           type="button"
-                          onClick={onToggleArchive}
+                          onClick={() => setIsActionsDropdownOpen(!isActionsDropdownOpen)}
                           disabled={isArchiveUpdating || isSubmittingProp || rhfIsSubmitting || isDeleting}
-                          className={`w-full sm:w-auto px-4 py-2.5 text-sm font-medium rounded-md border transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed ${
-                            isArchiveUpdating || isSubmittingProp || rhfIsSubmitting || isDeleting
-                              ? "bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed"
-                              : isArchived
-                                ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 focus:ring-emerald-500"
-                                : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 focus:ring-amber-500"
-                          }`}
+                          className="w-full sm:w-auto px-4 py-2.5 border border-gray-300 text-gray-700 bg-white text-sm font-medium rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
                         >
-                          {isArchiveUpdating ? "Saving..." : isArchived ? "Unarchive" : "Archive"}
+                          <span>More actions</span>
+                          <svg className={`w-4 h-4 transition-transform ${isActionsDropdownOpen ? 'rotate-180' : ''}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                          </svg>
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={closeRegistration}
-                        disabled={isSubmittingProp || rhfIsSubmitting || isDeleting}
-                        className="w-full sm:w-auto px-4 py-2.5 border border-red-200 bg-red-50 text-red-700 text-sm font-medium rounded-md hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
-                      >
-                        Close Registrations
-                      </button>
-                      <button
-                        type="button"
-                        onClick={openDeleteConfirmation}
-                        disabled={isDeleting || isSubmittingProp || rhfIsSubmitting}
-                        className="w-full sm:w-auto px-4 py-2.5 border border-red-300 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
-                      >
-                        {isDeleting ? "Deleting..." : "Delete"}
-                      </button>
-                    </div>
-                  )}
+                        {isActionsDropdownOpen && (
+                          <div className="absolute right-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-10">
+                            {onToggleArchive && !isDraft && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onToggleArchive();
+                                  setIsActionsDropdownOpen(false);
+                                }}
+                                disabled={isArchiveUpdating || isSubmittingProp || rhfIsSubmitting || isDeleting}
+                                className={`w-full text-left px-4 py-3 text-sm font-medium border-b border-gray-100 first:rounded-t-lg last:border-b-0 last:rounded-b-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2 ${
+                                  isArchiveUpdating || isSubmittingProp || rhfIsSubmitting || isDeleting
+                                    ? "text-gray-500 cursor-not-allowed"
+                                    : isArchived
+                                    ? "text-emerald-600 hover:bg-emerald-50"
+                                    : "text-amber-600 hover:bg-amber-50"
+                                }`}
+                              >
+                                <svg className="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h6a2 2 0 012 2v2h4a1 1 0 110 2h-1v12a2 2 0 01-2 2H7a2 2 0 01-2-2V9H4a1 1 0 110-2h4V5z" />
+                                </svg>
+                                {isArchiveUpdating ? "Saving..." : isArchived ? "Restore" : "Archive"}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                closeRegistration();
+                                setIsActionsDropdownOpen(false);
+                              }}
+                              disabled={isSubmittingProp || rhfIsSubmitting || isDeleting}
+                              className="w-full text-left px-4 py-3 text-red-600 hover:bg-red-50 text-sm font-medium border-b border-gray-100 first:rounded-t-lg last:border-b-0 last:rounded-b-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                              <svg className="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16H9v-4h4v4zM9 8h4V4H9v4zM7 20h10a2 2 0 002-2V4a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                              </svg>
+                              Close Registrations
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                openDeleteConfirmation();
+                                setIsActionsDropdownOpen(false);
+                              }}
+                              disabled={isDeleting || isSubmittingProp || rhfIsSubmitting}
+                              className="w-full text-left px-4 py-3 text-red-600 hover:bg-red-50 text-sm font-medium last:rounded-b-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                              <svg className="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                              {isDeleting ? "Deleting..." : "Delete Event"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   
                   <button
                     type="submit"
-                    disabled={isSubmittingProp || rhfIsSubmitting || isDeleting}
+                    disabled={
+                      isSubmittingProp ||
+                      rhfIsSubmitting ||
+                      isDeleting ||
+                      isOpeningPreview
+                    }
                     className="w-full sm:w-auto px-6 py-2.5 bg-[#154CB3] text-white text-sm font-medium rounded-md hover:bg-[#0f3a7a] focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                   >
                     {isSubmittingProp || rhfIsSubmitting
                       ? isEditMode
-                        ? "Updating..."
+                        ? isDraft
+                          ? "Publishing..."
+                          : "Updating..."
                         : "Publishing..."
                       : isEditMode
-                      ? "Update Event"
+                      ? isDraft
+                        ? "Publish Event"
+                        : "Update Event"
                       : "Publish Event"}
                   </button>
                 </div>

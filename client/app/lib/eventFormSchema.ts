@@ -106,7 +106,16 @@ export const eventFormSchema = z
         "Invalid fee format. Enter a number (e.g., 0, 50, 100.50)"
       )
       .transform((val) => (val === "" ? undefined : val)),
+    isTeamEvent: z.boolean().default(false),
     maxParticipants: z
+      .string()
+      .optional()
+      .refine(
+        (val) => !val || (Number(val) > 0 && Number.isInteger(Number(val))),
+        "Must be a positive integer"
+      )
+      .transform((val) => (val === "" ? undefined : val)),
+    minParticipants: z
       .string()
       .optional()
       .refine(
@@ -145,9 +154,11 @@ export const eventFormSchema = z
       )
       .transform((val) => (val === "" ? undefined : val)),
 
-    // Campus fields (only used when outsiders are NOT allowed)
-    campusHostedAt: z.string().optional().default(""),
-    allowedCampuses: z.array(z.string()).optional().default([]),
+    // Campus fields (mandatory)
+    campusHostedAt: z.string().min(1, "Hosted campus is required"),
+    allowedCampuses: z
+      .array(z.string())
+      .min(1, "Select at least one campus"),
 
     imageFile: fileSchema(
       MAX_FILE_SIZE_IMAGE,
@@ -184,6 +195,37 @@ export const eventFormSchema = z
     eventHeads: z.array(z.string().email("Invalid email format")).optional(),
     customFields: z.array(customFieldSchema).optional(),
   })
+  .refine(
+    (data) => {
+      if (!data.isTeamEvent) return true;
+      return !!data.maxParticipants && Number(data.maxParticipants) > 1;
+    },
+    {
+      message: "For team events, max participants per team must be at least 2",
+      path: ["maxParticipants"],
+    }
+  )
+  .refine(
+    (data) => {
+      if (!data.isTeamEvent) return true;
+      return !!data.minParticipants && Number(data.minParticipants) > 1;
+    },
+    {
+      message: "For team events, min participants per team must be at least 2",
+      path: ["minParticipants"],
+    }
+  )
+  .refine(
+    (data) => {
+      if (!data.isTeamEvent) return true;
+      if (!data.minParticipants || !data.maxParticipants) return true;
+      return Number(data.minParticipants) <= Number(data.maxParticipants);
+    },
+    {
+      message: "Min participants per team cannot exceed max participants per team",
+      path: ["minParticipants"],
+    }
+  )
   .refine(
     (data) => {
       if (data.eventDate && data.endDate) {

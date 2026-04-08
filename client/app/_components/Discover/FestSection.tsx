@@ -12,6 +12,7 @@ interface Fest {
   fest_image_url: string;
   opening_date: Date;
   closing_date: Date;
+  is_archived?: boolean | null;
 }
 
 interface FestsSectionProps {
@@ -41,6 +42,7 @@ export const FestsSection = ({
               dateRange={formatDateRange(fest.opening_date, fest.closing_date)}
               image={fest.fest_image_url}
               baseUrl={baseUrl}
+              isArchived={Boolean(fest.is_archived)}
             />
           </div>
         ))}
