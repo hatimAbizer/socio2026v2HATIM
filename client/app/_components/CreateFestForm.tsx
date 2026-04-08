@@ -756,9 +756,9 @@ function CreateFestForm(props?: CreateFestProps) {
   const title = props?.title || "";
   const openingDate = props?.openingDate || "";
   const closingDate = props?.closingDate || "";
-  const isTeamEvent = props?.isTeamEvent || false;
-  const minParticipants = props?.minParticipants || (isTeamEvent ? "2" : "1");
-  const maxParticipants = props?.maxParticipants || (isTeamEvent ? "2" : "1");
+  const isTeamEvent = false;
+  const minParticipants = "1";
+  const maxParticipants = "1";
   const detailedDescription = props?.detailedDescription || "";
   const department: string[] = props?.department || [];
   const category = props?.category || "";
@@ -775,7 +775,7 @@ function CreateFestForm(props?: CreateFestProps) {
   // New fest enhancement fields
   const venue = props?.venue || "";
   const status = props?.status || "upcoming";
-  const registration_deadline = props?.registration_deadline || "";
+  const registration_deadline = "";
   const timeline = props?.timeline || [];
   const sponsors = props?.sponsors || [];
   const social_links = props?.social_links || [];
@@ -865,37 +865,6 @@ function CreateFestForm(props?: CreateFestProps) {
             });
 
             const parsedCustomFields = parseFestCustomFields(data.fest.custom_fields);
-            const customTeamSettings = extractTeamSettingsFromCustomFields(parsedCustomFields);
-
-            const directMaxParticipants = Number(
-              data.fest.participants_per_team ?? data.fest.max_participants ?? 1
-            );
-            const directTeamEnabled =
-              Number.isFinite(directMaxParticipants) && directMaxParticipants > 1;
-            const normalizedDirectMax = directTeamEnabled
-              ? Math.max(2, Math.floor(directMaxParticipants))
-              : 1;
-
-            const directMinParticipants = Number(
-              data.fest.min_participants ?? (directTeamEnabled ? 2 : 1)
-            );
-            const normalizedDirectMin = directTeamEnabled
-              ? Math.min(
-                  Math.max(
-                    Number.isFinite(directMinParticipants)
-                      ? Math.floor(directMinParticipants)
-                      : 2,
-                    2
-                  ),
-                  normalizedDirectMax
-                )
-              : 1;
-
-            const resolvedIsTeamEvent = customTeamSettings?.isTeamEvent ?? directTeamEnabled;
-            const resolvedMaxParticipants = customTeamSettings?.maxParticipants
-              ?? String(resolvedIsTeamEvent ? normalizedDirectMax : 1);
-            const resolvedMinParticipants = customTeamSettings?.minParticipants
-              ?? String(resolvedIsTeamEvent ? normalizedDirectMin : 1);
             
             setFormData({
               title: data.fest.fest_title || "",
@@ -905,9 +874,9 @@ function CreateFestForm(props?: CreateFestProps) {
               closingDate: data.fest.closing_date
                 ? formatDateToYYYYMMDD(new Date(data.fest.closing_date))
                 : "",
-              isTeamEvent: resolvedIsTeamEvent,
-              minParticipants: resolvedMinParticipants,
-              maxParticipants: resolvedMaxParticipants,
+              isTeamEvent: false,
+              minParticipants: "1",
+              maxParticipants: "1",
               detailedDescription: data.fest.description || "",
               department: data.fest.department_access || [],
               category: data.fest.category || "",
@@ -917,9 +886,7 @@ function CreateFestForm(props?: CreateFestProps) {
               organizingDept: data.fest.organizing_dept || "",
               venue: data.fest.venue || "",
               status: data.fest.status || "upcoming",
-              registration_deadline: data.fest.registration_deadline
-                ? formatDateToYYYYMMDD(new Date(data.fest.registration_deadline))
-                : "",
+              registration_deadline: "",
               timeline: data.fest.timeline || [],
               sponsors: data.fest.sponsors || [],
               social_links: data.fest.social_links || [],
@@ -1473,7 +1440,7 @@ function CreateFestForm(props?: CreateFestProps) {
         createdBy: session.user.email,
         venue: formData.venue,
         status: formData.status,
-        registration_deadline: formData.registration_deadline || null,
+        registration_deadline: null,
         timeline: formData.timeline,
         sponsors: formData.sponsors,
         social_links: formData.social_links,
@@ -1906,95 +1873,6 @@ function CreateFestForm(props?: CreateFestProps) {
                       placeholder="YYYY-MM-DD"
                       required
                     />
-                  </div>
-                </div>
-
-                <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 sm:py-3.5">
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-3">
-                    <div className="flex items-center gap-3 flex-shrink-0">
-                      <label
-                        htmlFor="isTeamEvent"
-                        className="text-sm font-medium text-gray-700 whitespace-nowrap"
-                      >
-                        Team event
-                      </label>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          id="isTeamEvent"
-                          checked={formData.isTeamEvent}
-                          onChange={(event) =>
-                            handleTeamEventToggle(event.target.checked)
-                          }
-                          className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-[#154CB3] rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#154CB3]"></div>
-                      </label>
-                    </div>
-
-                    {formData.isTeamEvent && (
-                      <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-                        <div className="flex-1 sm:flex-none">
-                          <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                            Min
-                          </label>
-                          <input
-                            id="minParticipants"
-                            type="text"
-                            inputMode="numeric"
-                            placeholder="e.g., 2"
-                            value={formData.minParticipants}
-                            onChange={(event) =>
-                              handleTeamParticipantChange(
-                                "minParticipants",
-                                event.target.value
-                              )
-                            }
-                            onBlur={() => handleTeamParticipantBlur("minParticipants")}
-                            className={`w-full px-3 py-2 text-sm rounded-lg border transition-all ${
-                              errors.minParticipants
-                                ? "border-red-500 focus:ring-red-500"
-                                : "border-gray-300 focus:ring-[#154CB3]"
-                            } focus:outline-none focus:ring-1 focus:border-transparent`}
-                          />
-                          {errors.minParticipants && (
-                            <p className="text-red-500 text-xs mt-1">
-                              {errors.minParticipants}
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="flex-1 sm:flex-none">
-                          <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                            Max
-                          </label>
-                          <input
-                            id="maxParticipants"
-                            type="text"
-                            inputMode="numeric"
-                            placeholder="e.g., 5"
-                            value={formData.maxParticipants}
-                            onChange={(event) =>
-                              handleTeamParticipantChange(
-                                "maxParticipants",
-                                event.target.value
-                              )
-                            }
-                            onBlur={() => handleTeamParticipantBlur("maxParticipants")}
-                            className={`w-full px-3 py-2 text-sm rounded-lg border transition-all ${
-                              errors.maxParticipants
-                                ? "border-red-500 focus:ring-red-500"
-                                : "border-gray-300 focus:ring-[#154CB3]"
-                            } focus:outline-none focus:ring-1 focus:border-transparent`}
-                          />
-                          {errors.maxParticipants && (
-                            <p className="text-red-500 text-xs mt-1">
-                              {errors.maxParticipants}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 </div>
 
@@ -2549,16 +2427,6 @@ function CreateFestForm(props?: CreateFestProps) {
                         <option value="cancelled">Cancelled</option>
                       </select>
                     </div>
-                  </div>
-
-                  <div className="mb-6">
-                    <CustomDateInput
-                      id="registration_deadline"
-                      label="Registration Deadline"
-                      value={formData.registration_deadline}
-                      onChange={(value) => setFormData(prev => ({ ...prev, registration_deadline: value }))}
-                      placeholder="Select registration deadline"
-                    />
                   </div>
 
                   {/* Social Links */}
