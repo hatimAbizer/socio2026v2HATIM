@@ -21,11 +21,13 @@ export default function CreateEventPage() {
 
   const API_URL = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/api\/?$/, "");
 
-  const handleCreateEvent: SubmitHandler<EventFormData> = async (
-    dataFromHookForm
+  const submitEvent = async (
+    dataFromHookForm: EventFormData,
+    saveAsDraft: boolean
   ) => {
+
     console.log(
-      "CreateEventPage: handleCreateEvent CALLED. Data:",
+      `CreateEventPage: submitEvent CALLED. Mode: ${saveAsDraft ? "draft" : "publish"}. Data:`,
       JSON.stringify(dataFromHookForm, null, 2)
     );
 
@@ -156,11 +158,12 @@ export default function CreateEventPage() {
     appendIfExists("organizer_phone", dataFromHookForm.contactPhone);
     appendIfExists("whatsapp_invite_link", dataFromHookForm.whatsappLink);
 
+    const shouldSendNotifications =
+      !saveAsDraft && dataFromHookForm.sendNotifications !== false;
+
     formData.append("claims_applicable", String(dataFromHookForm.provideClaims));
-    formData.append(
-      "send_notifications",
-      String(dataFromHookForm.sendNotifications)
-    );
+    formData.append("send_notifications", String(shouldSendNotifications));
+    formData.append("is_archived", String(saveAsDraft));
     formData.append("on_spot", String(dataFromHookForm.onSpot));
     
     // Outsider registration fields
@@ -268,30 +271,37 @@ export default function CreateEventPage() {
 
       const result = await response.json();
       console.log(
-        "CreateEventPage: Event created successfully via API:",
+        `CreateEventPage: Event ${saveAsDraft ? "draft saved" : "created"} successfully via API:`,
         result
       );
     } catch (error: any) {
       console.error(
-        "CreateEventPage: Error during event creation fetch/processing:",
+        `CreateEventPage: Error during event ${saveAsDraft ? "draft save" : "creation"} fetch/processing:`,
         error.message,
         error
       );
       alert(
-        `Failed to create event. ${
+        `Failed to ${saveAsDraft ? "save draft" : "create event"}. ${
           error?.message || "An unknown error occurred."
         }`
       );
       throw error;
     } finally {
-      console.log("CreateEventPage: handleCreateEvent FINALLY block.");
+      console.log("CreateEventPage: submitEvent FINALLY block.");
       setIsSubmitting(false);
     }
   };
 
+  const handleCreateEvent: SubmitHandler<EventFormData> = async (dataFromHookForm) =>
+    submitEvent(dataFromHookForm, false);
+
+  const handleSaveDraft: SubmitHandler<EventFormData> = async (dataFromHookForm) =>
+    submitEvent(dataFromHookForm, true);
+
   return (
     <EventForm
       onSubmit={handleCreateEvent}
+      onSubmitDraft={handleSaveDraft}
       isSubmittingProp={isSubmitting}
       isEditMode={false}
       existingImageFileUrl={null}

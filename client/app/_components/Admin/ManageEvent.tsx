@@ -713,6 +713,7 @@ const CustomTimePicker: React.FC<CustomTimePickerProps> = ({
 
 interface EventFormProps {
   onSubmit: SubmitHandler<EventFormData>;
+  onSubmitDraft?: SubmitHandler<EventFormData>;
   defaultValues?: Partial<EventFormData>;
   isSubmittingProp: boolean;
   isEditMode: boolean;
@@ -855,6 +856,7 @@ const normalizeAllowedCampuses = (value: unknown): string[] =>
 
 export default function EventForm({
   onSubmit,
+  onSubmitDraft,
   defaultValues,
   isSubmittingProp,
   isEditMode,
@@ -1086,7 +1088,8 @@ export default function EventForm({
 
   const [isModalOpen, setIsModalOpen] = React.useState(false);
   const [isNavigating, setIsNavigating] = React.useState(false);
-  const [pendingSuccess, setPendingSuccess] = React.useState<"publish" | "delete" | null>(null);
+  const [pendingSuccess, setPendingSuccess] = React.useState<"publish" | "draft" | "delete" | null>(null);
+  const [successAction, setSuccessAction] = React.useState<"publish" | "draft">("publish");
   const [modalVisible, setModalVisible] = React.useState(false);
 
   const processSubmit: SubmitHandler<EventFormData> = async (data) => {
@@ -1096,11 +1099,33 @@ export default function EventForm({
     }
     try {
       await onSubmit(data);
+      setSuccessAction("publish");
       // Don't show modal yet — let the overlay finish its animation first
       setPendingSuccess("publish");
     } catch (error: any) {
       console.error(
         "EventForm: Error from onSubmit prop:",
+        error.message,
+        error
+      );
+    }
+  };
+
+  const processDraftSubmit: SubmitHandler<EventFormData> = async (data) => {
+    if (!onSubmitDraft) return;
+
+    if (Object.keys(errors).length > 0) {
+      console.error("EventForm: Validation errors while saving draft:", errors);
+      return;
+    }
+
+    try {
+      await onSubmitDraft(data);
+      setSuccessAction("draft");
+      setPendingSuccess("draft");
+    } catch (error: any) {
+      console.error(
+        "EventForm: Error from onSubmitDraft prop:",
         error.message,
         error
       );
@@ -1147,7 +1172,7 @@ export default function EventForm({
 
   // Called when PublishingOverlay finishes sprint + victory animation
   const handleOverlayComplete = React.useCallback(() => {
-    if (pendingSuccess === "publish") {
+    if (pendingSuccess === "publish" || pendingSuccess === "draft") {
       setIsModalOpen(true);
       setTimeout(() => setModalVisible(true), 30);
       setPendingSuccess(null);
@@ -1160,6 +1185,7 @@ export default function EventForm({
 
   const handleNavigationToDashboard = () => {
     setModalVisible(false);
+    setSuccessAction("publish");
     setTimeout(() => {
       setIsNavigating(true);
       router.push("/manage");
@@ -1432,11 +1458,16 @@ export default function EventForm({
                 </svg>
               </div>
               <h2 className="text-xl sm:text-2xl font-bold text-[#063168] mb-4">
-                Event {isEditMode ? "Updated!" : "Published!"}
+                {successAction === "draft"
+                  ? "Draft Saved!"
+                  : `Event ${isEditMode ? "Updated!" : "Published!"}`}
               </h2>
               <p className="text-gray-600 mb-6 text-sm sm:text-base">
-                Your event has been successfully{" "}
-                {isEditMode ? "updated" : "published"}.
+                {successAction === "draft"
+                  ? "Your event has been saved as a draft and is archived. You can publish it later by unarchiving it."
+                  : `Your event has been successfully ${
+                      isEditMode ? "updated" : "published"
+                    }.`}
               </p>
               <button
                 onClick={handleNavigationToDashboard}
@@ -2205,6 +2236,24 @@ export default function EventForm({
                   >
                     {isOpeningPreview ? "Opening preview..." : "Preview"}
                   </button>
+
+                  {onSubmitDraft && (
+                    <button
+                      type="button"
+                      onClick={handleSubmit(processDraftSubmit)}
+                      disabled={
+                        isSubmittingProp ||
+                        rhfIsSubmitting ||
+                        isDeleting ||
+                        isOpeningPreview
+                      }
+                      className="w-full sm:w-auto px-5 py-2.5 border border-amber-400 text-amber-800 bg-amber-50 text-sm font-medium rounded-md hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      {isSubmittingProp || rhfIsSubmitting
+                        ? "Saving Draft..."
+                        : "Save as Draft"}
+                    </button>
+                  )}
                   
                   <button
                     type="submit"

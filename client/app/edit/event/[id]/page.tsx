@@ -322,7 +322,12 @@ export default function EditEventPage() {
     }
   };
 
-  const handleUpdateEvent: SubmitHandler<EventFormData> = async (formData) => {
+  const submitEventUpdate = async (
+    formData: EventFormData,
+    options?: { archiveAsDraft?: boolean }
+  ) => {
+    const archiveAsDraft = Boolean(options?.archiveAsDraft);
+
     if (!session) {
       setErrorMessage(
         "Authentication session expired or not found. Please log in again."
@@ -369,6 +374,9 @@ export default function EditEventPage() {
     payload.append("whatsapp_invite_link", formData.whatsappLink || "");
     payload.append("claims_applicable", String(formData.provideClaims));
     payload.append("on_spot", String(formData.onSpot || false));
+    if (archiveAsDraft) {
+      payload.append("is_archived", "true");
+    }
 
     payload.append("department_access", JSON.stringify(formData.department || []));
     payload.append(
@@ -515,14 +523,24 @@ export default function EditEventPage() {
           return;
         } else {
           // Show regular success message
-          toast.success("Event updated successfully!", { duration: 3000 });
+          toast.success(
+            archiveAsDraft
+              ? "Draft saved successfully!"
+              : "Event updated successfully!",
+            { duration: 3000 }
+          );
         }
       } catch (e) {
         console.warn(
           "Could not parse update response as JSON, or event data missing in response."
         );
         // Still show success if response was ok
-        toast.success("Event updated successfully!", { duration: 3000 });
+        toast.success(
+          archiveAsDraft
+            ? "Draft saved successfully!"
+            : "Event updated successfully!",
+          { duration: 3000 }
+        );
       }
     } catch (error: any) {
       console.error("Error in handleUpdateEvent:", error);
@@ -535,6 +553,12 @@ export default function EditEventPage() {
       setIsSubmitting(false);
     }
   };
+
+  const handleUpdateEvent: SubmitHandler<EventFormData> = async (formData) =>
+    submitEventUpdate(formData, { archiveAsDraft: false });
+
+  const handleSaveDraft: SubmitHandler<EventFormData> = async (formData) =>
+    submitEventUpdate(formData, { archiveAsDraft: true });
 
   if (authIsLoading || (isLoading && !initialData && !errorMessage)) {
     return (
@@ -604,6 +628,7 @@ export default function EditEventPage() {
       )}
       <EventForm
         onSubmit={handleUpdateEvent}
+        onSubmitDraft={handleSaveDraft}
         defaultValues={initialData}
         isSubmittingProp={isSubmitting}
         isEditMode={true}

@@ -473,8 +473,22 @@ router.post(
         rules,
         schedule,
         prizes,
-        max_participants
+        max_participants,
+        send_notifications,
+        is_archived,
+        save_as_draft
       } = req.body;
+
+      const shouldArchiveAsDraft =
+        asBoolean(is_archived) ||
+        asBoolean(save_as_draft);
+      const hasExplicitNotificationPreference =
+        send_notifications !== undefined &&
+        send_notifications !== null &&
+        String(send_notifications).trim() !== "";
+      const shouldSendNotifications =
+        !shouldArchiveAsDraft &&
+        (hasExplicitNotificationPreference ? asBoolean(send_notifications) : true);
 
       // Validation
       if (!title || typeof title !== "string" || title.trim() === "") {
@@ -619,6 +633,11 @@ router.post(
         auth_uuid: req.userId,
         registration_deadline: req.body.registration_deadline || null,
         total_participants: 0,
+        is_archived: shouldArchiveAsDraft,
+        archived_at: shouldArchiveAsDraft ? new Date().toISOString() : null,
+        archived_by: shouldArchiveAsDraft
+          ? req.userInfo?.email || req.userId || "system:draft"
+          : null,
         // Outsider & campus fields
         allow_outsiders: req.body.allow_outsiders === "true" || req.body.allow_outsiders === true ? 1 : 0,
         on_spot: req.body.on_spot === "true" || req.body.on_spot === true ? 1 : 0,
@@ -636,21 +655,25 @@ router.post(
       console.log("✅ Event inserted successfully:", event_id);
 
       // Send notifications to all users about the new event (non-blocking)
-      sendBroadcastNotification({
-        title: 'New Event Published',
-        message: `${title} — Check out this new event!`,
-        type: 'info',
-        event_id: event_id,
-        event_title: title,
-        action_url: `/event/${event_id}`
-      }).then(() => {
-        console.log(`✅ Sent notifications for new event: ${title}`);
-      }).catch((notifError) => {
-        console.error('❌ Failed to send event notifications:', notifError);
-      });
+      if (shouldSendNotifications) {
+        sendBroadcastNotification({
+          title: 'New Event Published',
+          message: `${title} — Check out this new event!`,
+          type: 'info',
+          event_id: event_id,
+          event_title: title,
+          action_url: `/event/${event_id}`
+        }).then(() => {
+          console.log(`✅ Sent notifications for new event: ${title}`);
+        }).catch((notifError) => {
+          console.error('❌ Failed to send event notifications:', notifError);
+        });
+      } else {
+        console.log(`ℹ️ Notifications skipped for event ${event_id} (draft or notifications disabled).`);
+      }
 
       // Push to UniversityGated if outsiders are enabled (non-blocking)
-      if (isGatedEnabled()) {
+      if (!shouldArchiveAsDraft && isGatedEnabled()) {
         const createdEvent = created[0];
         shouldPushEventToGated(createdEvent, queryOne).then(async (shouldPush) => {
           if (shouldPush) {
@@ -913,8 +936,20 @@ router.put(
         rules,
         schedule,
         prizes,
-        max_participants
+        max_participants,
+        is_archived,
+        save_as_draft
       } = req.body;
+
+      const rawArchivePreference =
+        is_archived !== undefined && is_archived !== null && String(is_archived).trim() !== ""
+          ? is_archived
+          : save_as_draft;
+      const hasArchivePreference =
+        rawArchivePreference !== undefined &&
+        rawArchivePreference !== null &&
+        String(rawArchivePreference).trim() !== "";
+      const shouldArchiveFromRequest = asBoolean(rawArchivePreference);
 
       // ─── AUTO-UNARCHIVE LOGIC ───────────────────────────────────────────
       // If an event was auto-archived (date passed) but then the date is changed
@@ -989,6 +1024,18 @@ router.put(
 
       // Prepare update payload
       // Note: Only include event_id if it's NOT changing (to avoid primary key update issues)
+      const archiveOverridePayload = hasArchivePreference
+        ? {
+            is_archived: shouldArchiveFromRequest,
+            archived_at: shouldArchiveFromRequest ? new Date().toISOString() : null,
+            archived_by: shouldArchiveFromRequest
+              ? req.userInfo?.email || req.userId || "system:draft"
+              : MANUAL_UNARCHIVE_OVERRIDE,
+          }
+        : shouldAutoUnarchive
+          ? { is_archived: false, archived_at: null, archived_by: null }
+          : {};
+
       const updateData = {
         title: title.trim(),
         description: description || null,
@@ -1024,8 +1071,7 @@ router.put(
         allowed_campuses: parsedAllowedCampuses,
         min_participants: parseOptionalInt(req.body.min_participants || req.body.minParticipants, 1),
         updated_at: new Date().toISOString(),
-        // Auto-unarchive if date changed to future
-        ...(shouldAutoUnarchive ? { is_archived: false, archived_at: null, archived_by: null } : {})
+        ...archiveOverridePayload
       };
 
       console.log("🔄 UPDATE DATA - File URLs being saved to database:");
