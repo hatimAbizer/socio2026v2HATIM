@@ -1200,6 +1200,7 @@ export default function EventForm({
   const watchedMaxParticipants = useWatch({ control, name: "maxParticipants" });
   const watchedMinParticipants = useWatch({ control, name: "minParticipants" });
   const watchedFestEvent = useWatch({ control, name: "festEvent" });
+  const lastAutoFilledFestRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!watchedIsTeamEvent) {
@@ -1238,40 +1239,29 @@ export default function EventForm({
     const watchedFestEventValue = String(watchedFestEvent ?? "").trim();
 
     if (!watchedFestEventValue || watchedFestEventValue.toLowerCase() === "none") {
-      setValue("department", [], {
-        shouldDirty: true,
-        shouldValidate: true,
-      });
-      setValue("organizingDept", "", {
-        shouldDirty: true,
-        shouldValidate: true,
-      });
-      setValue("category", "", {
-        shouldDirty: true,
-        shouldValidate: true,
-      });
-      setValue("campusHostedAt", "", {
-        shouldDirty: true,
-        shouldValidate: true,
-      });
-      setValue("allowedCampuses", [], {
-        shouldDirty: true,
-        shouldValidate: true,
-      });
-      setValue("allowOutsiders", false, {
-        shouldDirty: true,
-        shouldValidate: true,
-      });
+      // Do not clear user-entered values when fest is empty.
+      // This effect should only auto-fill when a fest is selected.
+      lastAutoFilledFestRef.current = null;
       return;
     }
 
+    const watchedFestCanonical = toCanonical(watchedFestEventValue);
     const selectedFest = fetchedFests.find(
       (fest) =>
         fest.value === watchedFestEventValue ||
-        toCanonical(fest.value) === toCanonical(watchedFestEventValue) ||
-        toCanonical(fest.label) === toCanonical(watchedFestEventValue)
+        toCanonical(fest.value) === watchedFestCanonical ||
+        toCanonical(fest.label) === watchedFestCanonical
     );
     if (!selectedFest) return;
+
+    const selectedFestKey = toCanonical(
+      selectedFest.value || selectedFest.label || watchedFestEventValue
+    );
+
+    // Apply auto-fill only once per selected fest to avoid re-overwriting edits.
+    if (selectedFestKey && lastAutoFilledFestRef.current === selectedFestKey) {
+      return;
+    }
 
     setValue("department", selectedFest.departmentAccess, {
       shouldDirty: true,
@@ -1297,6 +1287,10 @@ export default function EventForm({
       shouldDirty: true,
       shouldValidate: true,
     });
+
+    if (selectedFestKey) {
+      lastAutoFilledFestRef.current = selectedFestKey;
+    }
   }, [watchedFestEvent, fetchedFests, setValue]);
 
   const [isModalOpen, setIsModalOpen] = React.useState(false);
