@@ -129,7 +129,6 @@ function sanitizeUrlList(value: unknown): string[] {
 
 function sanitizeRunsheetItems(value: unknown): RunsheetItemRecord[] {
   const raw = Array.isArray(value) ? value : [];
-
   return raw.reduce<RunsheetItemRecord[]>((acc, entry, index) => {
     const row = asRecord(entry);
     const task = normalizeText(row.task || row.activity);

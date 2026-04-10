@@ -1,6 +1,11 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import {
+  SERVICE_ROLE_DASHBOARDS,
+  hasRoleAlias,
+  hasServiceRoleAccess,
+} from "./lib/roleDashboards";
 
 const publicPaths = ["/", "/auth/callback", "/error", "/about", "/auth", "/events", "/event/*", "/fests", "/fest/*", "/clubs", "/club/*", "/Discover", "/contact", "/faq", "/privacy", "/terms", "/cookies", "/pricing", "/solutions", "/support", "/support/*", "/about/*", "/app-download", "/prototype-website", "/prototype-website/*"];
 
@@ -80,6 +85,10 @@ export async function middleware(req: NextRequest) {
   const isCfoManagementRoute = pathname.startsWith("/manage/cfo");
   const isStudentOrganiserManagementRoute = pathname.startsWith("/manage/student-organiser");
   const isFinanceManagementRoute = pathname.startsWith("/manage/finance");
+  const matchedServiceRoleRoute = SERVICE_ROLE_DASHBOARDS.find((roleConfig) => {
+    const basePath = `/manage/${roleConfig.slug}`;
+    return pathname === basePath || pathname.startsWith(`${basePath}/`);
+  });
 
   if (user && isManagementRoute) {
     if (!user.email) {
@@ -92,34 +101,43 @@ export async function middleware(req: NextRequest) {
       .eq("email", user.email)
       .single();
 
-    const universityRole = String((userData as any)?.university_role || "").toLowerCase();
+    const normalizedUserData = (userData as Record<string, unknown> | null) || null;
+    const universityRole = normalizedUserData?.university_role;
+    const hasServiceRole = SERVICE_ROLE_DASHBOARDS.some((roleConfig) =>
+      hasServiceRoleAccess(normalizedUserData, roleConfig)
+    );
     const canManage =
       Boolean(userData?.is_masteradmin) ||
       Boolean(userData?.is_organiser) ||
       Boolean((userData as any)?.is_hod) ||
       Boolean((userData as any)?.is_dean) ||
       Boolean((userData as any)?.is_cfo) ||
-      universityRole === "cfo" ||
-      universityRole === "student_organiser" ||
       Boolean((userData as any)?.is_finance_officer) ||
-      universityRole === "finance_officer";
+      hasRoleAlias(universityRole, ["cfo"]) ||
+      hasRoleAlias(universityRole, ["student organiser", "student_organiser"]) ||
+      hasRoleAlias(universityRole, ["finance officer", "finance_officer"]) ||
+      hasServiceRole;
     const canAccessHodRoute =
       Boolean(userData?.is_masteradmin) ||
       Boolean((userData as any)?.is_hod) ||
-      universityRole === "hod";
+      hasRoleAlias(universityRole, ["hod"]);
     const canAccessDeanRoute =
       Boolean(userData?.is_masteradmin) ||
       Boolean((userData as any)?.is_dean) ||
-      universityRole === "dean";
+      hasRoleAlias(universityRole, ["dean"]);
     const canAccessCfoRoute =
       Boolean(userData?.is_masteradmin) ||
       Boolean((userData as any)?.is_cfo) ||
-      universityRole === "cfo";
+      hasRoleAlias(universityRole, ["cfo"]);
     const canAccessStudentOrganiserRoute =
-      universityRole === "student_organiser";
+      hasRoleAlias(universityRole, ["student organiser", "student_organiser"]);
     const canAccessFinanceRoute =
       Boolean((userData as any)?.is_finance_officer) ||
-      universityRole === "finance_officer";
+      hasRoleAlias(universityRole, ["finance officer", "finance_officer"]);
+    const canAccessServiceRoleRoute = matchedServiceRoleRoute
+      ? Boolean(userData?.is_masteradmin) ||
+        hasServiceRoleAccess(normalizedUserData, matchedServiceRoleRoute)
+      : true;
 
     if (isHodManagementRoute && (error || !userData || !canAccessHodRoute)) {
       return redirect("/error");
@@ -141,12 +159,17 @@ export async function middleware(req: NextRequest) {
       return redirect("/error");
     }
 
+    if (matchedServiceRoleRoute && (error || !userData || !canAccessServiceRoleRoute)) {
+      return redirect("/error");
+    }
+
     if (
       !isHodManagementRoute &&
       !isDeanManagementRoute &&
       !isCfoManagementRoute &&
       !isStudentOrganiserManagementRoute &&
       !isFinanceManagementRoute &&
+      !matchedServiceRoleRoute &&
       isManagementRoute &&
       (error || !userData || !canManage)
     ) {

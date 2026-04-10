@@ -53,6 +53,29 @@ const isMissingRelationError = (error) => {
   );
 };
 
+const isMissingColumnError = (error, columnName) => {
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || "").toLowerCase();
+  const details = String(error?.details || "").toLowerCase();
+  const hint = String(error?.hint || "").toLowerCase();
+  const normalizedColumn = String(columnName || "").toLowerCase();
+
+  if (!normalizedColumn) return false;
+
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes(`column \"${normalizedColumn}\"`) ||
+    message.includes(`${normalizedColumn} does not exist`) ||
+    (message.includes("could not find") && message.includes(normalizedColumn)) ||
+    details.includes(normalizedColumn) ||
+    hint.includes(normalizedColumn)
+  );
+};
+
+const isMissingAdditionalRequestsColumnError = (error) =>
+  isMissingColumnError(error, "additional_requests");
+
 const queryFestById = async (festId) => {
   if (!festId) {
     return null;
@@ -773,9 +796,23 @@ const validateAdditionalRequestsPayload = ({
 const findVenueConflict = async ({ venueBooking, ignoreEventId }) => {
   if (!venueBooking) return null;
 
-  const candidateEvents = await queryAll("events", {
-    select: "event_id,event_date,end_date,event_time,venue,additional_requests",
-  });
+  let candidateEvents = [];
+  try {
+    candidateEvents = await queryAll("events", {
+      select: "event_id,event_date,end_date,event_time,venue,additional_requests",
+    });
+  } catch (error) {
+    if (!isMissingAdditionalRequestsColumnError(error)) {
+      throw error;
+    }
+
+    console.warn(
+      "[VenueConflict] 'additional_requests' column missing; retrying conflict scan without it."
+    );
+    candidateEvents = await queryAll("events", {
+      select: "event_id,event_date,end_date,event_time,venue",
+    });
+  }
 
   for (const candidate of candidateEvents || []) {
     if (!candidate?.event_id) continue;
@@ -1400,8 +1437,7 @@ router.post(
         },
       });
 
-      // Insert event with creator's auth_uuid
-      const created = await insert("events", [{
+      const eventInsertPayload = {
         event_id,
         title: title.trim(),
         description: description || null,
@@ -1445,7 +1481,26 @@ router.post(
         allowed_campuses: parsedAllowedCampuses,
         min_participants: parseOptionalInt(req.body.min_participants || req.body.minParticipants, 1),
         additional_requests: additionalRequestsValidation.additionalRequests,
-      }]);
+      };
+
+      // Insert event with creator's auth_uuid
+      let created;
+      try {
+        created = await insert("events", [eventInsertPayload]);
+      } catch (insertError) {
+        if (!isMissingAdditionalRequestsColumnError(insertError)) {
+          throw insertError;
+        }
+
+        console.warn(
+          "[EventCreate] 'additional_requests' column missing; retrying create without additional_requests payload."
+        );
+        const fallbackInsertPayload = {
+          ...eventInsertPayload,
+        };
+        delete fallbackInsertPayload.additional_requests;
+        created = await insert("events", [fallbackInsertPayload]);
+      }
 
       if (!created || created.length === 0) {
         throw new Error("Event was not created successfully (no rows returned from insert).");
@@ -2059,7 +2114,23 @@ router.put(
         }
       }
 
-      const updated = await update("events", updateData, { event_id: eventId });
+      let updated;
+      try {
+        updated = await update("events", updateData, { event_id: eventId });
+      } catch (updateError) {
+        if (!isMissingAdditionalRequestsColumnError(updateError)) {
+          throw updateError;
+        }
+
+        console.warn(
+          "[EventUpdate] 'additional_requests' column missing; retrying update without additional_requests payload."
+        );
+        const fallbackUpdateData = {
+          ...updateData,
+        };
+        delete fallbackUpdateData.additional_requests;
+        updated = await update("events", fallbackUpdateData, { event_id: eventId });
+      }
 
       const notifyPublishIfNeeded = (eventRecord) => {
         if (!shouldSendPublishNotifications) {

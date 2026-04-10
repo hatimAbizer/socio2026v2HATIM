@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAuth } from "@/context/AuthContext";
 import {
   useEvents,
@@ -32,6 +32,10 @@ import {
   History,
   Pencil,
 } from "lucide-react";
+import {
+  getAccessibleServiceRoleDashboards,
+  hasRoleAlias,
+} from "@/lib/roleDashboards";
 
 // ─── TYPES & CONSTANTS ──────────────────────────────────────────────────────
 interface Fest {
@@ -46,7 +50,7 @@ interface Fest {
   contact_email?: string | null;
   event_heads?: Array<{ email?: string | null } | string>;
   campus_hosted_at?: string | null;
-  is_draft?: boolean | number | string;
+  is_draft?: boolean | number | string | null;
   is_archived?: boolean;
   archived_at?: string | null;
   workflow_status?: string | null;
@@ -449,14 +453,22 @@ export default function ManageDashboard() {
   const [authToken, setAuthToken] = useState<string | null>(null);
   const { userData, isMasterAdmin } = useAuth();
   const isOrganiser = Boolean(userData?.is_organiser);
-  const universityRole = String((userData as any)?.university_role || "").toLowerCase().trim();
-  const isStudentOrganiser = universityRole === "student_organiser";
-  const isHod = Boolean((userData as any)?.is_hod) || universityRole === "hod";
-  const isDean = Boolean((userData as any)?.is_dean) || universityRole === "dean";
-  const isCfo = Boolean((userData as any)?.is_cfo) || universityRole === "cfo";
+  const universityRole = (userData as any)?.university_role;
+  const isStudentOrganiser = hasRoleAlias(universityRole, ["student organiser", "student_organiser"]);
+  const isHod = Boolean((userData as any)?.is_hod) || hasRoleAlias(universityRole, ["hod"]);
+  const isDean = Boolean((userData as any)?.is_dean) || hasRoleAlias(universityRole, ["dean"]);
+  const isCfo = Boolean((userData as any)?.is_cfo) || hasRoleAlias(universityRole, ["cfo"]);
   const isFinanceOfficer =
     Boolean((userData as any)?.is_finance_officer) ||
-    universityRole === "finance_officer";
+    hasRoleAlias(universityRole, ["finance officer", "finance_officer"]);
+  const accessibleServiceRoleDashboards = useMemo(
+    () =>
+      getAccessibleServiceRoleDashboards(
+        (userData as Record<string, unknown> | null) || null,
+        isMasterAdmin
+      ),
+    [userData, isMasterAdmin]
+  );
   const canOpenHodDashboard = isHod || isMasterAdmin;
   const canOpenDeanDashboard = isDean || isMasterAdmin;
   const canOpenCfoDashboard = isCfo || isMasterAdmin;
@@ -515,6 +527,11 @@ export default function ManageDashboard() {
 
     if (isFinanceOfficer) {
       router.replace("/manage/finance");
+      return;
+    }
+
+    if (accessibleServiceRoleDashboards.length > 0) {
+      router.replace(`/manage/${accessibleServiceRoleDashboards[0].slug}`);
     }
   }, [
     userData,
@@ -525,6 +542,7 @@ export default function ManageDashboard() {
     isDean,
     isCfo,
     isFinanceOfficer,
+    accessibleServiceRoleDashboards,
     router,
   ]);
 
@@ -1401,7 +1419,8 @@ export default function ManageDashboard() {
           canOpenDeanDashboard ||
           canOpenCfoDashboard ||
           canOpenStudentOrganiserDashboard ||
-          canOpenFinanceDashboard) && (
+          canOpenFinanceDashboard ||
+          accessibleServiceRoleDashboards.length > 0) && (
           <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Approval Dashboards</p>
             <p className="mt-1 text-sm text-slate-600">
@@ -1448,6 +1467,15 @@ export default function ManageDashboard() {
                   Open Finance Dashboard <ArrowRight className="h-4 w-4" />
                 </Link>
               )}
+              {accessibleServiceRoleDashboards.map((roleConfig) => (
+                <Link
+                  key={roleConfig.slug}
+                  href={`/manage/${roleConfig.slug}`}
+                  className="inline-flex items-center gap-2 rounded-full border border-cyan-300 bg-cyan-50 px-4 py-2 text-sm font-semibold text-cyan-800 transition-colors hover:bg-cyan-100"
+                >
+                  Open {roleConfig.label} Dashboard <ArrowRight className="h-4 w-4" />
+                </Link>
+              ))}
             </div>
           </div>
         )}

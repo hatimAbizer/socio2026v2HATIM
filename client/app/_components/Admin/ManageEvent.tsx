@@ -1001,6 +1001,48 @@ const EVENT_ERROR_SELECTOR_MAP: Record<string, string> = {
   contactPhone: "#contactPhone",
 };
 
+const ADDITIONAL_REQUEST_STEPS = [
+  { key: "it", label: "IT" },
+  { key: "venue", label: "Venue" },
+  { key: "catering", label: "Catering" },
+  { key: "stalls", label: "Stalls" },
+  { key: "security", label: "Security" },
+] as const;
+
+type AdditionalRequestStepKey =
+  (typeof ADDITIONAL_REQUEST_STEPS)[number]["key"];
+
+const ADDITIONAL_REQUEST_STEP_FIELD_MAP: Record<
+  AdditionalRequestStepKey,
+  string[]
+> = {
+  it: ["additionalRequests.it.enabled", "additionalRequests.it.description"],
+  venue: [
+    "additionalRequests.venue.enabled",
+    "additionalRequests.venue.selectedVenue",
+    "additionalRequests.venue.customVenue",
+    "additionalRequests.venue.startTime",
+    "additionalRequests.venue.endTime",
+  ],
+  catering: [
+    "additionalRequests.catering.enabled",
+    "additionalRequests.catering.approximateCount",
+    "additionalRequests.catering.description",
+  ],
+  stalls: [
+    "additionalRequests.stalls.enabled",
+    "additionalRequests.stalls.canopySelected",
+    "additionalRequests.stalls.canopyQuantity",
+    "additionalRequests.stalls.hardboardSelected",
+    "additionalRequests.stalls.hardboardQuantity",
+    "additionalRequests.stalls.description",
+  ],
+  security: [
+    "additionalRequests.security.enabled",
+    "additionalRequests.security.description",
+  ],
+};
+
 const getFirstErrorPath = (errorNode: unknown, prefix = ""): string | null => {
   if (!errorNode || typeof errorNode !== "object") return null;
 
@@ -1138,6 +1180,51 @@ export default function EventForm({
       ...defaultValues,
     },
   });
+
+  const [activeAdditionalRequestStep, setActiveAdditionalRequestStep] =
+    useState(0);
+  const [maxUnlockedAdditionalRequestStep, setMaxUnlockedAdditionalRequestStep] =
+    useState(0);
+
+  const validateAdditionalRequestStep = React.useCallback(
+    async (stepIndex: number) => {
+      const step = ADDITIONAL_REQUEST_STEPS[stepIndex];
+      if (!step) return true;
+
+      const fieldsToValidate = ADDITIONAL_REQUEST_STEP_FIELD_MAP[step.key];
+      if (!fieldsToValidate.length) return true;
+
+      return trigger(fieldsToValidate as any);
+    },
+    [trigger]
+  );
+
+  const handleNextAdditionalRequestStep = React.useCallback(async () => {
+    const isOnLastStep =
+      activeAdditionalRequestStep >= ADDITIONAL_REQUEST_STEPS.length - 1;
+    if (isOnLastStep) return;
+
+    const canProceed = await validateAdditionalRequestStep(
+      activeAdditionalRequestStep
+    );
+    if (!canProceed) return;
+
+    const nextStep = Math.min(
+      activeAdditionalRequestStep + 1,
+      ADDITIONAL_REQUEST_STEPS.length - 1
+    );
+
+    setMaxUnlockedAdditionalRequestStep((prev) => Math.max(prev, nextStep));
+    setActiveAdditionalRequestStep(nextStep);
+  }, [activeAdditionalRequestStep, validateAdditionalRequestStep]);
+
+  const handleAdditionalRequestStepClick = React.useCallback(
+    (stepIndex: number) => {
+      if (stepIndex > maxUnlockedAdditionalRequestStep) return;
+      setActiveAdditionalRequestStep(stepIndex);
+    },
+    [maxUnlockedAdditionalRequestStep]
+  );
 
   const scrollToFirstValidationError = React.useCallback(
     (formErrors: FieldErrors<EventFormData>) => {
@@ -1452,11 +1539,18 @@ export default function EventForm({
     const wasFestSelected = prevHasFestSelectedRef.current;
     prevHasFestSelectedRef.current = hasFestSelected;
 
+    if (!wasFestSelected && hasFestSelected) {
+      setActiveAdditionalRequestStep(0);
+      setMaxUnlockedAdditionalRequestStep(0);
+    }
+
     if (wasFestSelected && !hasFestSelected) {
       setValue("additionalRequests", getAdditionalRequestsDefaults(), {
         shouldDirty: true,
         shouldValidate: true,
       });
+      setActiveAdditionalRequestStep(0);
+      setMaxUnlockedAdditionalRequestStep(0);
     }
   }, [hasFestSelected, setValue]);
 
@@ -2228,7 +2322,46 @@ export default function EventForm({
                     </div>
 
                     <div className="space-y-4">
-                      <div className="bg-white border border-gray-200 rounded-xl p-4">
+                      <div className="overflow-x-auto pb-1">
+                        <div className="min-w-[560px] flex items-center">
+                          {ADDITIONAL_REQUEST_STEPS.map((step, stepIndex) => {
+                            const isActive = stepIndex === activeAdditionalRequestStep;
+                            const isUnlocked = stepIndex <= maxUnlockedAdditionalRequestStep;
+
+                            return (
+                              <React.Fragment key={step.key}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAdditionalRequestStepClick(stepIndex)}
+                                  disabled={!isUnlocked}
+                                  className={`relative flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold transition-all ${
+                                    isActive
+                                      ? "bg-[#154CB3] text-white shadow-[0_0_0_4px_rgba(21,76,179,0.15)]"
+                                      : isUnlocked
+                                      ? "bg-white text-[#063168] border border-[#154CB3]/40 hover:bg-[#154CB3]/10"
+                                      : "bg-gray-200 text-gray-500 cursor-not-allowed"
+                                  }`}
+                                  aria-label={`Go to ${step.label} step`}
+                                >
+                                  {stepIndex + 1}
+                                </button>
+                                {stepIndex < ADDITIONAL_REQUEST_STEPS.length - 1 && (
+                                  <div
+                                    className={`mx-2 h-[2px] flex-1 transition-colors ${
+                                      stepIndex < maxUnlockedAdditionalRequestStep
+                                        ? "bg-[#154CB3]/45"
+                                        : "bg-gray-300"
+                                    }`}
+                                  />
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {activeAdditionalRequestStep === 0 && (
+                        <div className="bg-white border border-gray-200 rounded-xl p-4">
                         <div className="flex items-center justify-between gap-4">
                           <div>
                             <label
@@ -2276,9 +2409,11 @@ export default function EventForm({
                             />
                           </div>
                         )}
-                      </div>
+                        </div>
+                      )}
 
-                      <div className="bg-white border border-gray-200 rounded-xl p-4">
+                      {activeAdditionalRequestStep === 1 && (
+                        <div className="bg-white border border-gray-200 rounded-xl p-4">
                         <div className="flex items-center justify-between gap-4">
                           <div>
                             <label
@@ -2427,9 +2562,11 @@ export default function EventForm({
                             </div>
                           </div>
                         )}
-                      </div>
+                        </div>
+                      )}
 
-                      <div className="bg-white border border-gray-200 rounded-xl p-4">
+                      {activeAdditionalRequestStep === 2 && (
+                        <div className="bg-white border border-gray-200 rounded-xl p-4">
                         <div className="flex items-center justify-between gap-4">
                           <div>
                             <label
@@ -2493,9 +2630,11 @@ export default function EventForm({
                             />
                           </div>
                         )}
-                      </div>
+                        </div>
+                      )}
 
-                      <div className="bg-white border border-gray-200 rounded-xl p-4">
+                      {activeAdditionalRequestStep === 3 && (
+                        <div className="bg-white border border-gray-200 rounded-xl p-4">
                         <div className="flex items-center justify-between gap-4">
                           <div>
                             <label
@@ -2626,9 +2765,11 @@ export default function EventForm({
                             )}
                           </div>
                         )}
-                      </div>
+                        </div>
+                      )}
 
-                      <div className="bg-white border border-gray-200 rounded-xl p-4">
+                      {activeAdditionalRequestStep === 4 && (
+                        <div className="bg-white border border-gray-200 rounded-xl p-4">
                         <div className="flex items-center justify-between gap-4">
                           <div>
                             <label
@@ -2675,6 +2816,26 @@ export default function EventForm({
                               placeholder="Provide security requirements"
                             />
                           </div>
+                        )}
+                        </div>
+                      )}
+
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                        <p className="text-xs text-gray-500">
+                          Step {activeAdditionalRequestStep + 1} of {ADDITIONAL_REQUEST_STEPS.length}
+                        </p>
+                        {activeAdditionalRequestStep < ADDITIONAL_REQUEST_STEPS.length - 1 ? (
+                          <button
+                            type="button"
+                            onClick={handleNextAdditionalRequestStep}
+                            className="inline-flex items-center justify-center rounded-lg bg-[#154CB3] px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-[#0f3a7a] focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2"
+                          >
+                            Next option
+                          </button>
+                        ) : (
+                          <p className="text-xs text-[#063168] font-medium">
+                            All options unlocked. Use the step numbers above to revisit any section.
+                          </p>
                         )}
                       </div>
                     </div>

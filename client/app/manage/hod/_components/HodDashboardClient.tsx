@@ -12,6 +12,8 @@ interface HodDashboardClientProps {
   departmentName: string;
   initialQueue: HodApprovalQueueItem[];
   initialMetrics: HodDashboardMetrics;
+  dashboardTitle?: string;
+  approvalApiBasePath?: string;
 }
 
 type ModalState = {
@@ -46,6 +48,8 @@ export default function HodDashboardClient({
   departmentName,
   initialQueue,
   initialMetrics,
+  dashboardTitle = "HOD Approval Dashboard",
+  approvalApiBasePath = "/api/manage/hod",
 }: HodDashboardClientProps) {
   const router = useRouter();
 
@@ -77,7 +81,7 @@ export default function HodDashboardClient({
 
     try {
       const response = await fetch(
-        `/api/manage/hod/approval-requests/${encodeURIComponent(requestId)}`,
+        `${approvalApiBasePath}/approval-requests/${encodeURIComponent(requestId)}`,
         {
           method: "PATCH",
           headers: {
@@ -131,7 +135,7 @@ export default function HodDashboardClient({
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-bold text-slate-900">HOD Approval Dashboard</h1>
+        <h1 className="text-2xl font-bold text-slate-900">{dashboardTitle}</h1>
         <p className="mt-2 text-sm text-slate-600">{headerSubtitle}</p>
       </div>
 

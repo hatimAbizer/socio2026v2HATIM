@@ -6,6 +6,10 @@ import Logo from "@/app/logo.svg";
 import { useAuth } from "@/context/AuthContext";
 import { NotificationSystem } from "./NotificationSystem";
 import TermsConsentModal from "./TermsConsentModal";
+import {
+  getAccessibleServiceRoleDashboards,
+  hasRoleAlias,
+} from "@/lib/roleDashboards";
 import { useState, useEffect, useCallback, useRef, memo } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 
@@ -72,6 +76,7 @@ function NavigationBar() {
   const [showTermsModal, setShowTermsModal] = useState(false);
   const [avatarLoadError, setAvatarLoadError] = useState(false);
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
+  const [showRoleDashboardsDropdown, setShowRoleDashboardsDropdown] = useState(false);
   const [isDesktopCompact, setIsDesktopCompact] = useState(false);
   const [isDesktopMenuOpen, setIsDesktopMenuOpen] = useState(false);
   const [expandedDesktopSection, setExpandedDesktopSection] = useState<string | null>(null);
@@ -80,6 +85,7 @@ function NavigationBar() {
   const logoRef = useRef<HTMLDivElement | null>(null);
   const rightControlsRef = useRef<HTMLDivElement | null>(null);
   const desktopNavMeasureRef = useRef<HTMLDivElement | null>(null);
+  const roleDashboardsDropdownRef = useRef<HTMLDivElement | null>(null);
   const sessionDisplayName =
     session?.user?.user_metadata?.full_name ||
     session?.user?.user_metadata?.name ||
@@ -90,14 +96,18 @@ function NavigationBar() {
   const avatarInitial = (displayName || "U").charAt(0).toUpperCase();
   const isMasterAdmin = Boolean((userData as any)?.is_masteradmin);
   const isOrganiser = Boolean(userData?.is_organiser);
-  const universityRole = String((userData as any)?.university_role || "").toLowerCase().trim();
-  const isHod = Boolean((userData as any)?.is_hod) || universityRole === "hod";
-  const isDean = Boolean((userData as any)?.is_dean) || universityRole === "dean";
-  const isCfo = Boolean((userData as any)?.is_cfo) || universityRole === "cfo";
-  const isStudentOrganiser = universityRole === "student_organiser";
+  const universityRole = (userData as any)?.university_role;
+  const isHod = Boolean((userData as any)?.is_hod) || hasRoleAlias(universityRole, ["hod"]);
+  const isDean = Boolean((userData as any)?.is_dean) || hasRoleAlias(universityRole, ["dean"]);
+  const isCfo = Boolean((userData as any)?.is_cfo) || hasRoleAlias(universityRole, ["cfo"]);
+  const isStudentOrganiser = hasRoleAlias(universityRole, ["student organiser", "student_organiser"]);
   const isFinanceOfficer =
     Boolean((userData as any)?.is_finance_officer) ||
-    universityRole === "finance_officer";
+    hasRoleAlias(universityRole, ["finance officer", "finance_officer"]);
+  const accessibleServiceRoleDashboards = getAccessibleServiceRoleDashboards(
+    (userData as Record<string, unknown> | null) || null,
+    isMasterAdmin
+  );
   const canOpenHodDashboard = isHod || isMasterAdmin;
   const canOpenDeanDashboard = isDean || isMasterAdmin;
   const canOpenCfoDashboard = isCfo || isMasterAdmin;
@@ -109,7 +119,21 @@ function NavigationBar() {
     isHod ||
     isDean ||
     isCfo ||
-    isFinanceOfficer;
+    isFinanceOfficer ||
+    accessibleServiceRoleDashboards.length > 0;
+  const roleDashboardLinks = [
+    canOpenHodDashboard
+      ? { name: "HOD Dashboard", href: "/manage/hod" }
+      : null,
+    canOpenDeanDashboard
+      ? { name: "Dean Dashboard", href: "/manage/dean" }
+      : null,
+    ...accessibleServiceRoleDashboards.map((roleConfig) => ({
+      name: `${roleConfig.label} Dashboard`,
+      href: `/manage/${roleConfig.slug}`,
+    })),
+  ].filter((item): item is { name: string; href: string } => item !== null);
+  const hasRoleDashboardLinks = roleDashboardLinks.length > 0;
 
   useEffect(() => {
     setAvatarLoadError(false);
@@ -128,6 +152,7 @@ function NavigationBar() {
     setIsDesktopMenuOpen(false);
     setExpandedDesktopSection(null);
     setExpandedDesktopSubSection(null);
+    setShowRoleDashboardsDropdown(false);
   }, []);
 
   const measureDesktopOverlap = useCallback(() => {
@@ -188,9 +213,28 @@ function NavigationBar() {
   }, [pathname, closeDesktopMenu]);
 
   useEffect(() => {
+    if (!showRoleDashboardsDropdown) return;
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (
+        roleDashboardsDropdownRef.current &&
+        !roleDashboardsDropdownRef.current.contains(event.target as Node)
+      ) {
+        setShowRoleDashboardsDropdown(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+    };
+  }, [showRoleDashboardsDropdown]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         closeDesktopMenu();
+        setShowRoleDashboardsDropdown(false);
       }
     };
 
@@ -383,21 +427,44 @@ function NavigationBar() {
                       Organiser
                     </Link>
                   )}
-                  {!isDesktopCompact && canOpenHodDashboard && (
-                    <Link
-                      href="/manage/hod"
-                      className="inline-flex cursor-pointer font-semibold px-3 py-1.5 sm:px-4 sm:py-2 border-2 rounded-full text-xs sm:text-sm border-amber-400 text-amber-700 hover:bg-amber-50 transition-all duration-200 ease-in-out"
-                    >
-                      HOD Dashboard
-                    </Link>
-                  )}
-                  {!isDesktopCompact && canOpenDeanDashboard && (
-                    <Link
-                      href="/manage/dean"
-                      className="inline-flex cursor-pointer font-semibold px-3 py-1.5 sm:px-4 sm:py-2 border-2 rounded-full text-xs sm:text-sm border-slate-700 text-slate-700 hover:bg-slate-100 transition-all duration-200 ease-in-out"
-                    >
-                      Dean Dashboard
-                    </Link>
+                  {!isDesktopCompact && hasRoleDashboardLinks && (
+                    <div ref={roleDashboardsDropdownRef} className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowRoleDashboardsDropdown((prev) => !prev)}
+                        className="inline-flex cursor-pointer items-center gap-2 font-semibold px-3 py-1.5 sm:px-4 sm:py-2 border-2 rounded-full text-xs sm:text-sm border-slate-700 text-slate-700 hover:bg-slate-100 transition-all duration-200 ease-in-out"
+                        aria-haspopup="menu"
+                        aria-expanded={showRoleDashboardsDropdown}
+                      >
+                        Other dashboards
+                        <svg
+                          className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                            showRoleDashboardsDropdown ? "rotate-180" : ""
+                          }`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+
+                      {showRoleDashboardsDropdown && (
+                        <div className="absolute right-0 top-full mt-2 w-52 rounded-xl border border-gray-200 bg-white shadow-lg z-30 py-1">
+                          {roleDashboardLinks.map((item) => (
+                            <Link
+                              key={item.href}
+                              href={item.href}
+                              onClick={() => setShowRoleDashboardsDropdown(false)}
+                              className="block px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 hover:text-[#154CB3] transition-colors duration-200"
+                            >
+                              {item.name}
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
                   {!isDesktopCompact && canOpenCfoDashboard && (
                     <Link
@@ -671,24 +738,44 @@ function NavigationBar() {
                     </Link>
                   )}
 
-                  {canOpenHodDashboard && (
-                    <Link
-                      href="/manage/hod"
-                      onClick={closeDesktopMenu}
-                      className="block rounded-lg border border-amber-300 px-3 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-50 transition-colors duration-200"
-                    >
-                      HOD Dashboard
-                    </Link>
-                  )}
+                  {hasRoleDashboardLinks && (
+                    <div className="rounded-lg border border-slate-300 overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => setShowRoleDashboardsDropdown((prev) => !prev)}
+                        className="w-full flex items-center justify-between px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors duration-200"
+                        aria-haspopup="menu"
+                        aria-expanded={showRoleDashboardsDropdown}
+                      >
+                        <span>Admin & Organizer</span>
+                        <svg
+                          className={`h-4 w-4 transition-transform duration-200 ${
+                            showRoleDashboardsDropdown ? "rotate-180" : ""
+                          }`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
 
-                  {canOpenDeanDashboard && (
-                    <Link
-                      href="/manage/dean"
-                      onClick={closeDesktopMenu}
-                      className="block rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 transition-colors duration-200"
-                    >
-                      Dean Dashboard
-                    </Link>
+                      {showRoleDashboardsDropdown && (
+                        <div className="border-t border-slate-200 bg-white">
+                          {roleDashboardLinks.map((item) => (
+                            <Link
+                              key={`quick-${item.href}`}
+                              href={item.href}
+                              onClick={closeDesktopMenu}
+                              className="block px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 transition-colors duration-200"
+                            >
+                              {item.name}
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   {canOpenCfoDashboard && (
@@ -762,22 +849,44 @@ function NavigationBar() {
               </Link>
             )}
 
-            {canOpenHodDashboard && (
-              <Link
-                href="/manage/hod"
-                className="inline-flex items-center justify-center rounded-full border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-50 transition-colors duration-200"
-              >
-                HOD Dashboard
-              </Link>
-            )}
+            {hasRoleDashboardLinks && (
+              <div className="col-span-2">
+                <button
+                  type="button"
+                  onClick={() => setShowRoleDashboardsDropdown((prev) => !prev)}
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 transition-colors duration-200"
+                  aria-haspopup="menu"
+                  aria-expanded={showRoleDashboardsDropdown}
+                >
+                  Admin & Organizer
+                  <svg
+                    className={`h-4 w-4 transition-transform duration-200 ${
+                      showRoleDashboardsDropdown ? "rotate-180" : ""
+                    }`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
 
-            {canOpenDeanDashboard && (
-              <Link
-                href="/manage/dean"
-                className="inline-flex items-center justify-center rounded-full border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 transition-colors duration-200"
-              >
-                Dean Dashboard
-              </Link>
+                {showRoleDashboardsDropdown && (
+                  <div className="mt-2 space-y-2">
+                    {roleDashboardLinks.map((item) => (
+                      <Link
+                        key={`mobile-${item.href}`}
+                        href={item.href}
+                        onClick={() => setShowRoleDashboardsDropdown(false)}
+                        className="inline-flex w-full items-center justify-center rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 transition-colors duration-200"
+                      >
+                        {item.name}
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
 
             {canOpenCfoDashboard && (
