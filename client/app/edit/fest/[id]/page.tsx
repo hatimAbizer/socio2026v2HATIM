@@ -4,6 +4,23 @@ import React, { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { useAuth } from "../../../../context/AuthContext"; // Adjust path
 
+const PENDING_WORKFLOW_STATUS_REGEX = /^pending_level_([1-4])$/;
+const APPROVAL_LEVEL_LABEL_BY_NUMBER: Record<number, string> = {
+  1: "Level 1 (HOD)",
+  2: "Level 2 (Dean/Director)",
+  3: "Level 3 (CFO/Campus Director)",
+  4: "Level 4 (Accounts)",
+};
+
+const getPendingApprovalLabel = (workflowStatus?: string | null) => {
+  const normalized = String(workflowStatus || "").trim().toLowerCase();
+  const match = PENDING_WORKFLOW_STATUS_REGEX.exec(normalized);
+  if (!match) return null;
+  const level = Number(match[1]);
+  const levelLabel = APPROVAL_LEVEL_LABEL_BY_NUMBER[level] || `Level ${level}`;
+  return `Awaiting ${levelLabel} approval`;
+};
+
 interface FestDataForEdit {
   title: string;
   openingDate: string;
@@ -21,11 +38,12 @@ interface FestDataForEdit {
 const EditPage = () => {
   const params = useParams();
   const festId = params?.id as string;
-  const { session } = useAuth();
+  const { session, userData, isLoading: authIsLoading } = useAuth();
   const API_URL = process.env.NEXT_PUBLIC_API_URL!.replace(/\/api\/?$/, "");
   const [festData, setFestData] = useState<FestDataForEdit | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
 
   const [existingImageFileUrl, setExistingImageFileUrl] = useState<
     string | null
@@ -36,6 +54,10 @@ const EditPage = () => {
   const [existingPdfFileUrl, setExistingPdfFileUrl] = useState<string | null>(
     null
   );
+
+  const isMasterAdminUser = Boolean((userData as any)?.is_masteradmin);
+  const pendingApprovalLabel = getPendingApprovalLabel(workflowStatus);
+  const isPendingApprovalLocked = Boolean(pendingApprovalLabel) && !isMasterAdminUser;
 
   useEffect(() => {
     if (festId && session?.access_token) {
@@ -57,6 +79,9 @@ const EditPage = () => {
           }
           const data = await response.json();
           if (data.fest) {
+            const normalizedWorkflowStatus = String(data.fest.workflow_status || "").trim().toLowerCase();
+            setWorkflowStatus(normalizedWorkflowStatus || null);
+
             // Transform event_heads to new format
             const eventHeadsData = data.fest.event_heads || [];
             const transformedEventHeads = eventHeadsData.map((head: any) => {
@@ -111,8 +136,23 @@ const EditPage = () => {
     }
   }, [festId, session]);
 
+  if (authIsLoading) {
+    return <div className="p-8 text-center">Loading fest data...</div>;
+  }
+
   if (isLoading) {
     return <div className="p-8 text-center">Loading fest data...</div>;
+  }
+
+  if (isPendingApprovalLocked) {
+    return (
+      <div className="p-8 text-center">
+        <h2 className="text-xl font-semibold text-amber-700 mb-3">Approval Pending</h2>
+        <p className="text-amber-700">
+          {pendingApprovalLabel}. This fest is locked for editing until approval is completed or rejected.
+        </p>
+      </div>
+    );
   }
 
   if (errorMessage && !festData) {

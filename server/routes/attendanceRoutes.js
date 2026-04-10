@@ -5,12 +5,49 @@ import {
   upsert,
   insert,
 } from "../config/database.js";
+import {
+  authenticateUser,
+  getUserInfo,
+  checkRoleExpiration,
+  requireAnyRole,
+} from "../middleware/authMiddleware.js";
+import { ROLE_CODES } from "../utils/roleAccessService.js";
 import { verifyQRCodeData, parseQRCodeData } from "../utils/qrCodeUtils.js";
 
 const router = express.Router();
 
+const attendanceAccessMiddleware = [
+  authenticateUser,
+  getUserInfo(),
+  checkRoleExpiration,
+  requireAnyRole([
+    ROLE_CODES.MASTER_ADMIN,
+    ROLE_CODES.ORGANIZER_TEACHER,
+    ROLE_CODES.ORGANIZER_STUDENT,
+  ]),
+];
+
+const canManageEventAttendance = (event, req) => {
+  const roleCodes = Array.isArray(req.userInfo?.role_codes) ? req.userInfo.role_codes : [];
+  const isMasterAdmin = Boolean(req.userInfo?.is_masteradmin) || roleCodes.includes(ROLE_CODES.MASTER_ADMIN);
+
+  if (isMasterAdmin) {
+    return true;
+  }
+
+  const eventAuthUuid = String(event?.auth_uuid || "");
+  const requestUserId = String(req.userId || "");
+  const eventCreatedBy = String(event?.created_by || "").toLowerCase();
+  const requestUserEmail = String(req.userInfo?.email || "").toLowerCase();
+
+  return (
+    (eventAuthUuid && requestUserId && eventAuthUuid === requestUserId) ||
+    (eventCreatedBy && requestUserEmail && eventCreatedBy === requestUserEmail)
+  );
+};
+
 // Get participants for an event
-router.get("/events/:eventId/participants", async (req, res) => {
+router.get("/events/:eventId/participants", ...attendanceAccessMiddleware, async (req, res) => {
   try {
     const { eventId } = req.params;
 
@@ -18,6 +55,10 @@ router.get("/events/:eventId/participants", async (req, res) => {
     const event = await queryOne("events", { where: { event_id: eventId } });
     if (!event) {
       return res.status(404).json({ error: "Event not found" });
+    }
+
+    if (!canManageEventAttendance(event, req)) {
+      return res.status(403).json({ error: "Access denied: You can only access attendance for your own events" });
     }
 
     // Query registrations by event_id
@@ -80,7 +121,7 @@ router.get("/events/:eventId/participants", async (req, res) => {
 });
 
 // Mark attendance for participants
-router.post("/events/:eventId/attendance", async (req, res) => {
+router.post("/events/:eventId/attendance", ...attendanceAccessMiddleware, async (req, res) => {
   try {
     const { eventId } = req.params;
     const { participantIds, status, markedBy = "admin" } = req.body;
@@ -96,6 +137,10 @@ router.post("/events/:eventId/attendance", async (req, res) => {
     const event = await queryOne("events", { where: { event_id: eventId } });
     if (!event) {
       return res.status(404).json({ error: "Event not found" });
+    }
+
+    if (!canManageEventAttendance(event, req)) {
+      return res.status(403).json({ error: "Access denied: You can only mark attendance for your own events" });
     }
 
     const now = new Date().toISOString();
@@ -131,10 +176,19 @@ router.post("/events/:eventId/attendance", async (req, res) => {
 });
 
 // QR Code scan for attendance
-router.post("/events/:eventId/scan-qr", async (req, res) => {
+router.post("/events/:eventId/scan-qr", ...attendanceAccessMiddleware, async (req, res) => {
   try {
     const { eventId } = req.params;
     const { qrCodeData, scannedBy, scannerInfo } = req.body;
+
+    const event = await queryOne("events", { where: { event_id: eventId } });
+    if (!event) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+
+    if (!canManageEventAttendance(event, req)) {
+      return res.status(403).json({ error: "Access denied: You can only scan attendance for your own events" });
+    }
 
     if (!qrCodeData) {
       return res.status(400).json({ error: "QR code data is required" });

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 export default function Page() {
   const { session, isLoading, signInWithGoogle } = useAuth();
@@ -54,6 +55,12 @@ export default function Page() {
         >
           Continue with Google
         </button>
+        <Link
+          href="/prototype-website"
+          className="block w-full rounded-full border border-[#154CB3] text-[#154CB3] font-semibold py-2.5 hover:bg-[#154CB3]/5 transition-colors"
+        >
+          Open Approval Prototype
+        </Link>
       </div>
     </div>
   );

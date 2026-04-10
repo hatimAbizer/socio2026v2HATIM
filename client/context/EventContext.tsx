@@ -16,6 +16,7 @@ export interface EventForCard {
   allow_outsiders?: boolean | null;
   is_archived?: boolean | null;
   is_draft?: boolean | null;
+  workflow_status?: string | null;
 }
 
 export interface CarouselDisplayImage {
@@ -83,6 +84,8 @@ export interface FetchedEvent {
   is_draft?: boolean | null;
   archived_at?: string | null;
   archived_by?: string | null;
+  workflow_status?: string | null;
+  approval_request_id?: string | null;
 }
 
 const normalizeCampusText = (value: string | null | undefined): string => {
@@ -241,6 +244,7 @@ const toEventCard = (event: FetchedEvent): EventForCard => {
     allow_outsiders: event.allow_outsiders ?? false,
     is_archived: event.is_archived,
     is_draft: event.is_draft,
+    workflow_status: event.workflow_status ?? null,
   };
 };
 

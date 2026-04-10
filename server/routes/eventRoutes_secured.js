@@ -20,10 +20,138 @@ import {
 } from "../middleware/authMiddleware.js";
 import { sendBroadcastNotification } from "./notificationRoutes.js";
 import { pushEventToGated, shouldPushEventToGated, isGatedEnabled } from "../utils/gatedSync.js";
+import { ROLE_CODES, hasAnyRoleCode } from "../utils/roleAccessService.js";
 
 const router = express.Router();
 const debugRoutesEnabled = process.env.NODE_ENV !== "production";
 const MANUAL_UNARCHIVE_OVERRIDE = "system:manual_unarchive_override";
+
+const getRoleCodes = (userInfo) => (Array.isArray(userInfo?.role_codes) ? userInfo.role_codes : []);
+
+const isMasterAdminUser = (userInfo) => {
+  return Boolean(userInfo?.is_masteradmin) || hasAnyRoleCode(getRoleCodes(userInfo), [ROLE_CODES.MASTER_ADMIN]);
+};
+
+const isOrganizerTeacherUser = (userInfo) => {
+  return Boolean(userInfo?.is_organiser) || hasAnyRoleCode(getRoleCodes(userInfo), [ROLE_CODES.ORGANIZER_TEACHER]);
+};
+
+const isOrganizerStudentOnlyUser = (userInfo) => {
+  const hasStudentRole = hasAnyRoleCode(getRoleCodes(userInfo), [ROLE_CODES.ORGANIZER_STUDENT]);
+  return hasStudentRole && !isOrganizerTeacherUser(userInfo) && !isMasterAdminUser(userInfo);
+};
+
+const isMissingRelationError = (error) => {
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || "").toLowerCase();
+
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    (message.includes("relation") && message.includes("does not exist")) ||
+    (message.includes("could not find") && message.includes("schema cache"))
+  );
+};
+
+const queryFestById = async (festId) => {
+  if (!festId) {
+    return null;
+  }
+
+  try {
+    const festRow = await queryOne("fests", { where: { fest_id: festId } });
+    if (festRow) {
+      return festRow;
+    }
+  } catch (error) {
+    if (!isMissingRelationError(error)) {
+      throw error;
+    }
+  }
+
+  try {
+    return await queryOne("fest", { where: { fest_id: festId } });
+  } catch (error) {
+    if (isMissingRelationError(error)) {
+      return null;
+    }
+    throw error;
+  }
+};
+
+const isFestApprovedForChildEvent = (festRecord) => {
+  if (!festRecord) {
+    return false;
+  }
+
+  if (asBoolean(festRecord.is_archived)) {
+    return false;
+  }
+
+  const approvalState = String(festRecord.approval_state || "").trim().toUpperCase();
+  if (approvalState) {
+    return approvalState === "APPROVED";
+  }
+
+  if (typeof festRecord.status === "string") {
+    const status = festRecord.status.trim().toLowerCase();
+    if (status === "rejected" || status === "cancelled" || status === "draft") {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const createTeacherApprovalRequestForChildEvent = async ({ eventRecord, userInfo }) => {
+  try {
+    const requestId = `APR-${eventRecord.event_id}-${Date.now()}`;
+    const nowIso = new Date().toISOString();
+    const isBudgetRelated = Number(eventRecord.registration_fee || 0) > 0;
+
+    const insertedRequest = await insert("approval_requests", [
+      {
+        request_id: requestId,
+        entity_type: "FEST_CHILD_EVENT",
+        entity_ref: eventRecord.event_id,
+        parent_fest_ref: eventRecord.fest_id,
+        requested_by_user_id: userInfo?.id || null,
+        requested_by_email: userInfo?.email || null,
+        organizing_dept: eventRecord.organizing_dept || null,
+        campus_hosted_at: eventRecord.campus_hosted_at || null,
+        is_budget_related: isBudgetRelated,
+        status: "UNDER_REVIEW",
+        submitted_at: nowIso,
+      },
+    ]);
+
+    const approvalRequest = insertedRequest?.[0];
+    if (!approvalRequest) {
+      return null;
+    }
+
+    await insert("approval_steps", [
+      {
+        approval_request_id: approvalRequest.id,
+        step_code: "ORGANIZER_TEACHER",
+        role_code: ROLE_CODES.ORGANIZER_TEACHER,
+        step_group: 1,
+        sequence_order: 1,
+        required_count: 1,
+        status: "PENDING",
+      },
+    ]);
+
+    return approvalRequest;
+  } catch (error) {
+    if (isMissingRelationError(error)) {
+      console.warn("[EventCreate] Approval tables are not available yet; skipping teacher approval request creation.");
+      return null;
+    }
+
+    throw error;
+  }
+};
 
 // HEALTH CHECK - Verify Supabase connection
 router.get("/debug/health", async (req, res) => {
@@ -993,7 +1121,20 @@ router.post(
   ]),
   authenticateUser,           // Verify JWT token
   getUserInfo(),           // Get user info from DB via helper
-  requireOrganiser,          // Check if user is organiser
+  (req, res, next) => {
+    const canCreateEvent =
+      isMasterAdminUser(req.userInfo) ||
+      isOrganizerTeacherUser(req.userInfo) ||
+      hasAnyRoleCode(getRoleCodes(req.userInfo), [ROLE_CODES.ORGANIZER_STUDENT]);
+
+    if (!canCreateEvent) {
+      return res.status(403).json({
+        error: "Access denied: Organizer Teacher or Organizer Student privileges required",
+      });
+    }
+
+    return next();
+  },
   async (req, res) => {
     const uploadedFilePaths = {
       image: null,
@@ -1036,11 +1177,39 @@ router.post(
         save_as_draft
       } = req.body;
 
-      const shouldSaveAsDraft =
+      const userIsMasterAdmin = isMasterAdminUser(req.userInfo);
+      const userIsOrganizerTeacher = isOrganizerTeacherUser(req.userInfo);
+      const userIsOrganizerStudentOnly = isOrganizerStudentOnlyUser(req.userInfo);
+      const normalizedFestId = normalizeFestReference(fest_id ?? fest);
+
+      if (userIsOrganizerStudentOnly && !normalizedFestId) {
+        return res.status(403).json({
+          error: "Organizer Student can only create events under an approved fest.",
+        });
+      }
+
+      if (userIsOrganizerStudentOnly) {
+        const parentFest = await queryFestById(normalizedFestId);
+
+        if (!parentFest) {
+          return res.status(404).json({
+            error: "Parent fest not found for Organizer Student submission.",
+          });
+        }
+
+        if (!isFestApprovedForChildEvent(parentFest)) {
+          return res.status(403).json({
+            error: "Organizer Student can only create events under an approved fest.",
+          });
+        }
+      }
+
+      const shouldSaveAsDraftByInput =
         asBoolean(is_draft) ||
         asBoolean(save_as_draft);
+      const shouldSaveAsDraft = shouldSaveAsDraftByInput || userIsOrganizerStudentOnly;
       const shouldArchiveOnCreate =
-        asBoolean(is_archived) && !shouldSaveAsDraft;
+        asBoolean(is_archived) && !shouldSaveAsDraft && !userIsOrganizerStudentOnly;
       const hasExplicitNotificationPreference =
         send_notifications !== undefined &&
         send_notifications !== null &&
@@ -1223,7 +1392,12 @@ router.post(
         title: title?.trim(),
         organizing_dept,
         created_by: req.userInfo?.email,
-        fileUrls: uploadedFilePaths
+        fileUrls: uploadedFilePaths,
+        roleContext: {
+          userIsMasterAdmin,
+          userIsOrganizerTeacher,
+          userIsOrganizerStudentOnly,
+        },
       });
 
       // Insert event with creator's auth_uuid
@@ -1279,6 +1453,50 @@ router.post(
 
       console.log("✅ Event inserted successfully:", event_id);
 
+      let teacherApprovalRequest = null;
+      if (userIsOrganizerStudentOnly) {
+        const createdEventRecord = created[0];
+        teacherApprovalRequest = await createTeacherApprovalRequestForChildEvent({
+          eventRecord: createdEventRecord,
+          userInfo: req.userInfo,
+        });
+
+        if (teacherApprovalRequest) {
+          try {
+            await update(
+              "events",
+              {
+                approval_state: "UNDER_REVIEW",
+                activation_state: "PENDING",
+                approval_request_id: teacherApprovalRequest.id,
+                approved_at: null,
+                approved_by: null,
+                rejected_at: null,
+                rejected_by: null,
+                rejection_reason: null,
+                updated_at: new Date().toISOString(),
+              },
+              { event_id }
+            );
+          } catch (workflowStateError) {
+            const code = String(workflowStateError?.code || "");
+            const message = String(workflowStateError?.message || "").toLowerCase();
+            const missingWorkflowColumns =
+              code === "42703" ||
+              (message.includes("column") &&
+                (message.includes("approval_state") ||
+                  message.includes("activation_state") ||
+                  message.includes("approval_request_id")));
+
+            if (!missingWorkflowColumns) {
+              throw workflowStateError;
+            }
+
+            console.warn("[EventCreate] Workflow state columns missing; saved student submission as draft fallback.");
+          }
+        }
+      }
+
       // Send notifications to all users about the new event (non-blocking)
       if (shouldSendNotifications) {
         sendBroadcastNotification({
@@ -1319,9 +1537,13 @@ router.post(
       }
 
       return res.status(201).json({ 
-        message: "Event created successfully", 
+        message: userIsOrganizerStudentOnly
+          ? "Event submitted successfully and routed to Organizer Teacher approval"
+          : "Event created successfully", 
         event_id,
-        created_by: req.userInfo.email 
+        created_by: req.userInfo.email,
+        pending_teacher_review: userIsOrganizerStudentOnly,
+        approval_request_id: teacherApprovalRequest?.request_id || null,
       });
 
     } catch (error) {

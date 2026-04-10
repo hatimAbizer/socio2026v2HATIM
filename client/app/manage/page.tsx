@@ -48,6 +48,7 @@ interface Fest {
   campus_hosted_at?: string | null;
   is_archived?: boolean;
   archived_at?: string | null;
+  workflow_status?: string | null;
 }
 
 const ITEMS_PER_PAGE = 12;
@@ -70,6 +71,31 @@ const EVENT_STATUS_FILTER_OPTIONS: Array<{ value: StatusFilter; label: string }>
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL!.replace(/\/api\/?$/, "");
 const MANUAL_UNARCHIVE_OVERRIDE = "system:manual_unarchive_override";
+const PENDING_WORKFLOW_STATUS_REGEX = /^pending_level_([1-4])$/;
+
+const APPROVAL_LEVEL_LABEL_BY_NUMBER: Record<number, string> = {
+  1: "Level 1 (HOD)",
+  2: "Level 2 (Dean/Director)",
+  3: "Level 3 (CFO/Campus Director)",
+  4: "Level 4 (Accounts)",
+};
+
+const normalizeWorkflowStatus = (workflowStatus?: string | null) =>
+  String(workflowStatus || "").trim().toLowerCase();
+
+const getPendingApprovalLabel = (workflowStatus?: string | null) => {
+  const normalized = normalizeWorkflowStatus(workflowStatus);
+  const match = PENDING_WORKFLOW_STATUS_REGEX.exec(normalized);
+  if (!match) return null;
+
+  const level = Number(match[1]);
+  const levelLabel = APPROVAL_LEVEL_LABEL_BY_NUMBER[level] || `Level ${level}`;
+  return `Awaiting ${levelLabel} approval`;
+};
+
+const isPendingWorkflowStatus = (workflowStatus?: string | null) => {
+  return getPendingApprovalLabel(workflowStatus) !== null;
+};
 
 const CAMPUSES = [
   "Central Campus (Main)",
@@ -144,10 +170,24 @@ interface MappedFestCardProps {
 const MappedFestCard = ({ fest, baseUrl, isArchiveUpdating = false, onArchiveToggle }: MappedFestCardProps) => {
   const isPast = fest.closing_date ? new Date(fest.closing_date) < new Date() : false;
   const isArchived = fest.is_archived ?? false;
+  const isDraft =
+    fest.is_draft === true ||
+    (fest.is_draft as any) === 1 ||
+    (fest.is_draft as any) === "1" ||
+    (fest.is_draft as any) === "true";
+  const pendingApprovalLabel = getPendingApprovalLabel(fest.workflow_status);
+  const isApprovalPending = Boolean(pendingApprovalLabel);
+  const isEditLocked = isApprovalPending && !isDraft;
 
   return (
     <div className={`bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col hover:shadow-md transition-all duration-300 ${
-      isArchived ? "opacity-60 grayscale" : ""
+      isArchived
+        ? "opacity-60 grayscale"
+        : isDraft
+          ? "opacity-80 saturate-0"
+          : isEditLocked
+            ? "opacity-70 grayscale-[0.35]"
+            : ""
     }`}>
       <div className="h-48 relative bg-slate-100">
         <img
@@ -155,13 +195,26 @@ const MappedFestCard = ({ fest, baseUrl, isArchiveUpdating = false, onArchiveTog
           alt={fest.fest_title}
           className="w-full h-full object-cover"
         />
+        {isDraft && (
+          <div className="absolute inset-0 bg-white/65 flex items-center justify-center pointer-events-none">
+            <span className="text-4xl sm:text-5xl font-black tracking-[0.25em] text-slate-800/70">DRAFT</span>
+          </div>
+        )}
         <div className="absolute top-3 right-3">
           <span
             className={`px-3 py-1.5 text-[10px] font-bold rounded-full tracking-wider shadow-sm flex items-center ${
-              isArchived ? "bg-purple-600 text-white" : isPast ? "bg-[#333333] text-white" : "bg-white text-emerald-600"
+              isDraft
+                ? "bg-slate-900 text-white"
+                : isEditLocked
+                ? "bg-amber-100 text-amber-800"
+                : isArchived
+                  ? "bg-purple-600 text-white"
+                  : isPast
+                    ? "bg-[#333333] text-white"
+                    : "bg-white text-emerald-600"
             }`}
           >
-            {isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING"}
+            {isDraft ? "DRAFT" : isEditLocked ? "APPROVAL PENDING" : isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING"}
           </span>
         </div>
       </div>
@@ -175,13 +228,26 @@ const MappedFestCard = ({ fest, baseUrl, isArchiveUpdating = false, onArchiveTog
         <p className="text-sm text-slate-500 line-clamp-2">
           {fest.description || "No description provided. Click manage to add one."}
         </p>
+        {isEditLocked && (
+          <p className="text-xs font-semibold text-amber-700 mt-2">
+            {pendingApprovalLabel}. Editing is locked until approval decision.
+          </p>
+        )}
       </div>
       <div className="px-5 py-3.5 border-t border-slate-100 flex justify-between items-center bg-slate-50/50">
         <div className="flex items-center gap-2 text-slate-500 text-sm font-medium">
           <Calendar className="w-4 h-4 text-slate-400" />
           {formatDateFull(fest.opening_date, "TBD")}
         </div>
-        {isArchived ? (
+        {isDraft ? (
+          <Link href={`/${baseUrl}/${fest.fest_id}`} className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline">
+            Edit <ArrowRight className="w-4 h-4" />
+          </Link>
+        ) : isEditLocked ? (
+          <span className="text-sm font-semibold text-slate-400" title="Fest is locked while approval is pending.">
+            Editing locked
+          </span>
+        ) : isArchived ? (
           <button
             onClick={(e) => {
               e.preventDefault();
@@ -227,6 +293,7 @@ const MappedEventCard = ({
 }: {
   event: ContextEvent;
   baseUrl: string;
+  isDraft?: boolean;
   isArchived: boolean;
   archiveSource: EventArchiveSource;
   onToggleArchive: (eventId: string, shouldArchive: boolean) => void;
@@ -234,16 +301,34 @@ const MappedEventCard = ({
   authToken?: string | null;
 }) => {
   const isPast = event.event_date ? new Date(event.event_date) < new Date() : false;
-  const statusLabel = isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING";
-  const statusClassName = isArchived
+  const isDraft =
+    (event as any).is_draft === true ||
+    (event as any).is_draft === 1 ||
+    (event as any).is_draft === "1" ||
+    (event as any).is_draft === "true";
+  const pendingApprovalLabel = getPendingApprovalLabel(event.workflow_status);
+  const isApprovalPending = Boolean(pendingApprovalLabel);
+  const isEditLocked = isApprovalPending && !isDraft;
+  const statusLabel = isDraft ? "DRAFT" : isEditLocked ? "APPROVAL PENDING" : isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING";
+  const statusClassName = isDraft
+    ? "bg-slate-900 text-white"
+    : isEditLocked
     ? "bg-amber-100 text-amber-800"
-    : isPast
-      ? "bg-[#333333] text-white"
-      : "bg-white text-emerald-600";
+    : isArchived
+      ? "bg-amber-100 text-amber-800"
+      : isPast
+        ? "bg-[#333333] text-white"
+        : "bg-white text-emerald-600";
 
   return (
     <div className={`bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col hover:shadow-md transition-all duration-300 ${
-      isArchived ? "opacity-60 grayscale" : ""
+      isArchived
+        ? "opacity-60 grayscale"
+        : isDraft
+          ? "opacity-80 saturate-0"
+          : isEditLocked
+            ? "opacity-70 grayscale-[0.35]"
+            : ""
     }`}>
       <div className="h-48 relative bg-slate-100">
         <img
@@ -251,6 +336,11 @@ const MappedEventCard = ({
           alt={event.title}
           className="w-full h-full object-cover"
         />
+        {isDraft && (
+          <div className="absolute inset-0 bg-white/65 flex items-center justify-center pointer-events-none">
+            <span className="text-4xl sm:text-5xl font-black tracking-[0.25em] text-slate-800/70">DRAFT</span>
+          </div>
+        )}
         <div className="absolute top-3 right-3">
           <span className={`px-3 py-1.5 text-[10px] font-bold rounded-full tracking-wider shadow-sm flex items-center ${statusClassName}`}>
             {statusLabel}
@@ -273,41 +363,66 @@ const MappedEventCard = ({
           <Calendar className="w-4 h-4 text-slate-400" />
           {formatDateFull(event.event_date, "TBD")}
         </div>
+        {isEditLocked && (
+          <p className="text-xs font-semibold text-amber-700">
+            {pendingApprovalLabel}. Editing is locked until approval decision.
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-3">
+          {!isDraft && (
+            <>
+              <Link
+                href={`/event/${event.event_id}/participants`}
+                className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline"
+              >
+                View Participants
+              </Link>
+              <Link
+                href={`/attendance?eventId=${encodeURIComponent(event.event_id)}&eventTitle=${encodeURIComponent(event.title)}`}
+                className="flex items-center gap-1.5 text-emerald-700 font-semibold text-sm hover:underline"
+              >
+                Mark Attendance
+              </Link>
+              <button
+                type="button"
+                disabled={isArchiveActionLoading || isEditLocked}
+                onClick={() => onToggleArchive(event.event_id, !isArchived)}
+                className={`flex items-center gap-1.5 font-semibold text-sm transition-colors cursor-pointer ${
+                  isArchiveActionLoading || isEditLocked
+                    ? "text-slate-400 cursor-not-allowed"
+                    : isArchived
+                      ? "text-emerald-700 hover:text-emerald-800"
+                      : "text-slate-500 hover:text-slate-800"
+                }`}
+                title={isEditLocked ? "Event is locked while approval is pending." : undefined}
+              >
+                {isArchiveActionLoading ? "Saving..." : isArchived ? "Restore" : "Archive"} <History className="w-4 h-4" />
+              </button>
+            </>
+          )}
           <Link
-            href={`/event/${event.event_id}/participants`}
-            className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline"
-          >
-            View Participants
-          </Link>
-          <Link
-            href={`/attendance?eventId=${encodeURIComponent(event.event_id)}&eventTitle=${encodeURIComponent(event.title)}`}
-            className="flex items-center gap-1.5 text-emerald-700 font-semibold text-sm hover:underline"
-          >
-            Mark Attendance
-          </Link>
-          <button
-            type="button"
-            disabled={isArchiveActionLoading}
-            onClick={() => onToggleArchive(event.event_id, !isArchived)}
-            className={`flex items-center gap-1.5 font-semibold text-sm transition-colors cursor-pointer ${
-              isArchiveActionLoading
-                ? "text-slate-400 cursor-not-allowed"
-                : isArchived
-                  ? "text-emerald-700 hover:text-emerald-800"
-                  : "text-slate-500 hover:text-slate-800"
+            href={isEditLocked ? "#" : `/${baseUrl}/${event.event_id}`}
+            onClick={(e) => {
+              if (isEditLocked) {
+                e.preventDefault();
+              }
+            }}
+            className={`flex items-center gap-1.5 font-semibold text-sm ${
+              isEditLocked
+                ? "text-slate-400 cursor-not-allowed pointer-events-none"
+                : "text-[#154cb3] hover:underline"
             }`}
+            title={isEditLocked ? "Event is locked while approval is pending." : undefined}
           >
-            {isArchiveActionLoading ? "Saving..." : isArchived ? "Unarchive" : "Archive"} <History className="w-4 h-4" />
-          </button>
-          <Link href={`/${baseUrl}/${event.event_id}`} className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline">
             Edit <Pencil className="w-4 h-4" />
           </Link>
-          <EventReminderButton
-            eventId={event.event_id}
-            eventTitle={event.title}
-            authToken={authToken || ""}
-          />
+          {!isDraft && (
+            <EventReminderButton
+              eventId={event.event_id}
+              eventTitle={event.title}
+              authToken={authToken || ""}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -481,6 +596,7 @@ export default function ManageDashboard() {
         campus_hosted_at: fest.campus_hosted_at || fest.campus || null,
         is_archived: fest.is_archived === true,
         archived_at: fest.archived_at || null,
+        workflow_status: fest.workflow_status || null,
       }));
 
       const userSpecificFests = mappedFests.filter(
@@ -746,7 +862,7 @@ export default function ManageDashboard() {
   }, [eventsPage, festsPage]);
 
   // Helper function to refresh live events from Supabase
-  const refreshLiveEvents = async () => {
+  const refreshLiveEvents = useCallback(async () => {
     try {
       if (!authToken) {
         setLiveEvents(contextAllEvents);
@@ -770,7 +886,22 @@ export default function ManageDashboard() {
       console.error("Error refreshing live events:", err);
       setLiveEvents(contextAllEvents);
     }
-  };
+  }, [API_URL, authToken, contextAllEvents]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    if (activeTab !== "events" && activeTab !== "fests") return;
+
+    const intervalId = window.setInterval(() => {
+      if (activeTab === "events") {
+        refreshLiveEvents();
+      } else {
+        refreshFests();
+      }
+    }, 60000);
+
+    return () => window.clearInterval(intervalId);
+  }, [authToken, activeTab, refreshLiveEvents, refreshFests]);
 
   // ─── REPORT GENERATION HANDLER ────────────────────────
   const handleGenerateReport = async () => {
@@ -1001,6 +1132,13 @@ export default function ManageDashboard() {
       return;
     }
 
+    const sourceEvents = (liveEvents.length > 0 ? liveEvents : (contextAllEvents as ContextEvent[])) || [];
+    const selectedEvent = sourceEvents.find((entry) => entry.event_id === eventId);
+    if (!isMasterAdmin && isPendingWorkflowStatus(selectedEvent?.workflow_status)) {
+      toast.error("This event is awaiting approval and cannot be modified right now.");
+      return;
+    }
+
     setArchiveUpdatingIds((prev) => {
       const next = new Set(prev);
       next.add(eventId);
@@ -1025,6 +1163,11 @@ export default function ManageDashboard() {
       console.log(`📋 Response payload:`, payload);
 
       if (!response.ok) {
+        if (payload?.error_code === "PENDING_APPROVAL_BLOCK") {
+          toast.error(payload?.message || "This event is awaiting approval and is locked.");
+          await refreshLiveEvents();
+          return;
+        }
         const errorMsg = payload?.error || `HTTP ${response.status}: Failed to update archive status.`;
         throw new Error(errorMsg);
       }
@@ -1086,6 +1229,12 @@ export default function ManageDashboard() {
       return;
     }
 
+    const selectedFest = fests.find((entry) => entry.fest_id === festId);
+    if (!isMasterAdmin && isPendingWorkflowStatus(selectedFest?.workflow_status)) {
+      toast.error("This fest is awaiting approval and cannot be modified right now.");
+      return;
+    }
+
     setFestArchiveUpdatingIds((prev) => {
       const next = new Set(prev);
       next.add(festId);
@@ -1110,6 +1259,11 @@ export default function ManageDashboard() {
       console.log(`📋 Response payload:`, payload);
 
       if (!response.ok) {
+        if (payload?.error_code === "PENDING_APPROVAL_BLOCK") {
+          toast.error(payload?.message || "This fest is awaiting approval and is locked.");
+          await Promise.all([refreshLiveEvents(), refreshFests()]);
+          return;
+        }
         const errorMsg = payload?.error || `HTTP ${response.status}: Failed to update fest archive status.`;
         throw new Error(errorMsg);
       }

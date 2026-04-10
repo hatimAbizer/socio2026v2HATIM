@@ -1,5 +1,67 @@
 import supabase from "../config/supabaseClient.js";
-import { queryOne, update } from "../config/database.js";
+import { queryAll, queryOne, update } from "../config/database.js";
+import {
+  ROLE_CODES,
+  deriveLegacyFlagsFromRoleCodes,
+  deriveRoleCodesFromAssignments,
+  hasAnyRoleCode,
+} from "../utils/roleAccessService.js";
+
+const ROLE_ASSIGNMENTS_TABLE = "user_role_assignments";
+
+const isMissingRelationError = (error) => {
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || "").toLowerCase();
+
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    (message.includes("relation") && message.includes("does not exist")) ||
+    (message.includes("could not find") && message.includes("schema cache"))
+  );
+};
+
+const enrichUserInfoWithRoleAssignments = async (userRecord) => {
+  if (!userRecord?.id) {
+    return userRecord;
+  }
+
+  try {
+    const assignments = await queryAll(ROLE_ASSIGNMENTS_TABLE, {
+      where: { user_id: userRecord.id },
+      order: { column: "created_at", ascending: false },
+    });
+
+    const roleAssignments = Array.isArray(assignments) ? assignments : [];
+    const roleCodes = deriveRoleCodesFromAssignments(roleAssignments);
+    const legacyRoleFlags = deriveLegacyFlagsFromRoleCodes(roleCodes, userRecord);
+
+    return {
+      ...userRecord,
+      ...legacyRoleFlags,
+      role_assignments: roleAssignments,
+      role_codes: roleCodes,
+    };
+  } catch (error) {
+    if (isMissingRelationError(error)) {
+      return {
+        ...userRecord,
+        role_assignments: [],
+        role_codes: [],
+      };
+    }
+
+    throw error;
+  }
+};
+
+const isMasterAdminUser = (userInfo) => {
+  return Boolean(userInfo?.is_masteradmin) || hasAnyRoleCode(userInfo?.role_codes, [ROLE_CODES.MASTER_ADMIN]);
+};
+
+const isOrganiserUser = (userInfo) => {
+  return Boolean(userInfo?.is_organiser) || hasAnyRoleCode(userInfo?.role_codes, [ROLE_CODES.ORGANIZER_TEACHER]);
+};
 
 /**
  * Middleware to check and clear expired roles
@@ -127,7 +189,7 @@ export const getUserInfo = () => {
       }
 
       console.log(`[UserInfo] ✅ Found user: ${user.email}`);
-      req.userInfo = user;
+      req.userInfo = await enrichUserInfoWithRoleAssignments(user);
       next();
     } catch (error) {
       console.error('Get user info error:', error);
@@ -145,18 +207,22 @@ export const requireOrganiser = (req, res, next) => {
     return res.status(401).json({ error: 'User info not available' });
   }
 
-  console.log(`[ORGANISER CHECK] Checking user: ${req.userInfo.email}, is_organiser: ${req.userInfo.is_organiser}`);
+  const userIsOrganiser = isOrganiserUser(req.userInfo);
+  const userIsMasterAdmin = isMasterAdminUser(req.userInfo);
+  const roleCodes = Array.isArray(req.userInfo.role_codes) ? req.userInfo.role_codes : [];
+
+  console.log(`[ORGANISER CHECK] Checking user: ${req.userInfo.email}, is_organiser: ${req.userInfo.is_organiser}, role_codes: ${roleCodes.join(',')}`);
   
-  if (!req.userInfo.is_organiser) {
+  if (!userIsOrganiser && !userIsMasterAdmin) {
     console.warn(`[ORGANISER CHECK] ❌ User ${req.userInfo.email} is NOT an organiser. Access denied.`);
     return res.status(403).json({ 
       error: 'Access denied: Organiser privileges required',
       userEmail: req.userInfo.email,
-      currentRole: 'regular_user'
+      currentRole: roleCodes.length > 0 ? roleCodes.join(',') : 'regular_user'
     });
   }
 
-  console.log(`[ORGANISER CHECK] ✅ User ${req.userInfo.email} IS an organiser. Proceeding.`);
+  console.log(`[ORGANISER CHECK] ✅ User ${req.userInfo.email} has organiser-equivalent access. Proceeding.`);
   next();
 };
 
@@ -168,7 +234,7 @@ export const requireMasterAdmin = (req, res, next) => {
     return res.status(401).json({ error: 'User info not available' });
   }
 
-  if (!req.userInfo.is_masteradmin) {
+  if (!isMasterAdminUser(req.userInfo)) {
     console.warn(`[MasterAdmin] Access denied for ${req.userInfo.email} - Master Admin privileges required`);
     return res.status(403).json({
       error: 'Access denied: Master Admin privileges required'
@@ -177,6 +243,50 @@ export const requireMasterAdmin = (req, res, next) => {
 
   console.log(`[MasterAdmin] Access granted to ${req.userInfo.email}`);
   return next();
+};
+
+/**
+ * Middleware factory for requiring any one role from a set.
+ * Master admin bypass is enabled by default.
+ */
+export const requireAnyRole = (allowedRoleCodes = [], options = {}) => {
+  const normalizedAllowedRoles = Array.from(
+    new Set((allowedRoleCodes || []).map((roleCode) => String(roleCode || "").trim().toUpperCase()).filter(Boolean))
+  );
+
+  const allowMasterAdminBypass = options.allowMasterAdminBypass !== false;
+
+  return (req, res, next) => {
+    if (!req.userInfo) {
+      return res.status(401).json({ error: "User info not available" });
+    }
+
+    if (normalizedAllowedRoles.length === 0) {
+      return next();
+    }
+
+    if (allowMasterAdminBypass && isMasterAdminUser(req.userInfo)) {
+      return next();
+    }
+
+    const userRoleCodes = Array.isArray(req.userInfo.role_codes) ? req.userInfo.role_codes : [];
+    if (hasAnyRoleCode(userRoleCodes, normalizedAllowedRoles)) {
+      return next();
+    }
+
+    const fallbackAllowedByLegacyFlags =
+      (normalizedAllowedRoles.includes(ROLE_CODES.ORGANIZER_TEACHER) && Boolean(req.userInfo.is_organiser)) ||
+      (normalizedAllowedRoles.includes(ROLE_CODES.MASTER_ADMIN) && Boolean(req.userInfo.is_masteradmin));
+
+    if (fallbackAllowedByLegacyFlags) {
+      return next();
+    }
+
+    return res.status(403).json({
+      error: "Access denied: Required role assignment missing",
+      required_roles: normalizedAllowedRoles,
+    });
+  };
 };
 
 /**
@@ -214,7 +324,7 @@ export const requireOwnership = (table, paramName, ownerField = 'auth_uuid') => 
       };
 
       // Master admin bypass - can access any resource
-      if (req.userInfo?.is_masteradmin) {
+      if (isMasterAdminUser(req.userInfo)) {
         console.log(`[Ownership] ✅ BYPASSED for master admin: ${req.userInfo.email}`);
         
         // Still fetch the resource for req.resource
@@ -375,7 +485,7 @@ export const optionalAuth = async (req, res, next) => {
         try {
           const localUser = await queryOne('users', { where: { auth_uuid: user.id } });
           if (localUser) {
-            req.userInfo = localUser;
+            req.userInfo = await enrichUserInfoWithRoleAssignments(localUser);
           }
         } catch (dbError) {
           console.warn('[optionalAuth] Failed to hydrate req.userInfo:', dbError?.message || dbError);

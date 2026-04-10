@@ -12,6 +12,23 @@ import { SubmitHandler } from "react-hook-form";
 import { useAuth } from "@/context/AuthContext";
 import toast from "react-hot-toast";
 
+const PENDING_WORKFLOW_STATUS_REGEX = /^pending_level_([1-4])$/;
+const APPROVAL_LEVEL_LABEL_BY_NUMBER: Record<number, string> = {
+  1: "Level 1 (HOD)",
+  2: "Level 2 (Dean/Director)",
+  3: "Level 3 (CFO/Campus Director)",
+  4: "Level 4 (Accounts)",
+};
+
+const getPendingApprovalLabel = (workflowStatus?: string | null) => {
+  const normalized = String(workflowStatus || "").trim().toLowerCase();
+  const match = PENDING_WORKFLOW_STATUS_REGEX.exec(normalized);
+  if (!match) return null;
+  const level = Number(match[1]);
+  const levelLabel = APPROVAL_LEVEL_LABEL_BY_NUMBER[level] || `Level ${level}`;
+  return `Awaiting ${levelLabel} approval`;
+};
+
 export default function EditEventPage() {
   const params = useParams();
   const eventIdSlug = params?.id as string;
@@ -44,6 +61,11 @@ export default function EditEventPage() {
   const [isArchived, setIsArchived] = useState(false);
   const [isDraft, setIsDraft] = useState(false);
   const [isArchiveUpdating, setIsArchiveUpdating] = useState(false);
+  const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
+
+  const isMasterAdminUser = Boolean((userData as any)?.is_masteradmin);
+  const pendingApprovalLabel = getPendingApprovalLabel(workflowStatus);
+  const isPendingApprovalLocked = Boolean(pendingApprovalLabel) && !isMasterAdminUser;
 
   useEffect(() => {
     if (authIsLoading) return;
@@ -99,6 +121,9 @@ export default function EditEventPage() {
         const data = parsedResponse.event;
 
         if (data) {
+          const normalizedWorkflowStatus = String(data.workflow_status || "").trim().toLowerCase();
+          setWorkflowStatus(normalizedWorkflowStatus || null);
+
           let parsedDepartments: string[] = [];
           const dbDepartmentAccess = data.department_access;
           if (dbDepartmentAccess) {
@@ -439,6 +464,11 @@ export default function EditEventPage() {
       return;
     }
 
+    if (isPendingApprovalLocked) {
+      toast.error("This event is awaiting approval and cannot be modified right now.");
+      return;
+    }
+
     setIsArchiveUpdating(true);
     try {
       const response = await fetch(`${API_URL}/api/events/${eventIdSlug}/archive`, {
@@ -452,6 +482,10 @@ export default function EditEventPage() {
 
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
+        if (payload?.error_code === "PENDING_APPROVAL_BLOCK") {
+          setWorkflowStatus(String(payload?.workflow_status || workflowStatus || "").trim().toLowerCase() || null);
+          throw new Error(payload?.message || "This event is awaiting approval and is locked.");
+        }
         throw new Error(payload?.error || "Failed to update archive status.");
       }
 
@@ -545,6 +579,12 @@ export default function EditEventPage() {
       setErrorMessage("You are not authorized to perform this action.");
       setIsSubmitting(false);
       throw new Error("Not authorized."); // Ensure EventForm knows
+    }
+
+    if (isPendingApprovalLocked) {
+      const lockedMessage = "This event is awaiting approval and cannot be edited right now.";
+      setErrorMessage(lockedMessage);
+      throw new Error(lockedMessage);
     }
 
     setIsSubmitting(true);
@@ -718,6 +758,11 @@ export default function EditEventPage() {
           errorData.error ||
           errorData.detail ||
           `Update failed: ${response.status}`;
+
+        if (errorData?.error_code === "PENDING_APPROVAL_BLOCK") {
+          setWorkflowStatus(String(errorData?.workflow_status || workflowStatus || "").trim().toLowerCase() || null);
+        }
+
         setErrorMessage(`Update error: ${apiErrorMsg}`);
         const wrappedError = new Error(apiErrorMsg);
         (wrappedError as any).fieldErrors =
@@ -729,6 +774,12 @@ export default function EditEventPage() {
 
       try {
         const resultJson = JSON.parse(resultText);
+        const latestWorkflowStatus =
+          resultJson?.workflow_status || resultJson?.event?.workflow_status || null;
+        if (latestWorkflowStatus !== null && latestWorkflowStatus !== undefined) {
+          setWorkflowStatus(String(latestWorkflowStatus).trim().toLowerCase() || null);
+        }
+
         if (resultJson.event) {
           setExistingImageFileUrl(resultJson.event.event_image_url || null);
           setExistingBannerFileUrl(resultJson.event.banner_url || null);
@@ -804,6 +855,23 @@ export default function EditEventPage() {
     return (
       <div className="p-8 text-center text-lg font-semibold">
         Loading event data...
+      </div>
+    );
+  }
+
+  if (isPendingApprovalLocked) {
+    return (
+      <div className="p-8 text-center">
+        <h2 className="text-xl font-semibold text-amber-700 mb-3">Approval Pending</h2>
+        <p className="text-amber-700">
+          {pendingApprovalLabel}. This event is locked for editing until approval is completed or rejected.
+        </p>
+        <button
+          onClick={() => router.push("/manage")}
+          className="mt-6 px-4 py-2 bg-[#154CB3] text-white rounded hover:bg-[#154cb3df]"
+        >
+          Back to Manage Events
+        </button>
       </div>
     );
   }
