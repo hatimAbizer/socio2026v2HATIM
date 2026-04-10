@@ -93,9 +93,13 @@ function NavigationBar() {
   const universityRole = String((userData as any)?.university_role || "").toLowerCase().trim();
   const isHod = Boolean((userData as any)?.is_hod) || universityRole === "hod";
   const isDean = Boolean((userData as any)?.is_dean) || universityRole === "dean";
+  const isFinanceOfficer =
+    Boolean((userData as any)?.is_finance_officer) ||
+    universityRole === "finance_officer";
   const canOpenHodDashboard = isHod || isMasterAdmin;
   const canOpenDeanDashboard = isDean || isMasterAdmin;
-  const isManagementUser = isMasterAdmin || isOrganiser || isHod || isDean;
+  const canOpenFinanceDashboard = isFinanceOfficer;
+  const isManagementUser = isMasterAdmin || isOrganiser || isHod || isDean || isFinanceOfficer;
 
   useEffect(() => {
     setAvatarLoadError(false);
@@ -385,6 +389,14 @@ function NavigationBar() {
                       Dean Dashboard
                     </Link>
                   )}
+                  {!isDesktopCompact && canOpenFinanceDashboard && (
+                    <Link
+                      href="/manage/finance"
+                      className="inline-flex cursor-pointer font-semibold px-3 py-1.5 sm:px-4 sm:py-2 border-2 rounded-full text-xs sm:text-sm border-emerald-600 text-emerald-700 hover:bg-emerald-50 transition-all duration-200 ease-in-out"
+                    >
+                      Finance Dashboard
+                    </Link>
+                  )}
                   {/* CHANGED ORGANISED AND ADMIN BUTTON */}
                   <div className="relative">
                     <button
@@ -660,6 +672,16 @@ function NavigationBar() {
                       Dean Dashboard
                     </Link>
                   )}
+
+                  {canOpenFinanceDashboard && (
+                    <Link
+                      href="/manage/finance"
+                      onClick={closeDesktopMenu}
+                      className="block rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors duration-200"
+                    >
+                      Finance Dashboard
+                    </Link>
+                  )}
                 </div>
               </div>
             )}
@@ -727,6 +749,15 @@ function NavigationBar() {
                 className="inline-flex items-center justify-center rounded-full border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 transition-colors duration-200"
               >
                 Dean Dashboard
+              </Link>
+            )}
+
+            {canOpenFinanceDashboard && (
+              <Link
+                href="/manage/finance"
+                className="inline-flex items-center justify-center rounded-full border border-emerald-300 bg-white px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors duration-200"
+              >
+                Finance Dashboard
               </Link>
             )}
           </div>

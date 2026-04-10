@@ -452,9 +452,13 @@ export default function ManageDashboard() {
   const isHod = Boolean((userData as any)?.is_hod) || universityRole === "hod";
   const isDean = Boolean((userData as any)?.is_dean) || universityRole === "dean";
   const isCfo = Boolean((userData as any)?.is_cfo) || universityRole === "cfo";
+  const isFinanceOfficer =
+    Boolean((userData as any)?.is_finance_officer) ||
+    universityRole === "finance_officer";
   const canOpenHodDashboard = isHod || isMasterAdmin;
   const canOpenDeanDashboard = isDean || isMasterAdmin;
   const canOpenCfoDashboard = isCfo || isMasterAdmin;
+  const canOpenFinanceDashboard = isFinanceOfficer;
   
   // Fests Data
   const [fests, setFests] = useState<Fest[]>([]);
@@ -498,8 +502,13 @@ export default function ManageDashboard() {
 
     if (isCfo) {
       router.replace("/manage/cfo");
+      return;
     }
-  }, [userData, isMasterAdmin, isOrganiser, isHod, isDean, isCfo, router]);
+
+    if (isFinanceOfficer) {
+      router.replace("/manage/finance");
+    }
+  }, [userData, isMasterAdmin, isOrganiser, isHod, isDean, isCfo, isFinanceOfficer, router]);
 
   const normalizeEmail = (value: string | null | undefined) =>
     String(value || "").trim().toLowerCase();
@@ -1370,7 +1379,7 @@ export default function ManageDashboard() {
           </div>
         </div>
 
-        {(canOpenHodDashboard || canOpenDeanDashboard || canOpenCfoDashboard) && (
+        {(canOpenHodDashboard || canOpenDeanDashboard || canOpenCfoDashboard || canOpenFinanceDashboard) && (
           <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Approval Dashboards</p>
             <p className="mt-1 text-sm text-slate-600">
@@ -1399,6 +1408,14 @@ export default function ManageDashboard() {
                   className="inline-flex items-center gap-2 rounded-full border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 transition-colors hover:bg-emerald-100"
                 >
                   Open CFO Dashboard <ArrowRight className="h-4 w-4" />
+                </Link>
+              )}
+              {canOpenFinanceDashboard && (
+                <Link
+                  href="/manage/finance"
+                  className="inline-flex items-center gap-2 rounded-full border border-emerald-500 bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-900 transition-colors hover:bg-emerald-200"
+                >
+                  Open Finance Dashboard <ArrowRight className="h-4 w-4" />
                 </Link>
               )}
             </div>
