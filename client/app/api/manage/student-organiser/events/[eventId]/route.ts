@@ -5,6 +5,15 @@ import { NextResponse } from "next/server";
 type ActionType = "save_logistics" | "save_runsheet" | "save_post_event" | "finalize_attendance";
 
 type GenericRecord = Record<string, unknown>;
+type RunsheetItemRecord = {
+  id: string;
+  time: string;
+  task: string;
+  notes: string;
+  order: number;
+  assignee_registration_id: string | null;
+  assignee_label: string | null;
+};
 
 const EVENT_SELECT_CANDIDATES = [
   "event_id,fest_id,created_by,event_heads,additional_requests,schedule",
@@ -118,10 +127,10 @@ function sanitizeUrlList(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-function sanitizeRunsheetItems(value: unknown): GenericRecord[] {
+function sanitizeRunsheetItems(value: unknown): RunsheetItemRecord[] {
   const raw = Array.isArray(value) ? value : [];
 
-  return raw.reduce<GenericRecord[]>((acc, entry, index) => {
+  return raw.reduce<RunsheetItemRecord[]>((acc, entry, index) => {
     const row = asRecord(entry);
     const task = normalizeText(row.task || row.activity);
     if (!task) {
