@@ -29,6 +29,7 @@ type UserData = {
   is_dean?: boolean;
   is_cfo?: boolean;
   is_finance_officer?: boolean;
+  is_organiser_student?: boolean;
   is_volunteer?: boolean;
   university_role?: string | null;
   role_codes?: string[];
@@ -335,6 +336,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
 
+    const normalizeRoleCodes = (rawRoleCodes: unknown): string[] => {
+      if (!Array.isArray(rawRoleCodes)) {
+        return [];
+      }
+
+      return Array.from(
+        new Set(
+          rawRoleCodes
+            .map((roleCode: unknown) => String(roleCode || "").trim().toUpperCase())
+            .filter((roleCode: string) => roleCode.length > 0)
+        )
+      );
+    };
+
+    const normalizeUserRecord = (rawUser: Record<string, unknown>) => {
+      const normalizedRoleCodes = normalizeRoleCodes(rawUser.role_codes);
+
+      return {
+        ...rawUser,
+        is_organiser: Boolean(rawUser.is_organiser),
+        is_support: Boolean(rawUser.is_support),
+        is_masteradmin: Boolean(rawUser.is_masteradmin),
+        is_hod: Boolean(rawUser.is_hod),
+        is_dean: Boolean(rawUser.is_dean),
+        is_cfo: Boolean(rawUser.is_cfo),
+        is_finance_officer: Boolean(rawUser.is_finance_officer),
+        is_organiser_student: Boolean(rawUser.is_organiser_student),
+        is_volunteer: Boolean(rawUser.is_volunteer),
+        university_role: rawUser.university_role
+          ? String(rawUser.university_role).toLowerCase().trim()
+          : null,
+        role_codes: normalizedRoleCodes,
+      };
+    };
+
+    let apiUserRecord: Record<string, unknown> | null = null;
+    let runtimeUserRecord: Record<string, unknown> | null = null;
+
     try {
       const response = await fetch(`${API_URL}/api/users/${encodeURIComponent(email)}`);
       if (!response.ok) {
@@ -342,45 +381,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           console.warn(
             `User data not found for ${email}. User might need to be created.`
           );
-          setUserData(null);
         } else {
           throw new Error(`Failed to fetch user data: ${response.statusText}`);
         }
-        return null;
+      } else {
+        const data = await response.json();
+        if (data?.user && typeof data.user === "object") {
+          apiUserRecord = data.user as Record<string, unknown>;
+        }
       }
-      const data = await response.json();
-      const normalizedRoleCodes = Array.isArray(data.user?.role_codes)
-        ? Array.from(
-            new Set(
-              data.user.role_codes
-                .map((roleCode: unknown) => String(roleCode || "").trim().toUpperCase())
-                .filter((roleCode: string) => roleCode.length > 0)
-            )
-          )
-        : [];
-
-      const user = {
-        ...data.user,
-        is_organiser: Boolean(data.user?.is_organiser),
-        is_support: Boolean(data.user?.is_support),
-        is_masteradmin: Boolean(data.user?.is_masteradmin),
-        is_hod: Boolean(data.user?.is_hod),
-        is_dean: Boolean(data.user?.is_dean),
-        is_cfo: Boolean(data.user?.is_cfo),
-        is_finance_officer: Boolean(data.user?.is_finance_officer),
-        is_volunteer: Boolean(data.user?.is_volunteer),
-        university_role: data.user?.university_role
-          ? String(data.user.university_role).toLowerCase().trim()
-          : null,
-        role_codes: normalizedRoleCodes,
-      };
-      setUserData(user);
-      return user;
     } catch (error) {
       console.error("Error fetching user data:", error);
+    }
+
+    // Resolve role context from the same client deployment to avoid cross-deployment drift.
+    try {
+      const runtimeResponse = await fetch("/api/auth/profile", { cache: "no-store" });
+      if (runtimeResponse.ok) {
+        const runtimeData = await runtimeResponse.json();
+        if (runtimeData?.user && typeof runtimeData.user === "object") {
+          runtimeUserRecord = runtimeData.user as Record<string, unknown>;
+        }
+      }
+    } catch (error) {
+      console.warn("Auth profile enrichment failed:", error);
+    }
+
+    const mergedUserRecord = runtimeUserRecord
+      ? {
+          ...(apiUserRecord || {}),
+          ...runtimeUserRecord,
+        }
+      : apiUserRecord;
+
+    if (!mergedUserRecord) {
       setUserData(null);
       return null;
     }
+
+    const user = normalizeUserRecord(mergedUserRecord);
+    setUserData(user);
+    return user;
   };
 
   const signInWithGoogle = async () => {
