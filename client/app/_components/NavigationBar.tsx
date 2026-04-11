@@ -235,6 +235,14 @@ function NavigationBar() {
   const dropdownRoleDashboardLinks = shouldGroupRoleDashboards
     ? roleDashboardLinks.filter((item) => !inlineRoleDashboardHrefSet.has(item.href))
     : [];
+  const mobilePrimaryRoleDashboardLink =
+    roleDashboardLinks.find((item) => item.href === "/manage") ||
+    roleDashboardLinks.find((item) => item.href === "/masteradmin") ||
+    roleDashboardLinks[0] ||
+    null;
+  const mobileDropdownRoleDashboardLinks = mobilePrimaryRoleDashboardLink
+    ? roleDashboardLinks.filter((item) => item.href !== mobilePrimaryRoleDashboardLink.href)
+    : [];
 
   useEffect(() => {
     setAvatarLoadError(false);
@@ -885,17 +893,17 @@ function NavigationBar() {
               Fests
             </Link>
 
-            {inlineRoleDashboardLinks.map((item) => (
+            {mobilePrimaryRoleDashboardLink && (
               <Link
-                key={`mobile-role-${item.href}`}
-                href={item.href}
-                className={mobileRoleLinkClassByVariant[item.variant]}
+                key={`mobile-role-${mobilePrimaryRoleDashboardLink.href}`}
+                href={mobilePrimaryRoleDashboardLink.href}
+                className={mobileRoleLinkClassByVariant[mobilePrimaryRoleDashboardLink.variant]}
               >
-                {item.name}
+                {mobilePrimaryRoleDashboardLink.name}
               </Link>
-            ))}
+            )}
 
-            {shouldGroupRoleDashboards && (
+            {mobileDropdownRoleDashboardLinks.length > 0 && (
               <div className="col-span-2">
                 <button
                   type="button"
@@ -919,7 +927,7 @@ function NavigationBar() {
 
                 {showRoleDashboardsDropdown && (
                   <div className="mt-2 space-y-2">
-                    {dropdownRoleDashboardLinks.map((item) => (
+                    {mobileDropdownRoleDashboardLinks.map((item) => (
                       <Link
                         key={`mobile-${item.href}`}
                         href={item.href}
