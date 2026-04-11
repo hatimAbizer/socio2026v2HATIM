@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+﻿import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -146,21 +146,15 @@ export async function PATCH(
 
     const universityRole = String(userProfile.university_role || "").toLowerCase().trim();
     const isMasterAdmin = Boolean(userProfile.is_masteradmin);
-<<<<<<< Updated upstream
     const isCfo = Boolean(userProfile.is_cfo) || universityRole === "cfo";
 
     if (!isMasterAdmin && !isCfo) {
-      return jsonError(403, "Only CFO users can perform L3 actions.");
+      return jsonError(403, "Only CFO or Master Admin users can perform L3 actions.");
     }
 
     const userCampus = String(userProfile.campus || "").trim();
-    if (!userCampus) {
+    if (!isMasterAdmin && !userCampus) {
       return jsonError(403, "No campus scope is mapped to this CFO account.");
-=======
-    const isCfoUser = Boolean(userProfile.is_cfo) || universityRole === "cfo";
-    if (!isCfoUser && !isMasterAdmin) {
-      return jsonError(403, "Only CFO or Master Admin users can perform L3 actions.");
->>>>>>> Stashed changes
     }
 
     const body = await request.json().catch(() => null);
@@ -215,6 +209,10 @@ export async function PATCH(
 
     if (String(requestRow.status || "") !== "pending") {
       return jsonError(409, "This request is no longer pending.");
+    }
+
+    if (!isMasterAdmin && String(eventRow.campus_hosted_at || "").trim() !== userCampus) {
+      return jsonError(403, "This request does not belong to your campus scope.");
     }
 
     if (eventRow.fest_id !== null && eventRow.fest_id !== undefined && String(eventRow.fest_id).trim() !== "") {

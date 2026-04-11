@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
@@ -32,6 +32,14 @@ import AdminDashboardView from "../_components/Admin/AdminDashboardView";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL!.replace(/\/api\/?$/, "");
 const ITEMS_PER_PAGE = 20;
+const CAMPUS_SCOPE_FALLBACK = [
+  "Central Campus (Main)",
+  "Bannerghatta Road Campus",
+  "Yeshwanthpur Campus",
+  "Kengeri Campus",
+  "Delhi NCR Campus",
+  "Pune Lavasa Campus",
+];
 
 const AnalyticsDashboard = dynamic(
   () => import("../_components/Admin/AnalyticsDashboard"),
@@ -363,7 +371,7 @@ export default function MasterAdminPage() {
   // Sort indicator
   const SortIcon = ({ active, dir }: { active: boolean; dir: "asc" | "desc" }) => (
     <span className={`ml-1 inline-block transition-colors ${active ? "text-[#154CB3]" : "text-gray-400"}`}>
-      {active ? (dir === "asc" ? "▲" : "▼") : "⇅"}
+      {active ? (dir === "asc" ? "â–²" : "â–¼") : "â‡…"}
     </span>
   );
 
@@ -719,7 +727,6 @@ export default function MasterAdminPage() {
       const isDeanScoped = scopedRole === "dean";
       const isCfoScoped = scopedRole === "cfo";
       const isFinanceScoped = scopedRole === "finance_officer";
-<<<<<<< Updated upstream
       const selectedDepartmentId = normalizeOptionalText(editingUserRoles.department_id);
       const selectedSchoolId = normalizeOptionalText(editingUserRoles.school_id);
       const selectedCampus = normalizeOptionalText(editingUserRoles.campus);
@@ -735,8 +742,7 @@ export default function MasterAdminPage() {
         (scopedRole === "hod" && initialDepartmentId !== selectedDepartmentId) ||
         (scopedRole === "dean" && initialSchoolId !== selectedSchoolId) ||
         (scopedRole === "cfo" && initialCampus !== selectedCampus);
-      const availableCampuses =
-        campusScopeOptions.length > 0 ? campusScopeOptions : CAMPUS_SCOPE_FALLBACK;
+      const availableCampuses = CAMPUS_SCOPE_FALLBACK;
 
       if (isHodScoped && !selectedDepartmentId) {
         toast.error("Select a department before assigning HOD.");
@@ -762,8 +768,6 @@ export default function MasterAdminPage() {
         toast.error("Finance Officer is global and cannot be tied to department, school, or campus.");
         return;
       }
-=======
->>>>>>> Stashed changes
 
       const token = await getFreshToken();
       const payload: Record<string, unknown> = {
@@ -792,23 +796,7 @@ export default function MasterAdminPage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-<<<<<<< Updated upstream
         body: JSON.stringify(payload),
-=======
-        body: JSON.stringify({
-          is_organiser: editingUserRoles.is_organiser,
-          organiser_expires_at: editingUserRoles.organiser_expires_at || null,
-          is_support: editingUserRoles.is_support,
-          support_expires_at: editingUserRoles.support_expires_at || null,
-          is_masteradmin: editingUserRoles.is_masteradmin,
-          masteradmin_expires_at: editingUserRoles.masteradmin_expires_at || null,
-          is_hod: isHodScoped,
-          is_dean: isDeanScoped,
-          is_cfo: isCfoScoped,
-          is_finance_officer: isFinanceScoped,
-          university_role: scopedRole,
-        }),
->>>>>>> Stashed changes
       });
 
       if (!response.ok) {
@@ -972,7 +960,7 @@ export default function MasterAdminPage() {
     return null;
   }
 
-  // ── Sidebar nav config ──
+  // â”€â”€ Sidebar nav config â”€â”€
   const sidebarNav = [
     { id: "dashboard" as const, label: "Dashboard", icon: <LayoutDashboard className="w-4 h-4" /> },
     { id: "dataExplorer" as const, label: "Data Explorer", icon: <LineChart className="w-4 h-4" /> },
@@ -986,7 +974,7 @@ export default function MasterAdminPage() {
   return (
     <div className="flex h-[calc(100dvh-9.5rem)] md:h-[calc(100dvh-8.5rem)] lg:h-[calc(100dvh-7.75rem)] bg-slate-50 overflow-hidden">
 
-      {/* ── Sidebar ───────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Sidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <aside className="sticky top-0 h-full w-56 flex-shrink-0 bg-white border-r border-slate-200 flex flex-col overflow-hidden">
         <nav className="px-3 pt-4 pb-2 space-y-0.5">
           {sidebarNav.map((item) => {
@@ -1064,7 +1052,7 @@ export default function MasterAdminPage() {
         </div>
       </aside>
 
-      {/* ── Main Content ──────────────────────────────────────────────────── */}
+      {/* â”€â”€ Main Content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <main className="min-w-0 flex-1 bg-slate-50 overflow-y-auto">
 
         {/* Dashboard Tab */}
@@ -1612,7 +1600,7 @@ export default function MasterAdminPage() {
                             <tr key={event.event_id} className="hover:bg-gray-50 transition-all duration-200">
                               <td className="px-6 py-4">
                                 <div className="font-semibold text-gray-900">{event.title}</div>
-                                <div className="text-xs text-gray-400 mt-0.5">ID: {event.event_id.slice(0, 8)}…</div>
+                                <div className="text-xs text-gray-400 mt-0.5">ID: {event.event_id.slice(0, 8)}â€¦</div>
                               </td>
                               <td className="px-6 py-3">
                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${status.color}`}>

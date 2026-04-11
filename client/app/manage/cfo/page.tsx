@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+﻿import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -110,22 +110,13 @@ export default async function CfoManagePage() {
 
   const universityRole = String(userProfile.university_role || "").toLowerCase().trim();
   const isMasterAdmin = Boolean(userProfile.is_masteradmin);
-<<<<<<< Updated upstream
   const isCfo = Boolean(userProfile.is_cfo) || hasRoleAlias(universityRole, ["cfo"]);
 
   if (!isMasterAdmin && !isCfo) {
-=======
-  const isCfoUser = Boolean(userProfile.is_cfo) || universityRole === "cfo";
-  if (!isCfoUser && !isMasterAdmin) {
->>>>>>> Stashed changes
     redirect("/manage");
   }
 
   const campusName = String(userProfile.campus || "").trim();
-<<<<<<< Updated upstream
-=======
-
->>>>>>> Stashed changes
   const l2Threshold = await resolveL2Threshold(supabase, campusName);
 
   const fallbackDashboardData: Awaited<ReturnType<typeof fetchCfoDashboardData>> = {
@@ -142,7 +133,6 @@ export default async function CfoManagePage() {
   let dashboardData: Awaited<ReturnType<typeof fetchCfoDashboardData>> = fallbackDashboardData;
   let dashboardErrorMessage: string | null = null;
 
-<<<<<<< Updated upstream
   if (!campusName) {
     dashboardErrorMessage = "No campus scope is mapped to this CFO account.";
   } else {
@@ -156,17 +146,6 @@ export default async function CfoManagePage() {
       dashboardErrorMessage =
         error instanceof Error ? error.message : "Unable to load CFO dashboard data right now.";
     }
-=======
-  try {
-    dashboardData = await fetchCfoDashboardData({
-      supabase,
-      campus: null,
-      l2Threshold,
-    });
-  } catch (error) {
-    dashboardErrorMessage =
-      error instanceof Error ? error.message : "Unable to load CFO dashboard data right now.";
->>>>>>> Stashed changes
   }
 
   return (
@@ -177,7 +156,7 @@ export default async function CfoManagePage() {
         </div>
       ) : null}
       <CfoDashboardClient
-        campusName="All Campuses"
+        campusName={campusName}
         initialQueue={dashboardData.queue}
         initialMetrics={dashboardData.metrics}
       />

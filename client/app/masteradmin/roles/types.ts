@@ -1,16 +1,8 @@
-export type UserRoleRow = {
+﻿export type UserRoleRow = {
   id: string | number;
   name: string | null;
   email: string;
   created_at: string | null;
-<<<<<<< Updated upstream
-=======
-  is_masteradmin: boolean;
-  is_hod: boolean;
-  is_dean: boolean;
-  is_cfo: boolean;
-  is_finance_officer: boolean;
->>>>>>> Stashed changes
   department_id: string | null;
   school_id: string | null;
   campus: string | null;
