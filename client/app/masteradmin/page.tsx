@@ -742,7 +742,6 @@ export default function MasterAdminPage() {
         (scopedRole === "hod" && initialDepartmentId !== selectedDepartmentId) ||
         (scopedRole === "dean" && initialSchoolId !== selectedSchoolId) ||
         (scopedRole === "cfo" && initialCampus !== selectedCampus);
-      const availableCampuses = CAMPUS_SCOPE_FALLBACK;
 
       if (isHodScoped && !selectedDepartmentId) {
         toast.error("Select a department before assigning HOD.");
@@ -756,11 +755,6 @@ export default function MasterAdminPage() {
 
       if (isCfoScoped && !selectedCampus) {
         toast.error("Select a campus before assigning CFO.");
-        return;
-      }
-
-      if (isCfoScoped && selectedCampus && !availableCampuses.includes(selectedCampus)) {
-        toast.error("Invalid campus selection for CFO role.");
         return;
       }
 

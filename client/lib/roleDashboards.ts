@@ -15,7 +15,7 @@ export const SERVICE_ROLE_DASHBOARDS: ServiceRoleDashboardConfig[] = [
   {
     slug: "it",
     label: "IT",
-    aliases: ["it", "information technology"],
+    aliases: ["it", "it service", "it services", "information technology"],
     userFlagKeys: ["is_it"],
   },
   {

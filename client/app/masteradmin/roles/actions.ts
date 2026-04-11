@@ -5,8 +5,12 @@ import { createClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import type {
+  AssignRoleMatrixActionResult,
   DeleteUserActionResult,
   DepartmentOption,
+  RoleMatrixAssignableRole,
+  RoleMatrixAssignPayload,
+  RoleMatrixAssignment,
   RolesAnalytics,
   RolesPageData,
   SchoolOption,
@@ -29,12 +33,161 @@ const CAMPUS_OPTIONS = [
   "Pune Lavasa Campus",
 ];
 
+const PRIMARY_CAMPUS = "Central Campus (Main)";
+
+const EXCLUDED_CAMPUS_VALUES = new Set([
+  "unknown campus",
+  "unknown",
+  "not specified",
+  "n/a",
+  "na",
+  "none",
+]);
+
+const FALLBACK_SCHOOL_NAMES = [
+  "SCHOOL OF BUSINESS AND MANAGEMENT",
+  "SCHOOL OF COMMERCE FINANCE AND ACCOUNTANCY",
+  "SCHOOL OF HUMANITIES AND PERFORMING ARTS",
+  "SCHOOL OF LAW",
+  "SCHOOL OF PSYCHOLOGICAL SCIENCES, EDUCATION AND SOCIAL WORK",
+  "SCHOOL OF SCIENCES",
+  "SCHOOL OF SOCIAL SCIENCES",
+];
+
+const FALLBACK_DEPARTMENT_OPTIONS: DepartmentOption[] = [
+  { id: "all_departments", department_name: "All Departments", school: null },
+  {
+    id: "dept_business_management_bba",
+    department_name: "Department of Business and Management (BBA)",
+    school: "SCHOOL OF BUSINESS AND MANAGEMENT",
+  },
+  {
+    id: "dept_business_management_mba",
+    department_name: "Department of Business and Management (MBA)",
+    school: "SCHOOL OF BUSINESS AND MANAGEMENT",
+  },
+  {
+    id: "dept_hotel_management",
+    department_name: "Department of Hotel Management",
+    school: "SCHOOL OF BUSINESS AND MANAGEMENT",
+  },
+  {
+    id: "dept_commerce",
+    department_name: "Department of Commerce",
+    school: "SCHOOL OF COMMERCE FINANCE AND ACCOUNTANCY",
+  },
+  {
+    id: "dept_professional_studies",
+    department_name: "Department of Professional Studies",
+    school: "SCHOOL OF COMMERCE FINANCE AND ACCOUNTANCY",
+  },
+  {
+    id: "dept_english_cultural_studies",
+    department_name: "Department of English and Cultural Studies",
+    school: "SCHOOL OF HUMANITIES AND PERFORMING ARTS",
+  },
+  {
+    id: "dept_music",
+    department_name: "Department of Music",
+    school: "SCHOOL OF HUMANITIES AND PERFORMING ARTS",
+  },
+  {
+    id: "dept_performing_arts",
+    department_name: "Department of Performing Arts",
+    school: "SCHOOL OF HUMANITIES AND PERFORMING ARTS",
+  },
+  {
+    id: "dept_philosophy_theology",
+    department_name: "Department of Philosophy and Theology",
+    school: "SCHOOL OF HUMANITIES AND PERFORMING ARTS",
+  },
+  {
+    id: "dept_theatre_studies",
+    department_name: "Department of Theatre Studies",
+    school: "SCHOOL OF HUMANITIES AND PERFORMING ARTS",
+  },
+  {
+    id: "dept_school_of_law",
+    department_name: "Department of School of Law",
+    school: "SCHOOL OF LAW",
+  },
+  {
+    id: "dept_psychology",
+    department_name: "Department of Psychology",
+    school: "SCHOOL OF PSYCHOLOGICAL SCIENCES, EDUCATION AND SOCIAL WORK",
+  },
+  {
+    id: "dept_school_of_education",
+    department_name: "Department of School of Education",
+    school: "SCHOOL OF PSYCHOLOGICAL SCIENCES, EDUCATION AND SOCIAL WORK",
+  },
+  {
+    id: "dept_social_work",
+    department_name: "Department of Social Work",
+    school: "SCHOOL OF PSYCHOLOGICAL SCIENCES, EDUCATION AND SOCIAL WORK",
+  },
+  {
+    id: "dept_chemistry",
+    department_name: "Department of Chemistry",
+    school: "SCHOOL OF SCIENCES",
+  },
+  {
+    id: "dept_computer_science",
+    department_name: "Department of Computer Science",
+    school: "SCHOOL OF SCIENCES",
+  },
+  {
+    id: "dept_life_sciences",
+    department_name: "Department of Life Sciences",
+    school: "SCHOOL OF SCIENCES",
+  },
+  {
+    id: "dept_mathematics",
+    department_name: "Department of Mathematics",
+    school: "SCHOOL OF SCIENCES",
+  },
+  {
+    id: "dept_physics_electronics",
+    department_name: "Department of Physics and Electronics",
+    school: "SCHOOL OF SCIENCES",
+  },
+  {
+    id: "dept_statistics_data_science",
+    department_name: "Department of Statistics and Data Science",
+    school: "SCHOOL OF SCIENCES",
+  },
+  {
+    id: "dept_economics",
+    department_name: "Department of Economics",
+    school: "SCHOOL OF SOCIAL SCIENCES",
+  },
+  {
+    id: "dept_international_studies_political_science_history",
+    department_name: "Department of International Studies, Political Science and History",
+    school: "SCHOOL OF SOCIAL SCIENCES",
+  },
+  {
+    id: "dept_media_studies",
+    department_name: "Department of Media Studies",
+    school: "SCHOOL OF SOCIAL SCIENCES",
+  },
+];
+
 const USER_SELECT_COLUMNS = [
   "id",
   "name",
   "email",
   "created_at",
   "is_organiser",
+  "is_student_organiser",
+  "is_student_organizer",
+  "is_it_service",
+  "is_it",
+  "is_catering_vendors",
+  "is_catering_vendor",
+  "is_stalls_misc",
+  "is_stall_misc",
+  "is_stalls",
   "is_support",
   "is_masteradmin",
   "is_hod",
@@ -51,10 +204,57 @@ const USER_SELECT_COLUMNS = [
 ];
 
 const ROLE_CODE_MASTER_ADMIN = "MASTER_ADMIN";
+const ROLE_CODE_HOD = "HOD";
+const ROLE_CODE_DEAN = "DEAN";
+const ROLE_CODE_CFO = "CFO";
 const ROLE_CODE_ORGANIZER_TEACHER = "ORGANIZER_TEACHER";
+const ROLE_CODE_ORGANIZER_STUDENT = "ORGANIZER_STUDENT";
 const ROLE_CODE_ORGANIZER_VOLUNTEER = "ORGANIZER_VOLUNTEER";
+const ROLE_CODE_SUPPORT = "SUPPORT";
 const ROLE_CODE_FINANCE_OFFICER = "FINANCE_OFFICER";
+const ROLE_CODE_SERVICE_IT = "SERVICE_IT";
 const ROLE_CODE_SERVICE_VENUE = "SERVICE_VENUE";
+const ROLE_CODE_SERVICE_CATERING = "SERVICE_CATERING";
+const ROLE_CODE_SERVICE_STALLS = "SERVICE_STALLS";
+
+const ROLE_MATRIX_ROLE_TO_CODE: Record<RoleMatrixAssignableRole, string> = {
+  hod: ROLE_CODE_HOD,
+  dean: ROLE_CODE_DEAN,
+  cfo: ROLE_CODE_CFO,
+  organiser: ROLE_CODE_ORGANIZER_TEACHER,
+  student_organiser: ROLE_CODE_ORGANIZER_STUDENT,
+  volunteer: ROLE_CODE_ORGANIZER_VOLUNTEER,
+  support: ROLE_CODE_SUPPORT,
+  finance_officer: ROLE_CODE_FINANCE_OFFICER,
+  master_admin: ROLE_CODE_MASTER_ADMIN,
+  it_service: ROLE_CODE_SERVICE_IT,
+  venue_service: ROLE_CODE_SERVICE_VENUE,
+  catering_service: ROLE_CODE_SERVICE_CATERING,
+  stalls_service: ROLE_CODE_SERVICE_STALLS,
+};
+
+const ROLE_MATRIX_ROLE_LABELS: Record<RoleMatrixAssignableRole, string> = {
+  hod: "HOD",
+  dean: "Dean",
+  cfo: "CFO",
+  organiser: "Organiser",
+  student_organiser: "Student Organizer",
+  volunteer: "Volunteer",
+  support: "Support",
+  finance_officer: "Finance Officer",
+  master_admin: "Master Admin",
+  it_service: "IT",
+  venue_service: "Venue",
+  catering_service: "Catering",
+  stalls_service: "Stall",
+};
+
+const DOMAIN_EXCLUSIVE_MATRIX_ROLES = new Set<RoleMatrixAssignableRole>([
+  "hod",
+  "dean",
+  "cfo",
+  "venue_service",
+]);
 
 type UniversityRoleKey =
   | "masteradmin"
@@ -66,8 +266,13 @@ type UniversityRoleKey =
   | null;
 
 type AssignmentFallback = {
+  is_student_organiser: boolean;
   is_volunteer: boolean;
+  is_support: boolean;
   is_venue_manager: boolean;
+  is_it_service: boolean;
+  is_catering_vendors: boolean;
+  is_stalls_misc: boolean;
   venue_id: string | null;
 };
 
@@ -83,6 +288,14 @@ function normalizeNullableText(value: unknown): string | null {
   }
   const normalized = String(value).trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+function isExcludedCampusValue(value: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+
+  return EXCLUDED_CAMPUS_VALUES.has(value.trim().toLowerCase());
 }
 
 function safeNumber(value: unknown): number {
@@ -154,6 +367,20 @@ function normalizeRoleCode(value: unknown): string {
   return String(value || "").trim().toUpperCase();
 }
 
+function readBooleanFlag(record: any, keys: string[]): boolean {
+  for (const key of keys) {
+    const rawValue = record?.[key];
+    if (typeof rawValue === "boolean") {
+      return rawValue;
+    }
+    if (rawValue !== null && rawValue !== undefined) {
+      return Boolean(rawValue);
+    }
+  }
+
+  return false;
+}
+
 function isRoleAssignmentActive(assignment: any, nowDate = new Date()): boolean {
   if (!assignment || assignment.is_active === false) {
     return false;
@@ -177,8 +404,13 @@ function isRoleAssignmentActive(assignment: any, nowDate = new Date()): boolean 
 function normalizeAccessPayload(input: UserAccessPayload): UserAccessPayload {
   return {
     is_organiser: Boolean(input?.is_organiser),
+    is_student_organiser: Boolean(input?.is_student_organiser),
     is_volunteer: Boolean(input?.is_volunteer),
+    is_support: Boolean(input?.is_support),
     is_venue_manager: Boolean(input?.is_venue_manager),
+    is_it_service: Boolean(input?.is_it_service),
+    is_catering_vendors: Boolean(input?.is_catering_vendors),
+    is_stalls_misc: Boolean(input?.is_stalls_misc),
     is_hod: Boolean(input?.is_hod),
     is_dean: Boolean(input?.is_dean),
     is_cfo: Boolean(input?.is_cfo),
@@ -191,6 +423,48 @@ function normalizeAccessPayload(input: UserAccessPayload): UserAccessPayload {
   };
 }
 
+function deriveUniversityRoleFromAccess(access: UserAccessPayload): UniversityRoleKey {
+  if (access.is_hod) {
+    return "hod";
+  }
+  if (access.is_dean) {
+    return "dean";
+  }
+  if (access.is_cfo) {
+    return "cfo";
+  }
+  if (access.is_venue_manager) {
+    return "venue_manager";
+  }
+  if (access.is_finance_officer) {
+    return "finance_officer";
+  }
+  if (access.is_masteradmin) {
+    return "masteradmin";
+  }
+  return null;
+}
+
+function isRoleMatrixAssignableRole(value: unknown): value is RoleMatrixAssignableRole {
+  return typeof value === "string" && value in ROLE_MATRIX_ROLE_TO_CODE;
+}
+
+function readDetailCandidate(details: unknown, keys: string[]): string | null {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return null;
+  }
+
+  const detailRecord = details as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = normalizeNullableText(detailRecord[key]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 function normalizeUserRecord(row: any, fallback?: AssignmentFallback): UserRoleRow {
   const role = normalizeUniversityRole(row?.university_role);
 
@@ -199,14 +473,30 @@ function normalizeUserRecord(row: any, fallback?: AssignmentFallback): UserRoleR
   const isCfo = Boolean(row?.is_cfo) || role === "cfo";
   const isFinance = Boolean(row?.is_finance_officer) || role === "finance_officer";
 
+  const isStudentOrganiser =
+    readBooleanFlag(row, ["is_student_organiser", "is_student_organizer"]) ||
+    Boolean(fallback?.is_student_organiser);
+
   const isVolunteer =
-    (typeof row?.is_volunteer === "boolean" ? row.is_volunteer : Boolean(row?.is_support)) ||
+    (typeof row?.is_volunteer === "boolean" ? row.is_volunteer : false) ||
     Boolean(fallback?.is_volunteer);
+
+  const isSupport = Boolean(row?.is_support) || Boolean(fallback?.is_support);
 
   const isVenueManager =
     (typeof row?.is_venue_manager === "boolean" ? row.is_venue_manager : false) ||
     role === "venue_manager" ||
     Boolean(fallback?.is_venue_manager);
+
+  const isItService = readBooleanFlag(row, ["is_it_service", "is_it"]) || Boolean(fallback?.is_it_service);
+
+  const isCateringVendors =
+    readBooleanFlag(row, ["is_catering_vendors", "is_catering_vendor"]) ||
+    Boolean(fallback?.is_catering_vendors);
+
+  const isStallsMisc =
+    readBooleanFlag(row, ["is_stalls_misc", "is_stall_misc", "is_stalls"]) ||
+    Boolean(fallback?.is_stalls_misc);
 
   const departmentId = isHod ? normalizeNullableText(row?.department_id) : null;
   const schoolId = isDean ? normalizeNullableText(row?.school_id) : null;
@@ -217,8 +507,13 @@ function normalizeUserRecord(row: any, fallback?: AssignmentFallback): UserRoleR
 
   const access: UserAccessPayload = {
     is_organiser: Boolean(row?.is_organiser),
+    is_student_organiser: isStudentOrganiser,
     is_volunteer: isVolunteer,
+    is_support: isSupport,
     is_venue_manager: isVenueManager,
+    is_it_service: isItService,
+    is_catering_vendors: isCateringVendors,
+    is_stalls_misc: isStallsMisc,
     is_hod: isHod,
     is_dean: isDean,
     is_cfo: isCfo,
@@ -290,30 +585,10 @@ async function assertMasterAdmin() {
     throw new Error("You must be signed in to manage user roles.");
   }
 
-  const { data: byAuthUuid, error: byAuthUuidError } = await adminClient
-    .from("users")
-    .select("id,email,university_role,is_masteradmin")
-    .eq("auth_uuid", authUser.id)
-    .maybeSingle();
-
-  if (byAuthUuidError && !isMissingColumnError(byAuthUuidError)) {
-    throw new Error(byAuthUuidError.message || "Failed to verify admin permissions.");
-  }
-
-  let actingUser = byAuthUuid;
+  let actingUser = await fetchSingleUserByAuthUuidWithFallback(adminClient, authUser.id);
 
   if (!actingUser && authUser.email) {
-    const { data: byEmail, error: byEmailError } = await adminClient
-      .from("users")
-      .select("id,email,university_role,is_masteradmin")
-      .eq("email", authUser.email)
-      .maybeSingle();
-
-    if (byEmailError) {
-      throw new Error(byEmailError.message || "Failed to verify admin permissions.");
-    }
-
-    actingUser = byEmail;
+    actingUser = await fetchSingleUserByEmailWithFallback(adminClient, authUser.email);
   }
 
   if (!actingUser) {
@@ -406,6 +681,64 @@ async function fetchSingleUserWithFallback(adminClient: any, userId: string | nu
   return null;
 }
 
+async function fetchSingleUserByEmailWithFallback(adminClient: any, email: string) {
+  const columns = [...USER_SELECT_COLUMNS];
+
+  while (columns.length > 0) {
+    const { data, error } = await adminClient
+      .from("users")
+      .select(columns.join(","))
+      .ilike("email", email)
+      .limit(1)
+      .maybeSingle();
+
+    if (!error) {
+      return data;
+    }
+
+    const missingColumn = parseMissingColumnName(error);
+    if (missingColumn && columns.includes(missingColumn)) {
+      columns.splice(columns.indexOf(missingColumn), 1);
+      continue;
+    }
+
+    throw new Error(error.message || "Failed to load user by email.");
+  }
+
+  return null;
+}
+
+async function fetchSingleUserByAuthUuidWithFallback(adminClient: any, authUuid: string) {
+  const columns = [...USER_SELECT_COLUMNS];
+
+  while (columns.length > 0) {
+    const { data, error } = await adminClient
+      .from("users")
+      .select(columns.join(","))
+      .eq("auth_uuid", authUuid)
+      .limit(1)
+      .maybeSingle();
+
+    if (!error) {
+      return data;
+    }
+
+    const missingColumn = parseMissingColumnName(error);
+    if (missingColumn === "auth_uuid") {
+      return null;
+    }
+
+    if (missingColumn && columns.includes(missingColumn)) {
+      columns.splice(columns.indexOf(missingColumn), 1);
+      continue;
+    }
+
+    throw new Error(error.message || "Failed to load user by auth UUID.");
+  }
+
+  return null;
+}
+
 async function fetchRoleAssignmentFallbacks(
   adminClient: any,
   userIds?: Array<string | number>
@@ -415,7 +748,15 @@ async function fetchRoleAssignmentFallbacks(
   let query = adminClient
     .from("user_role_assignments")
     .select("user_id,role_code,department_scope,campus_scope,is_active,valid_from,valid_until")
-    .in("role_code", [ROLE_CODE_ORGANIZER_VOLUNTEER, ROLE_CODE_SERVICE_VENUE]);
+    .in("role_code", [
+      ROLE_CODE_ORGANIZER_STUDENT,
+      ROLE_CODE_ORGANIZER_VOLUNTEER,
+      ROLE_CODE_SUPPORT,
+      ROLE_CODE_SERVICE_IT,
+      ROLE_CODE_SERVICE_VENUE,
+      ROLE_CODE_SERVICE_CATERING,
+      ROLE_CODE_SERVICE_STALLS,
+    ]);
 
   if (userIds && userIds.length > 0) {
     query = query.in(
@@ -444,8 +785,13 @@ async function fetchRoleAssignmentFallbacks(
 
     if (!map.has(userId)) {
       map.set(userId, {
+        is_student_organiser: false,
         is_volunteer: false,
+        is_support: false,
         is_venue_manager: false,
+        is_it_service: false,
+        is_catering_vendors: false,
+        is_stalls_misc: false,
         venue_id: null,
       });
     }
@@ -453,8 +799,20 @@ async function fetchRoleAssignmentFallbacks(
     const entry = map.get(userId)!;
     const roleCode = normalizeRoleCode(row.role_code);
 
+    if (roleCode === ROLE_CODE_ORGANIZER_STUDENT) {
+      entry.is_student_organiser = true;
+    }
+
     if (roleCode === ROLE_CODE_ORGANIZER_VOLUNTEER) {
       entry.is_volunteer = true;
+    }
+
+    if (roleCode === ROLE_CODE_SUPPORT) {
+      entry.is_support = true;
+    }
+
+    if (roleCode === ROLE_CODE_SERVICE_IT) {
+      entry.is_it_service = true;
     }
 
     if (roleCode === ROLE_CODE_SERVICE_VENUE) {
@@ -464,9 +822,123 @@ async function fetchRoleAssignmentFallbacks(
         normalizeNullableText(row.campus_scope) ||
         entry.venue_id;
     }
+
+    if (roleCode === ROLE_CODE_SERVICE_CATERING) {
+      entry.is_catering_vendors = true;
+    }
+
+    if (roleCode === ROLE_CODE_SERVICE_STALLS) {
+      entry.is_stalls_misc = true;
+    }
   });
 
   return map;
+}
+
+async function fetchRoleAssignments(adminClient: any): Promise<RoleMatrixAssignment[]> {
+  const { data, error } = await adminClient
+    .from("user_role_assignments")
+    .select("user_id,role_code,department_scope,campus_scope,is_active,valid_from,valid_until");
+
+  if (error) {
+    if (isMissingRelationError(error) || isMissingColumnError(error)) {
+      return [];
+    }
+    throw new Error(error.message || "Failed to load role matrix assignments.");
+  }
+
+  return (data || []).map((row: any) => ({
+    user_id: String(row?.user_id || ""),
+    role_code: normalizeRoleCode(row?.role_code),
+    department_scope: normalizeNullableText(row?.department_scope),
+    campus_scope: normalizeNullableText(row?.campus_scope),
+    is_active: row?.is_active !== false,
+    valid_from: normalizeNullableText(row?.valid_from),
+    valid_until: normalizeNullableText(row?.valid_until),
+  }));
+}
+
+async function buildCateringShopOptions(
+  adminClient: any,
+  assignments: RoleMatrixAssignment[]
+): Promise<string[]> {
+  const values = new Set<string>();
+
+  assignments.forEach((assignment: RoleMatrixAssignment) => {
+    if (
+      normalizeRoleCode(assignment.role_code) === ROLE_CODE_SERVICE_CATERING &&
+      isRoleAssignmentActive(assignment)
+    ) {
+      const scope = normalizeNullableText(assignment.department_scope);
+      if (scope) {
+        values.add(scope);
+      }
+    }
+  });
+
+  const serviceRows = await fetchRowsWithSelectFallback(adminClient, "service_requests", [
+    "service_role_code,details",
+    "service_role_code",
+  ]);
+
+  serviceRows.forEach((row: any) => {
+    if (normalizeRoleCode(row?.service_role_code) !== ROLE_CODE_SERVICE_CATERING) {
+      return;
+    }
+
+    const candidate = readDetailCandidate(row?.details, [
+      "shop_name",
+      "vendor_name",
+      "supplier_name",
+      "resource_name",
+      "item_name",
+      "name",
+    ]);
+
+    if (candidate) {
+      values.add(candidate);
+    }
+  });
+
+  return Array.from(values.values()).sort((a, b) => a.localeCompare(b));
+}
+
+async function buildStallsScopeOptions(
+  adminClient: any,
+  assignments: RoleMatrixAssignment[]
+): Promise<string[]> {
+  const values = new Set<string>();
+
+  assignments.forEach((assignment: RoleMatrixAssignment) => {
+    if (normalizeRoleCode(assignment.role_code) === ROLE_CODE_SERVICE_STALLS && isRoleAssignmentActive(assignment)) {
+      const scope = normalizeNullableText(assignment.department_scope);
+      if (scope) {
+        values.add(scope);
+      }
+    }
+  });
+
+  const serviceRows = await fetchRowsWithSelectFallback(adminClient, "service_requests", [
+    "service_role_code,details",
+    "service_role_code",
+  ]);
+
+  serviceRows.forEach((row: any) => {
+    if (normalizeRoleCode(row?.service_role_code) !== ROLE_CODE_SERVICE_STALLS) {
+      return;
+    }
+
+    const candidate = readDetailCandidate(row?.details, ["stall_name", "stall", "scope", "resource_name", "name"]);
+    if (candidate) {
+      values.add(candidate);
+    }
+  });
+
+  return Array.from(values.values()).sort((a, b) => a.localeCompare(b));
+}
+
+function roleRequiresScope(role: RoleMatrixAssignableRole): boolean {
+  return role === "hod" || role === "dean" || role === "venue_service" || role === "catering_service" || role === "stalls_service";
 }
 
 async function syncRoleAssignment(
@@ -477,6 +949,8 @@ async function syncRoleAssignment(
     enabled: boolean;
     assignedBy: string;
     departmentScope?: string | null;
+    campusScope?: string | null;
+    assignedReason?: string;
   }
 ) {
   const nowIso = new Date().toISOString();
@@ -507,10 +981,11 @@ async function syncRoleAssignment(
     user_id: params.userId,
     role_code: params.roleCode,
     department_scope: normalizeNullableText(params.departmentScope),
+    campus_scope: normalizeNullableText(params.campusScope),
     is_active: true,
     valid_from: nowIso,
     assigned_by: params.assignedBy,
-    assigned_reason: "Master Admin role matrix update",
+    assigned_reason: params.assignedReason || "Master Admin role matrix update",
   });
 
   if (insertResult.error) {
@@ -758,22 +1233,33 @@ export async function getRolesTableData(): Promise<RolesPageData> {
     usersRows.map((row: any) => row.id)
   );
 
-  const { data: departmentRows, error: departmentError } = await adminClient
-    .from("departments_courses")
-    .select("id,department_name,school")
-    .order("department_name", { ascending: true });
+  const departmentRows = await fetchRowsWithSelectFallback(adminClient, "departments_courses", [
+    "id,department_name,school",
+    "id,department_name",
+    "id",
+  ]);
 
-  if (departmentError) {
-    throw new Error(departmentError.message || "Failed to load departments.");
-  }
+  const resolvedDepartmentRows =
+    Array.isArray(departmentRows) && departmentRows.length > 0 ? departmentRows : FALLBACK_DEPARTMENT_OPTIONS;
 
-  const departments: DepartmentOption[] = (departmentRows || []).map((row: any) => ({
-    id: String(row.id),
-    department_name: String(row.department_name || "Unnamed Department"),
-    school: row.school ? String(row.school) : null,
-  }));
+  const departments: DepartmentOption[] = resolvedDepartmentRows
+    .map((row: any) => ({
+      id: String(row.id),
+      department_name: String(row.department_name || "Unnamed Department"),
+      school: row.school ? String(row.school) : null,
+    }))
+    .sort((left: DepartmentOption, right: DepartmentOption) =>
+      left.department_name.localeCompare(right.department_name)
+    );
 
   const schoolMap = new Map<string, SchoolOption>();
+  FALLBACK_SCHOOL_NAMES.forEach((schoolName) => {
+    schoolMap.set(schoolName, {
+      id: schoolName,
+      name: schoolName,
+    });
+  });
+
   departments.forEach((department) => {
     const schoolName = normalizeNullableText(department.school);
     if (!schoolName) {
@@ -802,29 +1288,48 @@ export async function getRolesTableData(): Promise<RolesPageData> {
   const campusesSet = new Set<string>(CAMPUS_OPTIONS);
   usersRows.forEach((row: any) => {
     const campus = normalizeNullableText(row?.campus);
-    if (campus) {
+    if (campus && !isExcludedCampusValue(campus)) {
       campusesSet.add(campus);
     }
   });
   eventVenueRows.forEach((row: any) => {
     const campus = normalizeNullableText(row?.campus_hosted_at);
-    if (campus) {
+    if (campus && !isExcludedCampusValue(campus)) {
       campusesSet.add(campus);
     }
   });
   festVenueRows.forEach((row: any) => {
     const campus = normalizeNullableText(row?.campus_hosted_at);
-    if (campus) {
+    if (campus && !isExcludedCampusValue(campus)) {
       campusesSet.add(campus);
     }
   });
+
+  const roleAssignments = await fetchRoleAssignments(adminClient);
+  const [cateringShops, stallsScopes] = await Promise.all([
+    buildCateringShopOptions(adminClient, roleAssignments),
+    buildStallsScopeOptions(adminClient, roleAssignments),
+  ]);
 
   return {
     users: usersRows.map((row: any) => normalizeUserRecord(row, assignmentFallbackMap.get(String(row.id)))),
     departments,
     schools: Array.from(schoolMap.values()).sort((a, b) => a.name.localeCompare(b.name)),
-    campuses: Array.from(campusesSet.values()).sort((a, b) => a.localeCompare(b)),
+    campuses: Array.from(campusesSet.values())
+      .filter((campus) => !isExcludedCampusValue(campus))
+      .sort((a, b) => {
+        if (a === PRIMARY_CAMPUS && b !== PRIMARY_CAMPUS) {
+          return -1;
+        }
+        if (b === PRIMARY_CAMPUS && a !== PRIMARY_CAMPUS) {
+          return 1;
+        }
+        return a.localeCompare(b);
+      }),
     venues,
+    cateringShops,
+    stallsScopes,
+    roleAssignments,
     analytics: await buildRolesAnalytics(adminClient),
   };
 }
@@ -871,9 +1376,12 @@ export async function updateUserAccess(
         .eq("id", payload.department_id)
         .maybeSingle();
       if (error) {
-        return { ok: false, error: error.message || "Failed to validate department." };
-      }
-      if (!data) {
+        if (isMissingRelationError(error) || isMissingColumnError(error)) {
+          // Catalog table missing in this environment; allow scoped value without strict lookup.
+        } else {
+          return { ok: false, error: error.message || "Failed to validate department." };
+        }
+      } else if (!data) {
         return { ok: false, error: "Selected department does not exist." };
       }
     }
@@ -885,9 +1393,12 @@ export async function updateUserAccess(
         .eq("school", payload.school_id)
         .limit(1);
       if (error) {
-        return { ok: false, error: error.message || "Failed to validate school." };
-      }
-      if (!Array.isArray(data) || data.length === 0) {
+        if (isMissingRelationError(error) || isMissingColumnError(error)) {
+          // Catalog table missing in this environment; allow scoped value without strict lookup.
+        } else {
+          return { ok: false, error: error.message || "Failed to validate school." };
+        }
+      } else if (!Array.isArray(data) || data.length === 0) {
         return { ok: false, error: "Selected school does not exist." };
       }
     }
@@ -947,7 +1458,9 @@ export async function updateUserAccess(
 
     await applyUsersUpdateWithFallback(adminClient, targetUserId, {
       is_organiser: payload.is_organiser,
-      is_support: payload.is_volunteer,
+      is_student_organiser: payload.is_student_organiser,
+      is_student_organizer: payload.is_student_organiser,
+      is_support: payload.is_support,
       is_masteradmin: payload.is_masteradmin,
       is_hod: payload.is_hod,
       is_dean: payload.is_dean,
@@ -955,6 +1468,13 @@ export async function updateUserAccess(
       is_finance_officer: payload.is_finance_officer,
       is_volunteer: payload.is_volunteer,
       is_venue_manager: payload.is_venue_manager,
+      is_it_service: payload.is_it_service,
+      is_it: payload.is_it_service,
+      is_catering_vendors: payload.is_catering_vendors,
+      is_catering_vendor: payload.is_catering_vendors,
+      is_stalls_misc: payload.is_stalls_misc,
+      is_stall_misc: payload.is_stalls_misc,
+      is_stalls: payload.is_stalls_misc,
       department_id: strictDepartmentId,
       school_id: strictSchoolId,
       campus: strictCampus,
@@ -977,8 +1497,20 @@ export async function updateUserAccess(
       }),
       syncRoleAssignment(adminClient, {
         userId: targetUserId,
+        roleCode: ROLE_CODE_ORGANIZER_STUDENT,
+        enabled: payload.is_student_organiser,
+        assignedBy: actingUser.email,
+      }),
+      syncRoleAssignment(adminClient, {
+        userId: targetUserId,
         roleCode: ROLE_CODE_ORGANIZER_VOLUNTEER,
         enabled: payload.is_volunteer,
+        assignedBy: actingUser.email,
+      }),
+      syncRoleAssignment(adminClient, {
+        userId: targetUserId,
+        roleCode: ROLE_CODE_SUPPORT,
+        enabled: payload.is_support,
         assignedBy: actingUser.email,
       }),
       syncRoleAssignment(adminClient, {
@@ -993,6 +1525,24 @@ export async function updateUserAccess(
         enabled: payload.is_venue_manager,
         assignedBy: actingUser.email,
         departmentScope: strictVenueId,
+      }),
+      syncRoleAssignment(adminClient, {
+        userId: targetUserId,
+        roleCode: ROLE_CODE_SERVICE_IT,
+        enabled: payload.is_it_service,
+        assignedBy: actingUser.email,
+      }),
+      syncRoleAssignment(adminClient, {
+        userId: targetUserId,
+        roleCode: ROLE_CODE_SERVICE_CATERING,
+        enabled: payload.is_catering_vendors,
+        assignedBy: actingUser.email,
+      }),
+      syncRoleAssignment(adminClient, {
+        userId: targetUserId,
+        roleCode: ROLE_CODE_SERVICE_STALLS,
+        enabled: payload.is_stalls_misc,
+        assignedBy: actingUser.email,
       }),
     ]);
 
@@ -1021,6 +1571,229 @@ export async function updateUserAccess(
   }
 }
 
+export async function assignRoleMatrixEntry(
+  assignmentPayload: RoleMatrixAssignPayload
+): Promise<AssignRoleMatrixActionResult> {
+  try {
+    const { adminClient, actingUser } = await assertMasterAdmin();
+
+    const email = String(assignmentPayload?.email || "").trim();
+    const campus = normalizeNullableText(assignmentPayload?.campus);
+    const roleValue = assignmentPayload?.role;
+    const scopeValue = normalizeNullableText(assignmentPayload?.scopeValue);
+
+    if (!email) {
+      return { ok: false, error: "Enter a user email to assign a role." };
+    }
+
+    if (!campus) {
+      return { ok: false, error: "Select a campus before assigning a role." };
+    }
+
+    if (!isRoleMatrixAssignableRole(roleValue)) {
+      return { ok: false, error: "Invalid role selected for assignment." };
+    }
+
+    if (roleRequiresScope(roleValue) && !scopeValue) {
+      return { ok: false, error: "Select the required role scope before assigning." };
+    }
+
+    if (roleValue === "hod") {
+      const { data, error } = await adminClient
+        .from("departments_courses")
+        .select("id")
+        .eq("id", scopeValue)
+        .maybeSingle();
+
+      if (error) {
+        if (!(isMissingRelationError(error) || isMissingColumnError(error))) {
+          return { ok: false, error: error.message || "Failed to validate the selected department." };
+        }
+      }
+
+      if (!error && !data) {
+        return { ok: false, error: "Selected department does not exist." };
+      }
+    }
+
+    if (roleValue === "dean") {
+      const { data, error } = await adminClient
+        .from("departments_courses")
+        .select("id")
+        .eq("school", scopeValue)
+        .limit(1);
+
+      if (error) {
+        if (!(isMissingRelationError(error) || isMissingColumnError(error))) {
+          return { ok: false, error: error.message || "Failed to validate the selected school." };
+        }
+      }
+
+      if (!error && (!Array.isArray(data) || data.length === 0)) {
+        return { ok: false, error: "Selected school does not exist." };
+      }
+    }
+
+    const targetUserRow = await fetchSingleUserByEmailWithFallback(adminClient, email);
+    if (!targetUserRow) {
+      return { ok: false, error: "No user found for the provided email." };
+    }
+
+    const targetUserId = coerceUserId(targetUserRow.id);
+    const assignmentFallbackMap = await fetchRoleAssignmentFallbacks(adminClient, [targetUserId]);
+    const normalizedTarget = normalizeUserRecord(
+      targetUserRow,
+      assignmentFallbackMap.get(String(targetUserId))
+    );
+
+    const nextAccess: UserAccessPayload = {
+      ...normalizedTarget.access,
+    };
+
+    const usersUpdatePayload: Record<string, unknown> = {};
+
+    if (roleValue === "organiser") {
+      nextAccess.is_organiser = true;
+      usersUpdatePayload.is_organiser = true;
+    }
+
+    if (roleValue === "student_organiser") {
+      nextAccess.is_student_organiser = true;
+      usersUpdatePayload.is_student_organiser = true;
+      usersUpdatePayload.is_student_organizer = true;
+    }
+
+    if (roleValue === "volunteer") {
+      nextAccess.is_volunteer = true;
+      usersUpdatePayload.is_volunteer = true;
+    }
+
+    if (roleValue === "support") {
+      nextAccess.is_support = true;
+      usersUpdatePayload.is_support = true;
+    }
+
+    if (roleValue === "it_service") {
+      nextAccess.is_it_service = true;
+      usersUpdatePayload.is_it_service = true;
+      usersUpdatePayload.is_it = true;
+    }
+
+    if (roleValue === "catering_service") {
+      nextAccess.is_catering_vendors = true;
+      usersUpdatePayload.is_catering_vendors = true;
+      usersUpdatePayload.is_catering_vendor = true;
+    }
+
+    if (roleValue === "stalls_service") {
+      nextAccess.is_stalls_misc = true;
+      usersUpdatePayload.is_stalls_misc = true;
+      usersUpdatePayload.is_stall_misc = true;
+      usersUpdatePayload.is_stalls = true;
+    }
+
+    if (roleValue === "finance_officer") {
+      nextAccess.is_finance_officer = true;
+      usersUpdatePayload.is_finance_officer = true;
+    }
+
+    if (roleValue === "master_admin") {
+      nextAccess.is_masteradmin = true;
+      usersUpdatePayload.is_masteradmin = true;
+    }
+
+    if (DOMAIN_EXCLUSIVE_MATRIX_ROLES.has(roleValue)) {
+      nextAccess.is_hod = roleValue === "hod";
+      nextAccess.is_dean = roleValue === "dean";
+      nextAccess.is_cfo = roleValue === "cfo";
+      nextAccess.is_venue_manager = roleValue === "venue_service";
+
+      usersUpdatePayload.is_hod = roleValue === "hod";
+      usersUpdatePayload.is_dean = roleValue === "dean";
+      usersUpdatePayload.is_cfo = roleValue === "cfo";
+      usersUpdatePayload.is_venue_manager = roleValue === "venue_service";
+
+      usersUpdatePayload.department_id = roleValue === "hod" ? scopeValue : null;
+      usersUpdatePayload.school_id = roleValue === "dean" ? scopeValue : null;
+      usersUpdatePayload.campus = roleValue === "cfo" ? campus : null;
+      usersUpdatePayload.venue_id = roleValue === "venue_service" ? scopeValue : null;
+    }
+
+    if (Object.keys(usersUpdatePayload).length > 0) {
+      usersUpdatePayload.university_role = deriveUniversityRoleFromAccess(nextAccess);
+      await applyUsersUpdateWithFallback(adminClient, targetUserId, usersUpdatePayload);
+    }
+
+    if (DOMAIN_EXCLUSIVE_MATRIX_ROLES.has(roleValue)) {
+      await Promise.all([
+        syncRoleAssignment(adminClient, {
+          userId: targetUserId,
+          roleCode: ROLE_CODE_HOD,
+          enabled: roleValue === "hod",
+          assignedBy: actingUser.email,
+          departmentScope: roleValue === "hod" ? scopeValue : null,
+          campusScope: roleValue === "hod" ? campus : null,
+          assignedReason: "Role Matrix assignment",
+        }),
+        syncRoleAssignment(adminClient, {
+          userId: targetUserId,
+          roleCode: ROLE_CODE_DEAN,
+          enabled: roleValue === "dean",
+          assignedBy: actingUser.email,
+          departmentScope: roleValue === "dean" ? scopeValue : null,
+          campusScope: roleValue === "dean" ? campus : null,
+          assignedReason: "Role Matrix assignment",
+        }),
+        syncRoleAssignment(adminClient, {
+          userId: targetUserId,
+          roleCode: ROLE_CODE_CFO,
+          enabled: roleValue === "cfo",
+          assignedBy: actingUser.email,
+          campusScope: roleValue === "cfo" ? campus : null,
+          assignedReason: "Role Matrix assignment",
+        }),
+        syncRoleAssignment(adminClient, {
+          userId: targetUserId,
+          roleCode: ROLE_CODE_SERVICE_VENUE,
+          enabled: roleValue === "venue_service",
+          assignedBy: actingUser.email,
+          departmentScope: roleValue === "venue_service" ? scopeValue : null,
+          campusScope: roleValue === "venue_service" ? campus : null,
+          assignedReason: "Role Matrix assignment",
+        }),
+      ]);
+    } else {
+      const roleCode = ROLE_MATRIX_ROLE_TO_CODE[roleValue];
+
+      await syncRoleAssignment(adminClient, {
+        userId: targetUserId,
+        roleCode,
+        enabled: true,
+        assignedBy: actingUser.email,
+        departmentScope: roleRequiresScope(roleValue) ? scopeValue : null,
+        campusScope: campus,
+        assignedReason: "Role Matrix assignment",
+      });
+    }
+
+    revalidatePath("/masteradmin");
+    revalidatePath("/masteradmin/roles");
+    revalidatePath("/manage");
+    revalidatePath("/execution");
+
+    return {
+      ok: true,
+      data: await getRolesTableData(),
+      message: `${ROLE_MATRIX_ROLE_LABELS[roleValue]} assigned to ${normalizedTarget.email}.`,
+    };
+  } catch (error: any) {
+    return {
+      ok: false,
+      error: error?.message || "Failed to assign role matrix entry.",
+    };
+  }
+}
+
 export async function deleteUserAccount(
   userId: string | number
 ): Promise<DeleteUserActionResult> {
@@ -1028,18 +1801,7 @@ export async function deleteUserAccount(
     const { adminClient, actingUser } = await assertMasterAdmin();
     const targetUserId = coerceUserId(userId);
 
-    const { data: existingUser, error: existingUserError } = await adminClient
-      .from("users")
-      .select("id,email,is_masteradmin,university_role")
-      .eq("id", targetUserId)
-      .maybeSingle();
-
-    if (existingUserError) {
-      return {
-        ok: false,
-        error: existingUserError.message || "Failed to find user.",
-      };
-    }
+    const existingUser = await fetchSingleUserWithFallback(adminClient, targetUserId);
 
     if (!existingUser) {
       return {

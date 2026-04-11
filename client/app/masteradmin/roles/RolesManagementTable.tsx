@@ -16,9 +16,15 @@ import {
   YAxis,
 } from "recharts";
 import toast from "react-hot-toast";
-import { deleteUserAccount, updateUserAccess } from "./actions";
+import { assignRoleMatrixEntry, deleteUserAccount, updateUserAccess } from "./actions";
 import DomainScopeModal, { type DomainScopeMode } from "./DomainScopeModal";
-import type { RolesPageData, UserAccessPayload, UserRoleRow } from "./types";
+import type {
+  RoleMatrixAssignableRole,
+  RoleMatrixAssignment,
+  RolesPageData,
+  UserAccessPayload,
+  UserRoleRow,
+} from "./types";
 
 type RolesManagementTableProps = {
   initialData: RolesPageData;
@@ -26,8 +32,13 @@ type RolesManagementTableProps = {
 
 type MatrixRole =
   | "organiser"
+  | "student_organiser"
   | "volunteer"
+  | "support"
   | "venue_manager"
+  | "it_service"
+  | "catering_vendors"
+  | "stalls_misc"
   | "hod"
   | "dean"
   | "cfo"
@@ -43,6 +54,131 @@ type DomainModalState = {
 };
 
 const domainRoleSet = new Set<MatrixRole>(["venue_manager", "hod", "dean", "cfo"]);
+
+const ROLE_CODE_MASTER_ADMIN = "MASTER_ADMIN";
+const ROLE_CODE_HOD = "HOD";
+const ROLE_CODE_DEAN = "DEAN";
+const ROLE_CODE_CFO = "CFO";
+const ROLE_CODE_ORGANIZER_TEACHER = "ORGANIZER_TEACHER";
+const ROLE_CODE_ORGANIZER_STUDENT = "ORGANIZER_STUDENT";
+const ROLE_CODE_ORGANIZER_VOLUNTEER = "ORGANIZER_VOLUNTEER";
+const ROLE_CODE_SUPPORT = "SUPPORT";
+const ROLE_CODE_FINANCE_OFFICER = "FINANCE_OFFICER";
+const ROLE_CODE_SERVICE_IT = "SERVICE_IT";
+const ROLE_CODE_SERVICE_VENUE = "SERVICE_VENUE";
+const ROLE_CODE_SERVICE_CATERING = "SERVICE_CATERING";
+const ROLE_CODE_SERVICE_STALLS = "SERVICE_STALLS";
+
+type RoleOption = {
+  value: RoleMatrixAssignableRole;
+  label: string;
+};
+
+type MatrixEntry = {
+  role: string;
+  scope: string;
+  campus: string;
+  holder: string;
+};
+
+type MatrixTableRow = {
+  role: string;
+  scope: string;
+  campus: string;
+  holders: string;
+};
+
+const roleOptions: RoleOption[] = [
+  { value: "hod", label: "HOD" },
+  { value: "dean", label: "Dean" },
+  { value: "cfo", label: "CFO" },
+  { value: "organiser", label: "Organiser" },
+  { value: "student_organiser", label: "Student Organizer" },
+  { value: "volunteer", label: "Volunteer" },
+  { value: "support", label: "Support" },
+  { value: "finance_officer", label: "Finance Officer" },
+  { value: "master_admin", label: "Master Admin" },
+  { value: "it_service", label: "IT" },
+  { value: "venue_service", label: "Venue" },
+  { value: "catering_service", label: "Catering" },
+  { value: "stalls_service", label: "Stall" },
+];
+
+const scopeRequiredRoles = new Set<RoleMatrixAssignableRole>([
+  "hod",
+  "dean",
+  "venue_service",
+  "catering_service",
+  "stalls_service",
+]);
+
+const strictDropdownScopeRoles = new Set<RoleMatrixAssignableRole>(["hod", "dean"]);
+
+function isRoleAssignmentActive(assignment: RoleMatrixAssignment): boolean {
+  if (!assignment || assignment.is_active === false) {
+    return false;
+  }
+
+  const now = Date.now();
+  const validFrom = assignment.valid_from ? new Date(assignment.valid_from).getTime() : null;
+  const validUntil = assignment.valid_until ? new Date(assignment.valid_until).getTime() : null;
+
+  if (Number.isFinite(validFrom) && Number(validFrom) > now) {
+    return false;
+  }
+
+  if (Number.isFinite(validUntil) && Number(validUntil) <= now) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildMatrixRows(entries: MatrixEntry[]): MatrixTableRow[] {
+  const grouped = new Map<
+    string,
+    {
+      role: string;
+      scope: string;
+      campuses: Set<string>;
+      holders: Set<string>;
+    }
+  >();
+
+  entries.forEach((entry: MatrixEntry) => {
+    const key = `${entry.role}::${entry.scope}`;
+
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        role: entry.role,
+        scope: entry.scope,
+        campuses: new Set<string>(),
+        holders: new Set<string>(),
+      });
+    }
+
+    const bucket = grouped.get(key)!;
+    if (entry.campus && entry.campus !== "-") {
+      bucket.campuses.add(entry.campus);
+    }
+    bucket.holders.add(entry.holder);
+  });
+
+  return Array.from(grouped.values())
+    .map((entry) => ({
+      role: entry.role,
+      scope: entry.scope,
+      campus: entry.campuses.size > 0 ? Array.from(entry.campuses.values()).sort().join(", ") : "-",
+      holders: entry.holders.size > 0 ? Array.from(entry.holders.values()).sort().join(", ") : "-",
+    }))
+    .sort((left, right) => {
+      const byRole = left.role.localeCompare(right.role);
+      if (byRole !== 0) {
+        return byRole;
+      }
+      return left.scope.localeCompare(right.scope);
+    });
+}
 
 const formatDate = (value: string | null) => {
   if (!value) {
@@ -76,12 +212,32 @@ function isRoleEnabled(access: UserAccessPayload, role: MatrixRole): boolean {
     return access.is_organiser;
   }
 
+  if (role === "student_organiser") {
+    return access.is_student_organiser;
+  }
+
   if (role === "volunteer") {
     return access.is_volunteer;
   }
 
+  if (role === "support") {
+    return access.is_support;
+  }
+
   if (role === "venue_manager") {
     return access.is_venue_manager;
+  }
+
+  if (role === "it_service") {
+    return access.is_it_service;
+  }
+
+  if (role === "catering_vendors") {
+    return access.is_catering_vendors;
+  }
+
+  if (role === "stalls_misc") {
+    return access.is_stalls_misc;
   }
 
   if (role === "hod") {
@@ -123,11 +279,26 @@ function roleLabel(role: MatrixRole): string {
   if (role === "organiser") {
     return "Organiser";
   }
+  if (role === "student_organiser") {
+    return "Student Organizer";
+  }
   if (role === "volunteer") {
     return "Volunteer";
   }
+  if (role === "support") {
+    return "Support";
+  }
   if (role === "venue_manager") {
-    return "Venue Mgr";
+    return "Venue";
+  }
+  if (role === "it_service") {
+    return "IT";
+  }
+  if (role === "catering_vendors") {
+    return "Catering Vendors";
+  }
+  if (role === "stalls_misc") {
+    return "Stalls/Misc";
   }
   if (role === "hod") {
     return "HOD";
@@ -168,8 +339,33 @@ function buildNextAccessPayload(
     return next;
   }
 
+  if (role === "student_organiser") {
+    next.is_student_organiser = !current.is_student_organiser;
+    return next;
+  }
+
   if (role === "volunteer") {
     next.is_volunteer = !current.is_volunteer;
+    return next;
+  }
+
+  if (role === "support") {
+    next.is_support = !current.is_support;
+    return next;
+  }
+
+  if (role === "it_service") {
+    next.is_it_service = !current.is_it_service;
+    return next;
+  }
+
+  if (role === "catering_vendors") {
+    next.is_catering_vendors = !current.is_catering_vendors;
+    return next;
+  }
+
+  if (role === "stalls_misc") {
+    next.is_stalls_misc = !current.is_stalls_misc;
     return next;
   }
 
@@ -261,6 +457,64 @@ function hasScopeOptions(data: RolesPageData, role: MatrixRole): boolean {
   return true;
 }
 
+function roleMatrixScopeLabel(role: RoleMatrixAssignableRole): string {
+  if (role === "hod") {
+    return "Department";
+  }
+  if (role === "dean") {
+    return "School";
+  }
+  if (role === "venue_service") {
+    return "Venue";
+  }
+  if (role === "catering_service") {
+    return "Shop";
+  }
+  if (role === "stalls_service") {
+    return "Stall Scope";
+  }
+  return "Scope";
+}
+
+function roleMatrixScopeOptions(data: RolesPageData, role: RoleMatrixAssignableRole): Array<{ value: string; label: string }> {
+  if (role === "hod") {
+    return data.departments.map((department) => ({
+      value: department.id,
+      label: department.department_name,
+    }));
+  }
+
+  if (role === "dean") {
+    return data.schools.map((school) => ({
+      value: school.id,
+      label: school.name,
+    }));
+  }
+
+  if (role === "venue_service") {
+    return data.venues.map((venue) => ({
+      value: venue.id,
+      label: venue.campus ? `${venue.name} (${venue.campus})` : venue.name,
+    }));
+  }
+
+  if (role === "catering_service") {
+    return data.cateringShops.map((shop) => ({
+      value: shop,
+      label: shop,
+    }));
+  }
+
+  if (role === "stalls_service") {
+    return data.stallsScopes.map((scope) => ({
+      value: scope,
+      label: scope,
+    }));
+  }
+
+  return [];
+}
+
 function resolveDomainSummary(user: UserRoleRow, data: RolesPageData): string {
   if (user.access.is_hod && user.access.department_id) {
     const department = data.departments.find((item) => item.id === user.access.department_id);
@@ -315,13 +569,328 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<"access" | "analytics">("access");
+  const [data, setData] = useState<RolesPageData>(initialData);
   const [users, setUsers] = useState<UserRoleRow[]>(initialData.users);
   const [searchText, setSearchText] = useState("");
   const [pendingDeleteUserId, setPendingDeleteUserId] = useState<string | number | null>(null);
   const [pendingUpdateUserId, setPendingUpdateUserId] = useState<string | number | null>(null);
+  const [assignmentEmail, setAssignmentEmail] = useState("");
+  const [assignmentCampus, setAssignmentCampus] = useState("");
+  const [assignmentRole, setAssignmentRole] = useState<RoleMatrixAssignableRole>("hod");
+  const [assignmentScope, setAssignmentScope] = useState("");
   const [domainModal, setDomainModal] = useState<DomainModalState>(emptyModalState());
   const [pendingModalRole, setPendingModalRole] = useState<MatrixRole | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  const userById = useMemo(() => {
+    return new Map(users.map((user) => [String(user.id), user]));
+  }, [users]);
+
+  const departmentNameById = useMemo(() => {
+    return new Map(data.departments.map((department) => [department.id, department.department_name]));
+  }, [data.departments]);
+
+  const scopeOptions = useMemo(() => {
+    return roleMatrixScopeOptions(data, assignmentRole);
+  }, [data, assignmentRole]);
+
+  const matrixSections = useMemo(() => {
+    const entries: MatrixEntry[] = [];
+    const assignmentUserRoleKeys = new Set<string>();
+
+    const resolveHolder = (userId: string) => {
+      const user = userById.get(String(userId));
+      if (!user) {
+        return `Unknown (${userId})`;
+      }
+      return `${user.name || "Unnamed User"} (${user.email})`;
+    };
+
+    const activeAssignments = data.roleAssignments.filter((assignment) => isRoleAssignmentActive(assignment));
+
+    activeAssignments.forEach((assignment) => {
+      const roleCode = String(assignment.role_code || "").toUpperCase();
+      const holder = resolveHolder(assignment.user_id);
+      const campus = assignment.campus_scope || "-";
+      const roleKey = `${roleCode}:${assignment.user_id}`;
+      const assignedUser = userById.get(String(assignment.user_id));
+      assignmentUserRoleKeys.add(roleKey);
+
+      if (roleCode === ROLE_CODE_HOD) {
+        if (assignedUser && !assignedUser.access.is_hod) {
+          return;
+        }
+        const scopeId = assignment.department_scope || "-";
+        entries.push({
+          role: "HOD",
+          scope: departmentNameById.get(scopeId) || scopeId,
+          campus,
+          holder,
+        });
+      }
+
+      if (roleCode === ROLE_CODE_DEAN) {
+        if (assignedUser && !assignedUser.access.is_dean) {
+          return;
+        }
+        entries.push({
+          role: "Dean",
+          scope: assignment.department_scope || "-",
+          campus,
+          holder,
+        });
+      }
+
+      if (roleCode === ROLE_CODE_CFO) {
+        if (assignedUser && !assignedUser.access.is_cfo) {
+          return;
+        }
+        const scope = assignment.campus_scope || "-";
+        entries.push({
+          role: "CFO",
+          scope,
+          campus: scope,
+          holder,
+        });
+      }
+
+      if (roleCode === ROLE_CODE_SERVICE_VENUE) {
+        if (assignedUser && !assignedUser.access.is_venue_manager) {
+          return;
+        }
+        entries.push({
+          role: "Venue",
+          scope: assignment.department_scope || "Venue Queue",
+          campus,
+          holder,
+        });
+      }
+
+      if (roleCode === ROLE_CODE_SERVICE_IT) {
+        if (assignedUser && !assignedUser.access.is_it_service) {
+          return;
+        }
+        entries.push({
+          role: "IT",
+          scope: assignment.department_scope || "Global Queue",
+          campus,
+          holder,
+        });
+      }
+
+      if (roleCode === ROLE_CODE_SERVICE_CATERING) {
+        if (assignedUser && !assignedUser.access.is_catering_vendors) {
+          return;
+        }
+        entries.push({
+          role: "Catering",
+          scope: assignment.department_scope || "General",
+          campus,
+          holder,
+        });
+      }
+
+      if (roleCode === ROLE_CODE_SERVICE_STALLS) {
+        if (assignedUser && !assignedUser.access.is_stalls_misc) {
+          return;
+        }
+        entries.push({
+          role: "Stall",
+          scope: assignment.department_scope || "General",
+          campus,
+          holder,
+        });
+      }
+
+      if (roleCode === ROLE_CODE_ORGANIZER_TEACHER) {
+        if (assignedUser && !assignedUser.access.is_organiser) {
+          return;
+        }
+        entries.push({ role: "Organiser", scope: "Global", campus, holder });
+      }
+
+      if (roleCode === ROLE_CODE_ORGANIZER_STUDENT) {
+        if (assignedUser && !assignedUser.access.is_student_organiser) {
+          return;
+        }
+        entries.push({ role: "Student Organizer", scope: "Global", campus, holder });
+      }
+
+      if (roleCode === ROLE_CODE_ORGANIZER_VOLUNTEER) {
+        if (assignedUser && !assignedUser.access.is_volunteer) {
+          return;
+        }
+        entries.push({ role: "Volunteer", scope: "Global", campus, holder });
+      }
+
+      if (roleCode === ROLE_CODE_SUPPORT) {
+        if (assignedUser && !assignedUser.access.is_support) {
+          return;
+        }
+        entries.push({ role: "Support", scope: "Global", campus, holder });
+      }
+
+      if (roleCode === ROLE_CODE_FINANCE_OFFICER) {
+        if (assignedUser && !assignedUser.access.is_finance_officer) {
+          return;
+        }
+        entries.push({ role: "Finance Officer", scope: "Global", campus, holder });
+      }
+
+      if (roleCode === ROLE_CODE_MASTER_ADMIN) {
+        if (assignedUser && !assignedUser.access.is_masteradmin) {
+          return;
+        }
+        entries.push({ role: "Master Admin", scope: "Global", campus, holder });
+      }
+    });
+
+    users.forEach((user) => {
+      const holder = `${user.name || "Unnamed User"} (${user.email})`;
+      const userId = String(user.id);
+
+      if (user.access.is_hod && !assignmentUserRoleKeys.has(`${ROLE_CODE_HOD}:${userId}`)) {
+        const scopeId = user.access.department_id || "-";
+        entries.push({
+          role: "HOD",
+          scope: departmentNameById.get(scopeId) || scopeId,
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+
+      if (user.access.is_dean && !assignmentUserRoleKeys.has(`${ROLE_CODE_DEAN}:${userId}`)) {
+        entries.push({
+          role: "Dean",
+          scope: user.access.school_id || "-",
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+
+      if (user.access.is_cfo && !assignmentUserRoleKeys.has(`${ROLE_CODE_CFO}:${userId}`)) {
+        const scope = user.access.campus || "-";
+        entries.push({
+          role: "CFO",
+          scope,
+          campus: scope,
+          holder,
+        });
+      }
+
+      if (user.access.is_venue_manager && !assignmentUserRoleKeys.has(`${ROLE_CODE_SERVICE_VENUE}:${userId}`)) {
+        entries.push({
+          role: "Venue",
+          scope: user.access.venue_id || "Venue Queue",
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+
+      if (user.access.is_organiser && !assignmentUserRoleKeys.has(`${ROLE_CODE_ORGANIZER_TEACHER}:${userId}`)) {
+        entries.push({
+          role: "Organiser",
+          scope: "Global",
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+
+      if (user.access.is_student_organiser && !assignmentUserRoleKeys.has(`${ROLE_CODE_ORGANIZER_STUDENT}:${userId}`)) {
+        entries.push({
+          role: "Student Organizer",
+          scope: "Global",
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+
+      if (user.access.is_volunteer && !assignmentUserRoleKeys.has(`${ROLE_CODE_ORGANIZER_VOLUNTEER}:${userId}`)) {
+        entries.push({
+          role: "Volunteer",
+          scope: "Global",
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+
+      if (user.access.is_support && !assignmentUserRoleKeys.has(`${ROLE_CODE_SUPPORT}:${userId}`)) {
+        entries.push({
+          role: "Support",
+          scope: "Global",
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+
+      if (user.access.is_it_service && !assignmentUserRoleKeys.has(`${ROLE_CODE_SERVICE_IT}:${userId}`)) {
+        entries.push({
+          role: "IT",
+          scope: "Global Queue",
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+
+      if (user.access.is_catering_vendors && !assignmentUserRoleKeys.has(`${ROLE_CODE_SERVICE_CATERING}:${userId}`)) {
+        entries.push({
+          role: "Catering",
+          scope: "General",
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+
+      if (user.access.is_stalls_misc && !assignmentUserRoleKeys.has(`${ROLE_CODE_SERVICE_STALLS}:${userId}`)) {
+        entries.push({
+          role: "Stall",
+          scope: "General",
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+
+      if (user.access.is_finance_officer && !assignmentUserRoleKeys.has(`${ROLE_CODE_FINANCE_OFFICER}:${userId}`)) {
+        entries.push({
+          role: "Finance Officer",
+          scope: "Global",
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+
+      if (user.access.is_masteradmin && !assignmentUserRoleKeys.has(`${ROLE_CODE_MASTER_ADMIN}:${userId}`)) {
+        entries.push({
+          role: "Master Admin",
+          scope: "Global",
+          campus: user.access.campus || "-",
+          holder,
+        });
+      }
+    });
+
+    const rows = buildMatrixRows(entries);
+
+    return {
+      academic: rows.filter((row) => row.role === "HOD" || row.role === "Dean" || row.role === "CFO"),
+      services: rows.filter(
+        (row) =>
+          row.role === "Venue" ||
+          row.role === "IT" ||
+          row.role === "Catering" ||
+          row.role === "Stall"
+      ),
+      governance: rows.filter(
+        (row) =>
+          row.role === "Master Admin" ||
+          row.role === "Organiser" ||
+          row.role === "Student Organizer" ||
+          row.role === "Volunteer" ||
+          row.role === "Support" ||
+          row.role === "Finance Officer"
+      ),
+    };
+  }, [data.departments, data.roleAssignments, departmentNameById, userById, users]);
 
   const filteredUsers = useMemo(() => {
     const normalized = searchText.trim().toLowerCase();
@@ -352,7 +921,53 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
         previous.map((row) => (sameUserId(row.id, user.id) ? response.user : row))
       );
 
+      setData((previous) => ({
+        ...previous,
+        users: previous.users.map((row) => (sameUserId(row.id, user.id) ? response.user : row)),
+      }));
+
       toast.success(successMessage);
+      router.refresh();
+    });
+  };
+
+  const handleAssignRoleMatrix = () => {
+    const normalizedEmail = assignmentEmail.trim();
+    const normalizedCampus = assignmentCampus.trim();
+
+    if (!normalizedEmail) {
+      toast.error("Enter a user email.");
+      return;
+    }
+
+    if (!normalizedCampus) {
+      toast.error("Select a campus.");
+      return;
+    }
+
+    const requiresScope = scopeRequiredRoles.has(assignmentRole);
+    if (requiresScope && !assignmentScope.trim()) {
+      toast.error(`Select ${roleMatrixScopeLabel(assignmentRole)}.`);
+      return;
+    }
+
+    startTransition(async () => {
+      const response = await assignRoleMatrixEntry({
+        email: normalizedEmail,
+        campus: normalizedCampus,
+        role: assignmentRole,
+        scopeValue: requiresScope ? assignmentScope.trim() : null,
+      });
+
+      if (!response.ok) {
+        toast.error(response.error);
+        return;
+      }
+
+      setData(response.data);
+      setUsers(response.data.users);
+      setAssignmentScope("");
+      toast.success(response.message);
       router.refresh();
     });
   };
@@ -361,7 +976,7 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
     const currentlyEnabled = isRoleEnabled(user.access, role);
 
     if (domainRoleSet.has(role) && !currentlyEnabled) {
-      if (!hasScopeOptions(initialData, role)) {
+      if (!hasScopeOptions(data, role)) {
         toast.error(`No scope options available for ${roleLabel(role)}.`);
         return;
       }
@@ -419,6 +1034,10 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
       }
 
       setUsers((previous) => previous.filter((row) => !sameUserId(row.id, user.id)));
+      setData((previous) => ({
+        ...previous,
+        users: previous.users.filter((row) => !sameUserId(row.id, user.id)),
+      }));
       toast.success("User deleted successfully.");
       router.refresh();
     });
@@ -431,7 +1050,7 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
           <div>
             <h2 className="text-xl font-bold text-slate-900">Access Control Matrix</h2>
             <p className="mt-1 text-sm text-slate-600">
-              Toggle Organiser, Volunteer, Venue Manager, HOD, Dean, CFO, Finance, and Master Admin access.
+              Toggle Master Admin, CFO, Finance, Dean, HOD, Organiser, Student Organizer, Volunteer, Stall, IT, Venue, Catering, and Support access.
             </p>
           </div>
 
@@ -464,6 +1083,181 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
 
       {activeTab === "access" && (
         <>
+          <div className="grid gap-5 lg:grid-cols-[1.2fr_1fr]">
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="text-base font-bold text-slate-900">Role Matrix Assignment</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Assign a role by user email with campus and role-specific scope.
+              </p>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">User Email</span>
+                  <input
+                    type="email"
+                    value={assignmentEmail}
+                    onChange={(event) => setAssignmentEmail(event.target.value)}
+                    placeholder="name@christuniversity.in"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                  />
+                </label>
+
+                <label className="space-y-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Campus</span>
+                  <select
+                    value={assignmentCampus}
+                    onChange={(event) => setAssignmentCampus(event.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                  >
+                    <option value="">Select Campus</option>
+                    {data.campuses.map((campus) => (
+                      <option key={campus} value={campus}>
+                        {campus}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Role</span>
+                  <select
+                    value={assignmentRole}
+                    onChange={(event) => {
+                      setAssignmentRole(event.target.value as RoleMatrixAssignableRole);
+                      setAssignmentScope("");
+                    }}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                  >
+                    {roleOptions.map((roleOption) => (
+                      <option key={roleOption.value} value={roleOption.value}>
+                        {roleOption.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {scopeRequiredRoles.has(assignmentRole) &&
+                  (scopeOptions.length > 0 || strictDropdownScopeRoles.has(assignmentRole)) && (
+                  <label className="space-y-1">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      {roleMatrixScopeLabel(assignmentRole)}
+                    </span>
+                    <select
+                      value={assignmentScope}
+                      onChange={(event) => setAssignmentScope(event.target.value)}
+                      disabled={scopeOptions.length === 0}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                    >
+                      <option value="">
+                        {scopeOptions.length === 0
+                          ? `No ${roleMatrixScopeLabel(assignmentRole).toLowerCase()} options available`
+                          : `Select ${roleMatrixScopeLabel(assignmentRole)}`}
+                      </option>
+                      {scopeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
+                {scopeRequiredRoles.has(assignmentRole) &&
+                  scopeOptions.length === 0 &&
+                  !strictDropdownScopeRoles.has(assignmentRole) && (
+                  <label className="space-y-1">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      {roleMatrixScopeLabel(assignmentRole)}
+                    </span>
+                    <input
+                      type="text"
+                      value={assignmentScope}
+                      onChange={(event) => setAssignmentScope(event.target.value)}
+                      placeholder={`Enter ${roleMatrixScopeLabel(assignmentRole).toLowerCase()}`}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                    />
+                  </label>
+                )}
+              </div>
+
+              <div className="mt-4">
+                <button
+                  type="button"
+                  disabled={isPending}
+                  onClick={handleAssignRoleMatrix}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {isPending ? "Assigning..." : "Assign Role"}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="text-base font-bold text-slate-900">Matrix Summary</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Complete role matrix grouped by academic, service, and governance ownership.
+              </p>
+              <div className="mt-4 grid grid-cols-3 gap-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Academic Rows</p>
+                  <p className="mt-2 text-xl font-black text-slate-900">{matrixSections.academic.length}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Service Rows</p>
+                  <p className="mt-2 text-xl font-black text-slate-900">{matrixSections.services.length}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Governance Rows</p>
+                  <p className="mt-2 text-xl font-black text-slate-900">{matrixSections.governance.length}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-5 xl:grid-cols-3">
+            {[
+              { title: "Academic Matrix", rows: matrixSections.academic },
+              { title: "Service Matrix", rows: matrixSections.services },
+              { title: "Governance Matrix", rows: matrixSections.governance },
+            ].map((section) => (
+              <div key={section.title} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+                  <h3 className="text-sm font-bold text-slate-900">{section.title}</h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full border-collapse">
+                    <thead className="bg-white text-left">
+                      <tr>
+                        <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Role</th>
+                        <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Scope</th>
+                        <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Campus</th>
+                        <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Assignees</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {section.rows.map((row) => (
+                        <tr key={`${section.title}-${row.role}-${row.scope}`} className="border-t border-slate-200 align-top">
+                          <td className="px-4 py-3 text-sm font-semibold text-slate-800">{row.role}</td>
+                          <td className="px-4 py-3 text-sm text-slate-700">{row.scope}</td>
+                          <td className="px-4 py-3 text-sm text-slate-700">{row.campus}</td>
+                          <td className="px-4 py-3 text-sm text-slate-700">{row.holders}</td>
+                        </tr>
+                      ))}
+
+                      {section.rows.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
+                            No assignments available.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <input
               type="text"
@@ -476,20 +1270,25 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
 
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="overflow-x-auto">
-              <table className="min-w-[1700px] w-full border-collapse">
+              <table className="min-w-[2400px] w-full border-collapse">
                 <thead className="bg-slate-100/80 text-left">
                   <tr>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Name</th>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Email</th>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Joined</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Organiser</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Volunteer</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Venue Mgr</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">HOD</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Dean</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Master Admin</th>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">CFO</th>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Finance</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Master Admin</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Dean</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">HOD</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Organiser</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Student Organizer</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Volunteer</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Stall</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">IT</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Venue</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Catering</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Support</th>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Domain Scope</th>
                     <th className="px-4 py-3 text-right text-xs font-bold uppercase tracking-wide text-slate-600">
                       Actions
@@ -511,42 +1310,10 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
                         <td className="px-4 py-4 text-sm text-slate-700">{formatDate(user.created_at)}</td>
                         <td className="px-4 py-4">
                           <ToggleCell
-                            checked={user.access.is_organiser}
+                            checked={user.access.is_masteradmin}
                             disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "organiser")}
-                            label="Toggle organiser"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_volunteer}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "volunteer")}
-                            label="Toggle volunteer"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_venue_manager}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "venue_manager")}
-                            label="Toggle venue manager"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_hod}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "hod")}
-                            label="Toggle HOD"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_dean}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "dean")}
-                            label="Toggle Dean"
+                            onChange={() => handleRoleToggle(user, "master_admin")}
+                            label="Toggle master admin"
                           />
                         </td>
                         <td className="px-4 py-4">
@@ -567,14 +1334,86 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
                         </td>
                         <td className="px-4 py-4">
                           <ToggleCell
-                            checked={user.access.is_masteradmin}
+                            checked={user.access.is_dean}
                             disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "master_admin")}
-                            label="Toggle master admin"
+                            onChange={() => handleRoleToggle(user, "dean")}
+                            label="Toggle Dean"
+                          />
+                        </td>
+                        <td className="px-4 py-4">
+                          <ToggleCell
+                            checked={user.access.is_hod}
+                            disabled={disabled}
+                            onChange={() => handleRoleToggle(user, "hod")}
+                            label="Toggle HOD"
+                          />
+                        </td>
+                        <td className="px-4 py-4">
+                          <ToggleCell
+                            checked={user.access.is_organiser}
+                            disabled={disabled}
+                            onChange={() => handleRoleToggle(user, "organiser")}
+                            label="Toggle organiser"
+                          />
+                        </td>
+                        <td className="px-4 py-4">
+                          <ToggleCell
+                            checked={user.access.is_student_organiser}
+                            disabled={disabled}
+                            onChange={() => handleRoleToggle(user, "student_organiser")}
+                            label="Toggle student organizer"
+                          />
+                        </td>
+                        <td className="px-4 py-4">
+                          <ToggleCell
+                            checked={user.access.is_volunteer}
+                            disabled={disabled}
+                            onChange={() => handleRoleToggle(user, "volunteer")}
+                            label="Toggle volunteer"
+                          />
+                        </td>
+                        <td className="px-4 py-4">
+                          <ToggleCell
+                            checked={user.access.is_stalls_misc}
+                            disabled={disabled}
+                            onChange={() => handleRoleToggle(user, "stalls_misc")}
+                            label="Toggle stall"
+                          />
+                        </td>
+                        <td className="px-4 py-4">
+                          <ToggleCell
+                            checked={user.access.is_it_service}
+                            disabled={disabled}
+                            onChange={() => handleRoleToggle(user, "it_service")}
+                            label="Toggle IT"
+                          />
+                        </td>
+                        <td className="px-4 py-4">
+                          <ToggleCell
+                            checked={user.access.is_venue_manager}
+                            disabled={disabled}
+                            onChange={() => handleRoleToggle(user, "venue_manager")}
+                            label="Toggle venue"
+                          />
+                        </td>
+                        <td className="px-4 py-4">
+                          <ToggleCell
+                            checked={user.access.is_catering_vendors}
+                            disabled={disabled}
+                            onChange={() => handleRoleToggle(user, "catering_vendors")}
+                            label="Toggle catering"
+                          />
+                        </td>
+                        <td className="px-4 py-4">
+                          <ToggleCell
+                            checked={user.access.is_support}
+                            disabled={disabled}
+                            onChange={() => handleRoleToggle(user, "support")}
+                            label="Toggle support"
                           />
                         </td>
                         <td className="px-4 py-4 text-sm font-medium text-slate-700">
-                          {resolveDomainSummary(user, initialData)}
+                          {resolveDomainSummary(user, data)}
                         </td>
                         <td className="px-4 py-4 text-right">
                           <button
@@ -592,7 +1431,7 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
 
                   {filteredUsers.length === 0 && (
                     <tr>
-                      <td colSpan={13} className="px-4 py-12 text-center text-sm font-medium text-slate-500">
+                      <td colSpan={18} className="px-4 py-12 text-center text-sm font-medium text-slate-500">
                         No users matched your search.
                       </td>
                     </tr>
@@ -610,7 +1449,7 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Global Revenue</p>
               <p className="mt-3 text-2xl font-black text-slate-900">
-                {formatCurrency(initialData.analytics.totalEstimatedRevenue)}
+                {formatCurrency(data.analytics.totalEstimatedRevenue)}
               </p>
               <p className="mt-1 text-xs text-slate-500">Estimated from fee-enabled events and participation counts.</p>
             </div>
@@ -618,7 +1457,7 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Venue Utilization</p>
               <p className="mt-3 text-2xl font-black text-slate-900">
-                {initialData.analytics.venueUtilizationRate.toFixed(2)}%
+                {data.analytics.venueUtilizationRate.toFixed(2)}%
               </p>
               <p className="mt-1 text-xs text-slate-500">Share of events that have an assigned venue.</p>
             </div>
@@ -626,7 +1465,7 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Approval SLA</p>
               <p className="mt-3 text-2xl font-black text-slate-900">
-                {initialData.analytics.averageApprovalSlaHours.toFixed(2)} hrs
+                {data.analytics.averageApprovalSlaHours.toFixed(2)} hrs
               </p>
               <p className="mt-1 text-xs text-slate-500">Average submitted-to-decided duration across approvals.</p>
             </div>
@@ -637,13 +1476,13 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
               <h3 className="text-base font-bold text-slate-900">Revenue Trend</h3>
               <p className="mt-1 text-xs text-slate-500">Monthly estimated revenue across all events.</p>
               <div className="mt-4 h-72">
-                {initialData.analytics.revenueByMonth.length === 0 ? (
+                {data.analytics.revenueByMonth.length === 0 ? (
                   <div className="flex h-full items-center justify-center text-sm text-slate-500">
                     No revenue data available.
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={initialData.analytics.revenueByMonth}>
+                    <AreaChart data={data.analytics.revenueByMonth}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                       <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                       <YAxis tick={{ fontSize: 12 }} />
@@ -659,13 +1498,13 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
               <h3 className="text-base font-bold text-slate-900">Venue Utilization Mix</h3>
               <p className="mt-1 text-xs text-slate-500">Top venues by event volume.</p>
               <div className="mt-4 h-72">
-                {initialData.analytics.venueUsage.length === 0 ? (
+                {data.analytics.venueUsage.length === 0 ? (
                   <div className="flex h-full items-center justify-center text-sm text-slate-500">
                     No venue usage data available.
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={initialData.analytics.venueUsage}>
+                    <BarChart data={data.analytics.venueUsage}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                       <XAxis dataKey="venue" tick={{ fontSize: 11 }} />
                       <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
@@ -682,13 +1521,13 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
             <h3 className="text-base font-bold text-slate-900">Approval SLA by Month</h3>
             <p className="mt-1 text-xs text-slate-500">Average turnaround time by submission month.</p>
             <div className="mt-4 h-72">
-              {initialData.analytics.approvalSlaByMonth.length === 0 ? (
+              {data.analytics.approvalSlaByMonth.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-sm text-slate-500">
                   No approval SLA data available.
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={initialData.analytics.approvalSlaByMonth}>
+                  <LineChart data={data.analytics.approvalSlaByMonth}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                     <YAxis tick={{ fontSize: 12 }} />
@@ -706,10 +1545,10 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
         isOpen={domainModal.isOpen}
         mode={domainModal.role}
         userName={domainModal.userName}
-        departments={initialData.departments}
-        schools={initialData.schools}
-        campuses={initialData.campuses}
-        venues={initialData.venues}
+        departments={data.departments}
+        schools={data.schools}
+        campuses={data.campuses}
+        venues={data.venues}
         initialValue={domainModal.initialValue}
         onCancel={() => {
           setDomainModal(emptyModalState());

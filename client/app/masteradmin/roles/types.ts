@@ -30,8 +30,13 @@ export type VenueOption = {
 
 export type UserAccessPayload = {
   is_organiser: boolean;
+  is_student_organiser: boolean;
   is_volunteer: boolean;
+  is_support: boolean;
   is_venue_manager: boolean;
+  is_it_service: boolean;
+  is_catering_vendors: boolean;
+  is_stalls_misc: boolean;
   is_hod: boolean;
   is_dean: boolean;
   is_cfo: boolean;
@@ -67,7 +72,42 @@ export type RolesPageData = {
   schools: SchoolOption[];
   campuses: string[];
   venues: VenueOption[];
+  cateringShops: string[];
+  stallsScopes: string[];
+  roleAssignments: RoleMatrixAssignment[];
   analytics: RolesAnalytics;
+};
+
+export type RoleMatrixAssignment = {
+  user_id: string;
+  role_code: string;
+  department_scope: string | null;
+  campus_scope: string | null;
+  is_active: boolean;
+  valid_from: string | null;
+  valid_until: string | null;
+};
+
+export type RoleMatrixAssignableRole =
+  | "hod"
+  | "dean"
+  | "cfo"
+  | "organiser"
+  | "student_organiser"
+  | "volunteer"
+  | "support"
+  | "finance_officer"
+  | "master_admin"
+  | "it_service"
+  | "venue_service"
+  | "catering_service"
+  | "stalls_service";
+
+export type RoleMatrixAssignPayload = {
+  email: string;
+  campus: string;
+  role: RoleMatrixAssignableRole;
+  scopeValue?: string | null;
 };
 
 export type UpdateUserAccessActionResult =
@@ -83,6 +123,17 @@ export type UpdateUserAccessActionResult =
 export type DeleteUserActionResult =
   | {
       ok: true;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export type AssignRoleMatrixActionResult =
+  | {
+      ok: true;
+      data: RolesPageData;
+      message: string;
     }
   | {
       ok: false;

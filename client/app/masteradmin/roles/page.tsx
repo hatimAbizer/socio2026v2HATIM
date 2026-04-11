@@ -18,10 +18,10 @@ export default async function MasterAdminRolesPage() {
                   SOCIO Module 11
                 </p>
                 <h1 className="mt-2 text-3xl font-black text-slate-900">
-                  Master Admin Role Control
+                  Role Matrix Dashboard
                 </h1>
                 <p className="mt-2 text-sm text-slate-600">
-                  Manage global and domain-scoped role access in one place.
+                  Assign roles by email and monitor campus-level ownership in one place.
                 </p>
               </div>
 

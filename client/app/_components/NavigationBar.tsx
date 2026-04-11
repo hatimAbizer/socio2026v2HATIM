@@ -156,11 +156,14 @@ function NavigationBar() {
   const avatarInitial = (displayName || "U").charAt(0).toUpperCase();
   const isMasterAdmin = Boolean((userData as any)?.is_masteradmin);
   const isOrganiser = Boolean(userData?.is_organiser);
+  const isSupport = Boolean(userData?.is_support) || hasRoleAlias((userData as any)?.university_role, ["support"]);
   const universityRole = (userData as any)?.university_role;
   const isHod = Boolean((userData as any)?.is_hod) || hasRoleAlias(universityRole, ["hod"]);
   const isDean = Boolean((userData as any)?.is_dean) || hasRoleAlias(universityRole, ["dean"]);
   const isCfo = Boolean((userData as any)?.is_cfo) || hasRoleAlias(universityRole, ["cfo"]);
   const isStudentOrganiser = hasRoleAlias(universityRole, ["student organiser", "student_organiser"]);
+  const isVolunteer =
+    Boolean((userData as any)?.is_volunteer) || hasRoleAlias(universityRole, ["volunteer"]);
   const isFinanceOfficer =
     Boolean((userData as any)?.is_finance_officer) ||
     hasRoleAlias(universityRole, ["finance officer", "finance_officer"]);
@@ -174,16 +177,20 @@ function NavigationBar() {
   const canOpenCfoDashboard = isCfo || isMasterAdmin;
   const canOpenStudentOrganiserDashboard = isStudentOrganiser || isMasterAdmin;
   const canOpenFinanceDashboard = isFinanceOfficer || isMasterAdmin;
+  const canOpenVolunteerDashboard = isVolunteer;
+  const canOpenSupportDashboard = isSupport;
   const isManagementUser =
     isMasterAdmin ||
     isOrganiser ||
+    isSupport ||
+    isVolunteer ||
     isStudentOrganiser ||
     isHod ||
     isDean ||
     isCfo ||
     isFinanceOfficer ||
     accessibleServiceRoleDashboards.length > 0;
-  const roleDashboardLinks = dedupeRoleDashboardLinks([
+  const unsortedRoleDashboardLinks = dedupeRoleDashboardLinks([
     isMasterAdmin
       ? { name: "Admin", href: "/masteradmin", variant: "danger" }
       : null,
@@ -199,6 +206,13 @@ function NavigationBar() {
           name: "Student Organiser Dashboard",
           href: "/manage/student-organiser",
           variant: "brand",
+        }
+      : null,
+    canOpenVolunteerDashboard
+      ? {
+          name: "Volunteer Dashboard",
+          href: "/execution/volunteer",
+          variant: "neutral",
         }
       : null,
     canOpenHodDashboard
@@ -218,16 +232,45 @@ function NavigationBar() {
     canOpenFinanceDashboard
       ? { name: "Finance Dashboard", href: "/manage/finance", variant: "emerald" }
       : null,
+    canOpenSupportDashboard
+      ? { name: "Support Dashboard", href: "/support/inbox", variant: "neutral" }
+      : null,
   ].filter((item): item is RoleDashboardLink => item !== null));
-  const shouldGroupRoleDashboards = roleDashboardLinks.length > 3;
-  const preferredInlineRoleDashboardLinks = roleDashboardLinks.filter(
-    (item) => item.href === "/masteradmin" || item.href === "/manage"
+
+  const roleDashboardDisplayPriorityOrder = [
+    "/masteradmin",
+    "/manage/cfo",
+    "/manage/finance",
+    "/manage/dean",
+    "/manage/hod",
+    "/manage",
+    "/manage/student-organiser",
+    "/execution/volunteer",
+    "/manage/stalls-misc",
+    "/manage/it",
+    "/manage/venue",
+    "/manage/catering-vendors",
+    "/support/inbox",
+  ];
+
+  const roleDashboardDisplayPriority = new Map(
+    roleDashboardDisplayPriorityOrder.map((href, index) => [href, index])
   );
-  const fallbackInlineRoleDashboardLinks = roleDashboardLinks.slice(0, 2);
+
+  const roleDashboardLinks = [...unsortedRoleDashboardLinks].sort((left, right) => {
+    const leftPriority = roleDashboardDisplayPriority.get(left.href) ?? Number.MAX_SAFE_INTEGER;
+    const rightPriority = roleDashboardDisplayPriority.get(right.href) ?? Number.MAX_SAFE_INTEGER;
+
+    if (leftPriority === rightPriority) {
+      return 0;
+    }
+
+    return leftPriority - rightPriority;
+  });
+
+  const shouldGroupRoleDashboards = roleDashboardLinks.length > 2;
   const inlineRoleDashboardLinks = shouldGroupRoleDashboards
-    ? preferredInlineRoleDashboardLinks.length > 0
-      ? preferredInlineRoleDashboardLinks
-      : fallbackInlineRoleDashboardLinks
+    ? roleDashboardLinks.slice(0, 1)
     : roleDashboardLinks;
   const inlineRoleDashboardHrefSet = new Set(
     inlineRoleDashboardLinks.map((item) => item.href)
@@ -236,8 +279,6 @@ function NavigationBar() {
     ? roleDashboardLinks.filter((item) => !inlineRoleDashboardHrefSet.has(item.href))
     : [];
   const mobilePrimaryRoleDashboardLink =
-    roleDashboardLinks.find((item) => item.href === "/manage") ||
-    roleDashboardLinks.find((item) => item.href === "/masteradmin") ||
     roleDashboardLinks[0] ||
     null;
   const mobileDropdownRoleDashboardLinks = mobilePrimaryRoleDashboardLink

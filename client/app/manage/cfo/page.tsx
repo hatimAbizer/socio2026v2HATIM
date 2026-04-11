@@ -133,13 +133,13 @@ export default async function CfoManagePage() {
   let dashboardData: Awaited<ReturnType<typeof fetchCfoDashboardData>> = fallbackDashboardData;
   let dashboardErrorMessage: string | null = null;
 
-  if (!campusName) {
+  if (!isMasterAdmin && !campusName) {
     dashboardErrorMessage = "No campus scope is mapped to this CFO account.";
   } else {
     try {
       dashboardData = await fetchCfoDashboardData({
         supabase,
-        campus: campusName,
+        campus: isMasterAdmin ? null : campusName,
         l2Threshold,
       });
     } catch (error) {
@@ -156,7 +156,7 @@ export default async function CfoManagePage() {
         </div>
       ) : null}
       <CfoDashboardClient
-        campusName={campusName}
+        campusName={isMasterAdmin ? "All Campuses" : campusName || "My Campus"}
         initialQueue={dashboardData.queue}
         initialMetrics={dashboardData.metrics}
       />
