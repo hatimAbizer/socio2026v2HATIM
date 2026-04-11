@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   Area,
@@ -88,6 +88,17 @@ type MatrixTableRow = {
   campus: string;
   holders: string;
 };
+
+type PaginationState = {
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+};
+
+const ITEMS_PER_PAGE = 20;
 
 const roleOptions: RoleOption[] = [
   { value: "hod", label: "HOD" },
@@ -566,6 +577,57 @@ function ToggleCell({
   );
 }
 
+function PaginationControls({
+  currentPage,
+  totalPages,
+  hasNext,
+  hasPrev,
+  onNext,
+  onPrev,
+  totalItems,
+}: {
+  currentPage: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+  onNext: () => void;
+  onPrev: () => void;
+  totalItems?: number;
+}) {
+  return (
+    <div className="flex items-center justify-between border-t border-gray-200 bg-gray-50 px-6 py-4">
+      <div className="text-sm text-gray-600">
+        Page {currentPage} of {totalPages}
+        {totalItems !== undefined && <span className="ml-2 text-gray-400">({totalItems} total items)</span>}
+      </div>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={onPrev}
+          disabled={!hasPrev}
+          className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+            hasPrev
+              ? "border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+              : "cursor-not-allowed bg-gray-100 text-gray-400"
+          }`}
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={!hasNext}
+          className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+            hasNext ? "bg-[#154CB3] text-white hover:bg-[#154cb3df]" : "cursor-not-allowed bg-gray-100 text-gray-400"
+          }`}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function RolesManagementTable({ initialData }: RolesManagementTableProps) {
   const router = useRouter();
 
@@ -575,6 +637,7 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
   const [searchText, setSearchText] = useState("");
   const [pendingDeleteUserId, setPendingDeleteUserId] = useState<string | number | null>(null);
   const [pendingUpdateUserId, setPendingUpdateUserId] = useState<string | number | null>(null);
+  const [userPage, setUserPage] = useState(1);
   const [assignmentEmail, setAssignmentEmail] = useState("");
   const [assignmentCampus, setAssignmentCampus] = useState("");
   const [assignmentRole, setAssignmentRole] = useState<RoleMatrixAssignableRole>("hod");
@@ -907,6 +970,36 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
       );
     });
   }, [users, searchText]);
+
+  const userPagination = useMemo<PaginationState>(() => {
+    const totalItems = filteredUsers.length;
+    const totalPages = Math.max(Math.ceil(totalItems / ITEMS_PER_PAGE), 1);
+    const page = Math.min(userPage, totalPages);
+
+    return {
+      page,
+      pageSize: ITEMS_PER_PAGE,
+      totalItems,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+    };
+  }, [filteredUsers.length, userPage]);
+
+  const paginatedUsers = useMemo(() => {
+    const startIndex = (userPagination.page - 1) * userPagination.pageSize;
+    return filteredUsers.slice(startIndex, startIndex + userPagination.pageSize);
+  }, [filteredUsers, userPagination.page, userPagination.pageSize]);
+
+  useEffect(() => {
+    setUserPage(1);
+  }, [searchText]);
+
+  useEffect(() => {
+    if (userPagination.page !== userPage) {
+      setUserPage(userPagination.page);
+    }
+  }, [userPagination.page, userPage]);
 
   const runAccessUpdate = (user: UserRoleRow, nextAccess: UserAccessPayload, successMessage: string) => {
     setPendingUpdateUserId(user.id);
@@ -1299,7 +1392,7 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredUsers.map((user) => {
+                  {paginatedUsers.map((user) => {
                     const isUpdating = pendingUpdateUserId !== null && sameUserId(pendingUpdateUserId, user.id);
                     const isDeleting = pendingDeleteUserId !== null && sameUserId(pendingDeleteUserId, user.id);
                     const disabled = isPending || isUpdating || isDeleting;
@@ -1442,6 +1535,17 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
                 </tbody>
               </table>
             </div>
+            {filteredUsers.length > 0 && (
+              <PaginationControls
+                currentPage={userPagination.page}
+                totalPages={userPagination.totalPages}
+                hasNext={userPagination.hasNext}
+                hasPrev={userPagination.hasPrev}
+                onNext={() => setUserPage((previous) => previous + 1)}
+                onPrev={() => setUserPage((previous) => previous - 1)}
+                totalItems={userPagination.totalItems}
+              />
+            )}
           </div>
         </>
       )}
