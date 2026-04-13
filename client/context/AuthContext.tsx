@@ -11,6 +11,14 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+type RoleMatrixAssignment = {
+  role_code: string;
+  role_tag: string;
+  department_scope: string | null;
+  department_label: string | null;
+  campus_scope: string | null;
+};
+
 type UserData = {
   id: number;
   created_at: string;
@@ -33,6 +41,9 @@ type UserData = {
   is_volunteer?: boolean;
   university_role?: string | null;
   role_codes?: string[];
+  role_matrix_assignments?: RoleMatrixAssignment[];
+  role_matrix_tags?: string[];
+  role_matrix_department?: string | null;
   department_id?: string | null;
   school_id?: string | null;
   organiser_expires_at?: string | null;
@@ -336,6 +347,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
 
+    const normalizeText = (value: unknown): string => String(value || "").trim();
+
+    const normalizeNullableText = (value: unknown): string | null => {
+      const normalized = normalizeText(value);
+      return normalized.length > 0 ? normalized : null;
+    };
+
     const normalizeRoleCodes = (rawRoleCodes: unknown): string[] => {
       if (!Array.isArray(rawRoleCodes)) {
         return [];
@@ -350,8 +368,89 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
     };
 
+    const normalizeRoleMatrixAssignments = (
+      rawAssignments: unknown
+    ): RoleMatrixAssignment[] => {
+      if (!Array.isArray(rawAssignments)) {
+        return [];
+      }
+
+      const uniqueAssignments = new Map<string, RoleMatrixAssignment>();
+
+      rawAssignments.forEach((rawAssignment: unknown) => {
+        if (!rawAssignment || typeof rawAssignment !== "object") {
+          return;
+        }
+
+        const assignment = rawAssignment as Record<string, unknown>;
+        const roleCode = normalizeText(assignment.role_code).toUpperCase();
+        if (!roleCode) {
+          return;
+        }
+
+        const departmentScope = normalizeNullableText(assignment.department_scope);
+        const departmentLabel =
+          normalizeNullableText(assignment.department_label) || departmentScope;
+        const campusScope = normalizeNullableText(assignment.campus_scope);
+        const roleTag =
+          normalizeNullableText(assignment.role_tag) ||
+          roleCode
+            .toLowerCase()
+            .split("_")
+            .filter((part) => part.length > 0)
+            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+            .join(" ");
+
+        const key = `${roleCode}|${departmentScope || ""}|${campusScope || ""}`;
+        uniqueAssignments.set(key, {
+          role_code: roleCode,
+          role_tag: roleTag,
+          department_scope: departmentScope,
+          department_label: departmentLabel,
+          campus_scope: campusScope,
+        });
+      });
+
+      return Array.from(uniqueAssignments.values());
+    };
+
+    const normalizeRoleMatrixTags = (rawRoleTags: unknown): string[] => {
+      if (!Array.isArray(rawRoleTags)) {
+        return [];
+      }
+
+      return Array.from(
+        new Set(
+          rawRoleTags
+            .map((tag: unknown) => normalizeText(tag))
+            .filter((tag: string) => tag.length > 0)
+        )
+      );
+    };
+
     const normalizeUserRecord = (rawUser: Record<string, unknown>): UserData => {
       const normalizedRoleCodes = normalizeRoleCodes(rawUser.role_codes);
+      const normalizedRoleMatrixAssignments = normalizeRoleMatrixAssignments(
+        rawUser.role_matrix_assignments
+      );
+      const normalizedRoleMatrixTags = Array.from(
+        new Set([
+          ...normalizeRoleMatrixTags(rawUser.role_matrix_tags),
+          ...normalizedRoleMatrixAssignments
+            .map((assignment) => normalizeText(assignment.role_tag))
+            .filter((roleTag) => roleTag.length > 0),
+        ])
+      );
+      const normalizedRoleMatrixDepartment =
+        normalizeNullableText(rawUser.role_matrix_department) ||
+        normalizedRoleMatrixAssignments
+          .map(
+            (assignment) =>
+              normalizeNullableText(assignment.department_label) ||
+              normalizeNullableText(assignment.department_scope)
+          )
+          .find((department): department is string => Boolean(department)) ||
+        null;
 
       return {
         ...(rawUser as UserData),
@@ -368,6 +467,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           ? String(rawUser.university_role).toLowerCase().trim()
           : null,
         role_codes: normalizedRoleCodes,
+        role_matrix_assignments: normalizedRoleMatrixAssignments,
+        role_matrix_tags: normalizedRoleMatrixTags,
+        role_matrix_department: normalizedRoleMatrixDepartment,
       };
     };
 
