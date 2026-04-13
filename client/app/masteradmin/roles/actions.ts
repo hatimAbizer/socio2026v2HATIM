@@ -1585,15 +1585,7 @@ export async function updateUserAccess(
       }
     }
 
-    const { data: existingUser, error: existingUserError } = await adminClient
-      .from("users")
-      .select("id,email,is_masteradmin,university_role,department_id,school_id,campus,venue_id")
-      .eq("id", targetUserId)
-      .maybeSingle();
-
-    if (existingUserError) {
-      return { ok: false, error: existingUserError.message || "Failed to find user." };
-    }
+    const existingUser = await fetchSingleUserWithFallback(adminClient, targetUserId);
     if (!existingUser) {
       return { ok: false, error: "User not found." };
     }
