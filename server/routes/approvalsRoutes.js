@@ -1026,11 +1026,24 @@ router.get("/requests/timeline", async (req, res) => {
     const missingRequestIds = [];
 
     for (const requestId of requestIds) {
-      const approvalRequest = await queryOne("approval_requests", {
-        where: { id: requestId },
-        select:
-          "id,request_id,entity_type,entity_ref,parent_fest_ref,requested_by_user_id,requested_by_email,organizing_dept,campus_hosted_at,is_budget_related,status,submitted_at,decided_at,latest_comment,created_at,updated_at",
-      });
+      let approvalRequest;
+      try {
+        approvalRequest = await queryOne("approval_requests", {
+          where: { id: requestId },
+          select:
+            "id,request_id,entity_type,entity_ref,parent_fest_ref,requested_by_user_id,requested_by_email,organizing_dept,organizing_school,campus_hosted_at,is_budget_related,status,submitted_at,decided_at,latest_comment,created_at,updated_at",
+        });
+      } catch (error) {
+        if (!isMissingColumnError(error, "organizing_school")) {
+          throw error;
+        }
+
+        approvalRequest = await queryOne("approval_requests", {
+          where: { id: requestId },
+          select:
+            "id,request_id,entity_type,entity_ref,parent_fest_ref,requested_by_user_id,requested_by_email,organizing_dept,campus_hosted_at,is_budget_related,status,submitted_at,decided_at,latest_comment,created_at,updated_at",
+        });
+      }
 
       if (!approvalRequest) {
         missingRequestIds.push(requestId);

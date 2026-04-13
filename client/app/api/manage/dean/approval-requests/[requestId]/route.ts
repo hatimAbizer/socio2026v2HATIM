@@ -13,6 +13,7 @@ type ApprovalRequestRow = {
   entity_ref?: string | null;
   status?: string | null;
   organizing_dept?: string | null;
+  organizing_school?: string | null;
   campus_hosted_at?: string | null;
 };
 
@@ -82,7 +83,13 @@ function getRoleScopedDepartments(
         String(assignment.role_code || "").trim().toUpperCase() === roleCode &&
         isAssignmentActive(assignment)
     )
-    .map((assignment) => normalizeScope(assignment.department_scope))
+    .map((assignment) =>
+      normalizeScope(
+        roleCode === "DEAN"
+          ? assignment.school_scope || assignment.department_scope
+          : assignment.department_scope
+      )
+    )
     .filter((scope) => scope.length > 0);
 
   if (scopedDepartments.length > 0) {
@@ -177,7 +184,10 @@ async function resolveRequestScopeFromEntity(
     campusScope = campusScope || normalizeScope(eventRow?.campus_hosted_at);
   }
 
-  schoolScope = schoolScope || normalizeScope(requestRow.organizing_dept);
+  schoolScope =
+    schoolScope ||
+    normalizeScope(requestRow.organizing_school) ||
+    normalizeScope(requestRow.organizing_dept);
 
   return {
     schoolScope,
@@ -266,11 +276,24 @@ export async function PATCH(
       return jsonError(400, "Revision description is required for return action.");
     }
 
-    const { data: approvalData, error: approvalError } = await supabase
+    let approvalQuery = await supabase
       .from("approval_requests")
-      .select("id,request_id,entity_type,entity_ref,status,organizing_dept,campus_hosted_at")
+      .select("id,request_id,entity_type,entity_ref,status,organizing_dept,organizing_school,campus_hosted_at")
       .eq("id", requestId)
       .maybeSingle();
+
+    if (
+      approvalQuery.error &&
+      String(approvalQuery.error.message || "").toLowerCase().includes("organizing_school")
+    ) {
+      approvalQuery = await supabase
+        .from("approval_requests")
+        .select("id,request_id,entity_type,entity_ref,status,organizing_dept,campus_hosted_at")
+        .eq("id", requestId)
+        .maybeSingle();
+    }
+
+    const { data: approvalData, error: approvalError } = approvalQuery;
 
     if (approvalError) {
       return jsonError(500, `Failed to fetch approval request: ${approvalError.message}`);
@@ -289,7 +312,7 @@ export async function PATCH(
     if (!isMasterAdmin) {
       const allowedScopes = getRoleScopedDepartments(userProfile, "DEAN");
       if (allowedScopes.length === 0) {
-        return jsonError(403, "No department scope is mapped to this Dean account.");
+        return jsonError(403, "No school scope is mapped to this Dean account.");
       }
 
       const allowedCampuses = getRoleScopedCampuses(userProfile, "DEAN");
@@ -303,7 +326,7 @@ export async function PATCH(
       );
 
       if (!schoolScope || !allowedScopes.includes(schoolScope)) {
-        return jsonError(403, "This request does not belong to your department scope.");
+        return jsonError(403, "This request does not belong to your school scope.");
       }
 
       if (!campusScope || !allowedCampuses.includes(campusScope)) {

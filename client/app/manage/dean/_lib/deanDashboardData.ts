@@ -181,10 +181,27 @@ export async function fetchDeanDashboardData({
   const normalizedSchoolId = normalizeText(schoolId).toLowerCase();
   const normalizedCampusScope = normalizeText(campusScope).toLowerCase();
 
-  let pendingStepsQuery = supabase
-    .from("approval_steps")
-    .select(
-      `
+  const pendingSelectWithSchool = `
+        id,
+        role_code,
+        step_code,
+        status,
+        created_at,
+        approval_requests!inner (
+          id,
+          request_id,
+          entity_type,
+          entity_ref,
+          organizing_dept,
+          organizing_school,
+          campus_hosted_at,
+          status,
+          submitted_at,
+          created_at
+        )
+      `;
+
+  const pendingSelectLegacy = `
         id,
         role_code,
         step_code,
@@ -201,13 +218,28 @@ export async function fetchDeanDashboardData({
           submitted_at,
           created_at
         )
-      `
-    )
+      `;
+
+  let pendingQueryResult = await supabase
+    .from("approval_steps")
+    .select(pendingSelectWithSchool)
     .eq("role_code", "DEAN")
     .eq("status", "PENDING")
     .order("created_at", { ascending: true });
 
-  const { data: pendingStepsData, error: pendingStepsError } = await pendingStepsQuery;
+  if (
+    pendingQueryResult.error &&
+    String(pendingQueryResult.error.message || "").toLowerCase().includes("organizing_school")
+  ) {
+    pendingQueryResult = await supabase
+      .from("approval_steps")
+      .select(pendingSelectLegacy)
+      .eq("role_code", "DEAN")
+      .eq("status", "PENDING")
+      .order("created_at", { ascending: true });
+  }
+
+  const { data: pendingStepsData, error: pendingStepsError } = pendingQueryResult;
 
   if (pendingStepsError) {
     throw new Error(`Failed to load dean approvals: ${pendingStepsError.message}`);
@@ -384,10 +416,7 @@ export async function fetchDeanDashboardData({
 
   const pendingBudgetTotal = queue.reduce((sum, row) => sum + row.totalBudget, 0);
 
-  let kpiStepsQuery = supabase
-    .from("approval_steps")
-    .select(
-      `
+  const kpiSelectWithSchool = `
         id,
         status,
         created_at,
@@ -398,15 +427,48 @@ export async function fetchDeanDashboardData({
           organizing_dept,
           organizing_school
         )
-      `
-    )
-    .eq("role_code", "DEAN");
+      `;
 
-  if (normalizedSchoolId) {
-    kpiStepsQuery = kpiStepsQuery.eq("approval_requests.organizing_school", normalizedSchoolId);
+  const kpiSelectLegacy = `
+        id,
+        status,
+        created_at,
+        approval_requests!inner (
+          id,
+          entity_type,
+          entity_ref,
+          organizing_dept
+        )
+      `;
+
+  const buildKpiQuery = (includeSchoolColumn: boolean) => {
+    let query = supabase
+      .from("approval_steps")
+      .select(includeSchoolColumn ? kpiSelectWithSchool : kpiSelectLegacy)
+      .eq("role_code", "DEAN");
+
+    if (normalizedSchoolId) {
+      query = query.eq(
+        includeSchoolColumn
+          ? "approval_requests.organizing_school"
+          : "approval_requests.organizing_dept",
+        normalizedSchoolId
+      );
+    }
+
+    return query;
+  };
+
+  let kpiQueryResult = await buildKpiQuery(true);
+
+  if (
+    kpiQueryResult.error &&
+    String(kpiQueryResult.error.message || "").toLowerCase().includes("organizing_school")
+  ) {
+    kpiQueryResult = await buildKpiQuery(false);
   }
 
-  const { data: kpiStepsData, error: kpiStepsError } = await kpiStepsQuery;
+  const { data: kpiStepsData, error: kpiStepsError } = kpiQueryResult;
 
   if (kpiStepsError) {
     throw new Error(`Failed to load dean KPI data: ${kpiStepsError.message}`);
