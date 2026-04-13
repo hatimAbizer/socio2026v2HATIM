@@ -75,5 +75,11 @@ export const deriveLifecycleStatus = ({
 export const isPublishableLifecycleStatus = (status) =>
   normalizeLifecycleStatus(status) === LIFECYCLE_STATUS.APPROVED;
 
-export const shouldEntityRemainDraft = (status) =>
-  normalizeLifecycleStatus(status) !== LIFECYCLE_STATUS.PUBLISHED;
+export const shouldEntityRemainDraft = (status) => {
+  const normalizedStatus = normalizeLifecycleStatus(status);
+  return (
+    normalizedStatus === LIFECYCLE_STATUS.DRAFT ||
+    normalizedStatus === LIFECYCLE_STATUS.PENDING_APPROVALS ||
+    normalizedStatus === LIFECYCLE_STATUS.REVISION_REQUESTED
+  );
+};

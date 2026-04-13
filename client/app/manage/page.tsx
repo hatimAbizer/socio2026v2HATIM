@@ -326,6 +326,24 @@ const getApprovalRows = (
 const normalizeWorkflowStatus = (workflowStatus?: string | null) =>
   String(workflowStatus || "").trim().toLowerCase();
 
+const normalizeLifecycleStatusToken = (value?: string | null) =>
+  String(value || "").trim().toLowerCase();
+
+const isDraftLifecycleStatus = (value?: string | null) => {
+  const lifecycleStatus = normalizeLifecycleStatusToken(value);
+  return (
+    lifecycleStatus === "draft" ||
+    lifecycleStatus === "pending_approvals" ||
+    lifecycleStatus === "revision_requested"
+  );
+};
+
+const isBooleanLikeTrue = (value: unknown) =>
+  value === true ||
+  value === 1 ||
+  value === "1" ||
+  (typeof value === "string" && ["true", "yes", "on", "t"].includes(value.trim().toLowerCase()));
+
 const getPendingApprovalLabel = (workflowStatus?: string | null) => {
   const normalized = normalizeWorkflowStatus(workflowStatus);
   const match = PENDING_WORKFLOW_STATUS_REGEX.exec(normalized);
@@ -422,11 +440,12 @@ const MappedFestCard = ({
 }: MappedFestCardProps) => {
   const isPast = fest.closing_date ? new Date(fest.closing_date) < new Date() : false;
   const isArchived = fest.is_archived ?? false;
+  const lifecycleStatus = normalizeLifecycleStatusToken(
+    fest.lifecycle_status || fest.status
+  );
   const isDraft =
-    fest.is_draft === true ||
-    (fest.is_draft as any) === 1 ||
-    (fest.is_draft as any) === "1" ||
-    (fest.is_draft as any) === "true";
+    isBooleanLikeTrue(fest.is_draft) ||
+    isDraftLifecycleStatus(lifecycleStatus);
   const pendingApprovalLabel = getPendingApprovalLabel(fest.workflow_status);
   const isApprovalPending = Boolean(pendingApprovalLabel);
   const isEditLocked = isApprovalPending && !isDraft;
@@ -586,11 +605,12 @@ const MappedEventCard = ({
   isApprovalTimelineLoading?: boolean;
 }) => {
   const isPast = event.event_date ? new Date(event.event_date) < new Date() : false;
+  const lifecycleStatus = normalizeLifecycleStatusToken(
+    (event as any).lifecycle_status || (event as any).status
+  );
   const isDraft =
-    (event as any).is_draft === true ||
-    (event as any).is_draft === 1 ||
-    (event as any).is_draft === "1" ||
-    (event as any).is_draft === "true";
+    isBooleanLikeTrue((event as any).is_draft) ||
+    isDraftLifecycleStatus(lifecycleStatus);
   const pendingApprovalLabel = getPendingApprovalLabel(event.workflow_status);
   const isApprovalPending = Boolean(pendingApprovalLabel);
   const isEditLocked = isApprovalPending && !isDraft;
@@ -951,10 +971,8 @@ export default function ManageDashboard() {
             : [],
         campus_hosted_at: fest.campus_hosted_at || fest.campus || null,
         is_draft:
-          fest.is_draft === true ||
-          fest.is_draft === 1 ||
-          fest.is_draft === "1" ||
-          fest.is_draft === "true",
+          isBooleanLikeTrue(fest.is_draft) ||
+          isDraftLifecycleStatus(fest.lifecycle_status || fest.status),
         is_archived: fest.is_archived === true,
         archived_at: fest.archived_at || null,
         workflow_status: fest.workflow_status || null,
