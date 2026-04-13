@@ -1310,48 +1310,45 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
             </div>
           </div>
 
-          <div className="grid gap-5 xl:grid-cols-3">
-            {[
-              { title: "Academic Matrix", rows: matrixSections.academic },
-              { title: "Service Matrix", rows: matrixSections.services },
-              { title: "Governance Matrix", rows: matrixSections.governance },
-            ].map((section) => (
-              <div key={section.title} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-                  <h3 className="text-sm font-bold text-slate-900">{section.title}</h3>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full border-collapse">
-                    <thead className="bg-white text-left">
-                      <tr>
-                        <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Role</th>
-                        <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Scope</th>
-                        <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Campus</th>
-                        <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Assignees</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {section.rows.map((row) => (
-                        <tr key={`${section.title}-${row.role}-${row.scope}`} className="border-t border-slate-200 align-top">
-                          <td className="px-4 py-3 text-sm font-semibold text-slate-800">{row.role}</td>
-                          <td className="px-4 py-3 text-sm text-slate-700">{row.scope}</td>
-                          <td className="px-4 py-3 text-sm text-slate-700">{row.campus}</td>
-                          <td className="px-4 py-3 text-sm text-slate-700">{row.holders}</td>
-                        </tr>
-                      ))}
-
-                      {section.rows.length === 0 && (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
-                            No assignments available.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+          <div className="w-full max-w-5xl">
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between border-b border-slate-200 bg-gradient-to-r from-emerald-50 via-white to-white px-5 py-4">
+                <h3 className="text-sm font-bold text-slate-900">Academic Matrix</h3>
+                <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                  {matrixSections.academic.length} rows
+                </span>
               </div>
-            ))}
+              <div className="overflow-x-auto">
+                <table className="min-w-full border-collapse">
+                  <thead className="bg-white text-left">
+                    <tr>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Role</th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Scope</th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Campus</th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Assignees</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {matrixSections.academic.map((row) => (
+                      <tr key={`Academic Matrix-${row.role}-${row.scope}`} className="border-t border-slate-200 align-top">
+                        <td className="px-4 py-3 text-sm font-semibold text-slate-800">{row.role}</td>
+                        <td className="px-4 py-3 text-sm text-slate-700">{row.scope}</td>
+                        <td className="px-4 py-3 text-sm text-slate-700">{row.campus}</td>
+                        <td className="px-4 py-3 text-sm text-slate-700">{row.holders}</td>
+                      </tr>
+                    ))}
+
+                    {matrixSections.academic.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
+                          No assignments available.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
