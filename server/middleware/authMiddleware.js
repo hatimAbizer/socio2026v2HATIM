@@ -1,10 +1,13 @@
 import supabase from "../config/supabaseClient.js";
-import { queryOne, update } from "../config/database.js";
+import { insert, queryAll, queryOne, update } from "../config/database.js";
 import {
   ROLE_CODES,
+  combineRoleCodes,
+  deriveRoleCodesFromAssignments,
   deriveLegacyFlagsFromRoleCodes,
   deriveRoleCodesFromUserRecord,
   hasAnyRoleCode,
+  isRoleAssignmentActive,
 } from "../utils/roleAccessService.js";
 
 const getRoleCodes = (userInfo) => (Array.isArray(userInfo?.role_codes) ? userInfo.role_codes : []);
@@ -58,18 +61,179 @@ const hasLegacyFlagForRole = (userInfo, roleCode) => {
   }
 };
 
+const isMissingRelationError = (error) => {
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || "").toLowerCase();
+
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    (message.includes("relation") && message.includes("does not exist")) ||
+    (message.includes("could not find") && message.includes("schema cache"))
+  );
+};
+
+const isMissingColumnError = (error, columnName) => {
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || "").toLowerCase();
+  const normalizedColumn = String(columnName || "").toLowerCase();
+
+  if (!normalizedColumn) {
+    return false;
+  }
+
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes(`column \"${normalizedColumn}\"`) ||
+    message.includes(`${normalizedColumn} does not exist`) ||
+    (message.includes("could not find") && message.includes(normalizedColumn))
+  );
+};
+
+const normalizeEmailAddress = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
+
+const resolveOrganizationType = (email) => {
+  const normalizedEmail = normalizeEmailAddress(email);
+  const domain = normalizedEmail.split("@")[1] || "";
+  return domain.endsWith("christuniversity.in") ? "christ_member" : "outsider";
+};
+
+const isStaffDomainEmail = (email) => {
+  const normalizedEmail = normalizeEmailAddress(email);
+  const domain = normalizedEmail.split("@")[1] || "";
+  return domain === "christuniversity.in";
+};
+
+const resolveFallbackUserName = (authUser) => {
+  const userMetadata = authUser?.user_metadata || {};
+  const candidateName = String(
+    userMetadata.full_name || userMetadata.name || ""
+  ).trim();
+
+  if (candidateName) {
+    return candidateName;
+  }
+
+  const normalizedEmail = normalizeEmailAddress(authUser?.email);
+  if (!normalizedEmail || !normalizedEmail.includes("@")) {
+    return "New User";
+  }
+
+  return normalizedEmail.split("@")[0];
+};
+
+const resolveAvatarUrl = (authUser) => {
+  const userMetadata = authUser?.user_metadata || {};
+  return userMetadata.avatar_url || userMetadata.picture || null;
+};
+
+const resolveUserFromDatabase = async ({ authUserId, authEmail, authUser }) => {
+  let resolvedUser = await queryOne("users", { where: { auth_uuid: authUserId } });
+
+  if (resolvedUser) {
+    return resolvedUser;
+  }
+
+  if (authEmail) {
+    const userByEmail = await queryOne("users", { where: { email: authEmail } });
+    if (userByEmail) {
+      const existingAuthUuid = String(userByEmail.auth_uuid || "").trim();
+      if (!existingAuthUuid || existingAuthUuid !== String(authUserId || "").trim()) {
+        try {
+          const linkedRows = await update(
+            "users",
+            { auth_uuid: authUserId },
+            { id: userByEmail.id }
+          );
+          resolvedUser = Array.isArray(linkedRows) && linkedRows.length > 0 ? linkedRows[0] : userByEmail;
+          console.log(`[UserInfo] ✅ Linked existing user by email to auth_uuid: ${authEmail}`);
+        } catch (linkError) {
+          console.error("[UserInfo] Failed to link existing user by email:", linkError);
+          resolvedUser =
+            (await queryOne("users", { where: { auth_uuid: authUserId } })) || userByEmail;
+        }
+      } else {
+        resolvedUser = userByEmail;
+      }
+    }
+  }
+
+  if (resolvedUser) {
+    return resolvedUser;
+  }
+
+  if (!authEmail) {
+    return null;
+  }
+
+  const createPayload = {
+    auth_uuid: authUserId,
+    email: authEmail,
+    name: resolveFallbackUserName(authUser),
+    avatar_url: resolveAvatarUrl(authUser),
+    is_organiser: isStaffDomainEmail(authEmail),
+    is_support: false,
+    is_masteradmin: false,
+    organization_type: resolveOrganizationType(authEmail),
+  };
+
+  try {
+    const insertedRows = await insert("users", [createPayload]);
+    resolvedUser = Array.isArray(insertedRows) && insertedRows.length > 0 ? insertedRows[0] : null;
+    if (resolvedUser) {
+      console.log(`[UserInfo] ✅ Auto-provisioned missing user for: ${authEmail}`);
+      return resolvedUser;
+    }
+  } catch (createError) {
+    const duplicateConflictCode = String(createError?.code || "").toUpperCase();
+    if (duplicateConflictCode !== "23505") {
+      throw createError;
+    }
+
+    console.warn(`[UserInfo] Race while auto-provisioning user for ${authEmail}; retrying lookup.`);
+  }
+
+  return await queryOne("users", { where: { email: authEmail } });
+};
+
 const enrichUserInfoWithRoles = async (userRecord) => {
   if (!userRecord?.id) {
     return userRecord;
   }
 
-  const roleCodes = deriveRoleCodesFromUserRecord(userRecord);
+  let roleAssignments = [];
+
+  try {
+    const assignmentRows = await queryAll("user_role_assignments", {
+      where: { user_id: userRecord.id, is_active: true },
+    });
+
+    roleAssignments = (assignmentRows || []).filter((assignment) =>
+      isRoleAssignmentActive(assignment)
+    );
+  } catch (error) {
+    if (
+      !isMissingRelationError(error) &&
+      !isMissingColumnError(error, "role_code")
+    ) {
+      throw error;
+    }
+  }
+
+  const roleCodes = combineRoleCodes(
+    deriveRoleCodesFromUserRecord(userRecord),
+    deriveRoleCodesFromAssignments(roleAssignments)
+  );
   const legacyRoleFlags = deriveLegacyFlagsFromRoleCodes(roleCodes, userRecord);
 
   return {
     ...userRecord,
     ...legacyRoleFlags,
-    role_assignments: [],
+    role_assignments: roleAssignments,
     role_codes: roleCodes,
   };
 };
@@ -200,7 +364,12 @@ export const getUserInfo = () => {
       }
 
       console.log(`[UserInfo] 🔍 Fetching user info for UUID: ${req.userId}`);
-      const user = await queryOne('users', { where: { auth_uuid: req.userId } });
+      const authEmail = normalizeEmailAddress(req.user?.email);
+      const user = await resolveUserFromDatabase({
+        authUserId: req.userId,
+        authEmail,
+        authUser: req.user,
+      });
 
       if (!user) {
         console.warn(`[UserInfo] ❌ User not found in database for UUID: ${req.userId}`);

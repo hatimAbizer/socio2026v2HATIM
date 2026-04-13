@@ -9,6 +9,23 @@ import {
 
 const publicPaths = ["/", "/auth/callback", "/error", "/about", "/auth", "/events", "/event/*", "/fests", "/fest/*", "/clubs", "/club/*", "/Discover", "/contact", "/faq", "/privacy", "/terms", "/cookies", "/pricing", "/solutions", "/support", "/support/*", "/about/*", "/app-download", "/prototype-website", "/prototype-website/*"];
 
+const isLocalOrigin = (value?: string | null) =>
+  /https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(String(value || ""));
+
+function resolveRequestOrigin(params: {
+  headerOrigin: string | null;
+  requestOrigin: string;
+  appUrl?: string | null;
+}): string {
+  const { headerOrigin, requestOrigin, appUrl } = params;
+
+  if (isLocalOrigin(headerOrigin) || isLocalOrigin(requestOrigin)) {
+    return headerOrigin || requestOrigin;
+  }
+
+  return headerOrigin || appUrl || requestOrigin;
+}
+
 function normalizeRoleCode(value: unknown): string {
   return String(value || "").trim().toUpperCase();
 }
@@ -74,6 +91,18 @@ function mergeUserDataWithAssignmentRoleCodes(
   };
 }
 
+function isRoleLookupBypassError(error: unknown): boolean {
+  const code = String((error as any)?.code || "").toUpperCase();
+  const message = String((error as any)?.message || "").toLowerCase();
+
+  return (
+    code === "42501" ||
+    message.includes("permission denied") ||
+    message.includes("row-level security") ||
+    message.includes("failed to fetch")
+  );
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -116,7 +145,12 @@ export async function middleware(req: NextRequest) {
   // 4. Robust origin detection for redirects
   const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
   const protocol = req.headers.get("x-forwarded-proto") || req.nextUrl.protocol.replace(':', '');
-  const origin = host ? `${protocol}://${host}` : (process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin);
+  const headerOrigin = host ? `${protocol}://${host}` : null;
+  const origin = resolveRequestOrigin({
+    headerOrigin,
+    requestOrigin: req.nextUrl.origin,
+    appUrl: process.env.NEXT_PUBLIC_APP_URL,
+  });
 
   // Helper to maintain cookies on redirect
   const redirect = (path: string) => {
@@ -160,14 +194,33 @@ export async function middleware(req: NextRequest) {
       return redirect("/error");
     }
 
-    const { data: userData, error } = await supabase
+    const userByAuthUuidResponse = await supabase
       .from("users")
       .select("*")
-      .eq("email", user.email)
-      .single();
+      .eq("auth_uuid", user.id)
+      .maybeSingle();
+
+    let userData = userByAuthUuidResponse.data as Record<string, unknown> | null;
+    let error = userByAuthUuidResponse.error;
+
+    if (!userData) {
+      const userByEmailResponse = await supabase
+        .from("users")
+        .select("*")
+        .eq("email", user.email)
+        .maybeSingle();
+
+      userData = userByEmailResponse.data as Record<string, unknown> | null;
+      error = userByEmailResponse.error || error;
+    }
+
+    if (!userData && error && isRoleLookupBypassError(error)) {
+      return res;
+    }
 
     const normalizedUserData = (userData as Record<string, unknown> | null) || null;
     let roleAssignments: Array<Record<string, unknown>> = [];
+    let hasRoleAssignmentLookupError = false;
 
     if (normalizedUserData?.id) {
       const { data: roleAssignmentsData, error: roleAssignmentsError } = await supabase
@@ -177,7 +230,13 @@ export async function middleware(req: NextRequest) {
 
       if (!roleAssignmentsError && Array.isArray(roleAssignmentsData)) {
         roleAssignments = roleAssignmentsData as Array<Record<string, unknown>>;
+      } else if (roleAssignmentsError && isRoleLookupBypassError(roleAssignmentsError)) {
+        hasRoleAssignmentLookupError = true;
       }
+    }
+
+    if (hasRoleAssignmentLookupError) {
+      return res;
     }
 
     const resolvedUserData = mergeUserDataWithAssignmentRoleCodes(
