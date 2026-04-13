@@ -311,6 +311,153 @@ const syncServiceOutcomeToEvent = async ({ serviceRequest, decidedByEmail, comme
 
 const normalizeDecision = (decision) => String(decision || "").trim().toUpperCase();
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const normalizeDepartmentScopeValue = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+const isRoleAssignmentActive = (assignment) => {
+  if (!assignment || assignment.is_active === false) {
+    return false;
+  }
+
+  const now = Date.now();
+  const validFrom = assignment.valid_from
+    ? new Date(String(assignment.valid_from)).getTime()
+    : null;
+  const validUntil = assignment.valid_until
+    ? new Date(String(assignment.valid_until)).getTime()
+    : null;
+
+  if (Number.isFinite(validFrom) && validFrom > now) {
+    return false;
+  }
+
+  if (Number.isFinite(validUntil) && validUntil <= now) {
+    return false;
+  }
+
+  return true;
+};
+
+const resolveDepartmentLabelsFromIds = async (departmentIds) => {
+  const labels = new Set();
+
+  for (const departmentId of departmentIds) {
+    const normalizedId = String(departmentId || "").trim();
+    if (!normalizedId) {
+      continue;
+    }
+
+    labels.add(normalizeDepartmentScopeValue(normalizedId));
+
+    try {
+      const departmentRow = await queryOne("departments_courses", {
+        where: { id: normalizedId },
+        select: "id,department_name",
+      });
+
+      if (departmentRow?.department_name) {
+        labels.add(normalizeDepartmentScopeValue(departmentRow.department_name));
+      }
+    } catch (error) {
+      if (isMissingRelationError(error)) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  return labels;
+};
+
+const resolveHodDepartmentScope = async (req) => {
+  if (req.__hodDepartmentScope instanceof Set) {
+    return req.__hodDepartmentScope;
+  }
+
+  const departmentScope = new Set();
+  const departmentIdCandidates = new Set();
+
+  const addScopeValue = (value) => {
+    const normalizedValue = normalizeDepartmentScopeValue(value);
+    if (normalizedValue) {
+      departmentScope.add(normalizedValue);
+    }
+  };
+
+  const userDepartmentId = String(req.userInfo?.department_id || "").trim();
+  if (userDepartmentId) {
+    addScopeValue(userDepartmentId);
+    departmentIdCandidates.add(userDepartmentId);
+  }
+
+  const userId = String(req.userInfo?.id || "").trim();
+  if (userId) {
+    try {
+      const assignments = await queryAll("user_role_assignments", {
+        where: { user_id: userId, role_code: ROLE_CODES.HOD },
+        select: "department_scope,is_active,valid_from,valid_until",
+      });
+
+      for (const assignment of assignments || []) {
+        if (!isRoleAssignmentActive(assignment)) {
+          continue;
+        }
+
+        const departmentScopeValue = String(assignment.department_scope || "").trim();
+        if (!departmentScopeValue) {
+          continue;
+        }
+
+        addScopeValue(departmentScopeValue);
+        if (UUID_REGEX.test(departmentScopeValue)) {
+          departmentIdCandidates.add(departmentScopeValue);
+        }
+      }
+    } catch (error) {
+      if (!isMissingRelationError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  const departmentLabels = await resolveDepartmentLabelsFromIds(
+    Array.from(departmentIdCandidates)
+  );
+
+  departmentLabels.forEach((label) => departmentScope.add(label));
+
+  req.__hodDepartmentScope = departmentScope;
+  return departmentScope;
+};
+
+const canHodAccessApprovalRequest = async (req, approvalRequest) => {
+  if (isMasterAdminRequest(req)) {
+    return true;
+  }
+
+  const departmentScope = await resolveHodDepartmentScope(req);
+  if (departmentScope.size === 0) {
+    return false;
+  }
+
+  const requestDepartment = normalizeDepartmentScopeValue(
+    approvalRequest?.organizing_dept
+  );
+
+  if (!requestDepartment) {
+    return false;
+  }
+
+  return departmentScope.has(requestDepartment);
+};
+
 const getUserRoleCodes = (req) => {
   return Array.isArray(req.userInfo?.role_codes) ? req.userInfo.role_codes : [];
 };
@@ -319,7 +466,7 @@ const isMasterAdminRequest = (req) => {
   return Boolean(req.userInfo?.is_masteradmin) || hasAnyRoleCode(getUserRoleCodes(req), [ROLE_CODES.MASTER_ADMIN]);
 };
 
-const ensureQueueAccess = (req, res, roleCode) => {
+const ensureQueueAccess = async (req, res, roleCode, approvalRequest = null) => {
   const normalizedRoleCode = normalizeRoleCode(roleCode);
 
   if (!normalizedRoleCode) {
@@ -334,6 +481,26 @@ const ensureQueueAccess = (req, res, roleCode) => {
   if (!hasAnyRoleCode(getUserRoleCodes(req), [normalizedRoleCode])) {
     res.status(403).json({ error: "Access denied: role queue access not permitted" });
     return false;
+  }
+
+  if (normalizedRoleCode === ROLE_CODES.HOD) {
+    const departmentScope = await resolveHodDepartmentScope(req);
+    if (departmentScope.size === 0) {
+      res.status(403).json({
+        error: "Access denied: no department scope is configured for this HOD account.",
+      });
+      return false;
+    }
+
+    if (approvalRequest) {
+      const canAccessRequest = await canHodAccessApprovalRequest(req, approvalRequest);
+      if (!canAccessRequest) {
+        res.status(403).json({
+          error: "Access denied: this request does not belong to your department scope.",
+        });
+        return false;
+      }
+    }
   }
 
   return true;
@@ -399,9 +566,12 @@ router.get("/queues/:roleCode", async (req, res) => {
   try {
     const roleCode = normalizeRoleCode(req.params.roleCode);
 
-    if (!ensureQueueAccess(req, res, roleCode)) {
+    if (!(await ensureQueueAccess(req, res, roleCode))) {
       return;
     }
+
+    const hodDepartmentScope =
+      roleCode === ROLE_CODES.HOD ? await resolveHodDepartmentScope(req) : null;
 
     const queueSteps = await queryAll("approval_steps", {
       where: { role_code: roleCode, status: "PENDING" },
@@ -415,6 +585,14 @@ router.get("/queues/:roleCode", async (req, res) => {
       });
 
       if (!approvalRequest) {
+        continue;
+      }
+
+      if (
+        hodDepartmentScope &&
+        hodDepartmentScope.size > 0 &&
+        !(await canHodAccessApprovalRequest(req, approvalRequest))
+      ) {
         continue;
       }
 
@@ -457,7 +635,7 @@ router.get("/service-queues/:roleCode", async (req, res) => {
       return res.status(400).json({ error: "Invalid service role code" });
     }
 
-    if (!ensureQueueAccess(req, res, roleCode)) {
+    if (!(await ensureQueueAccess(req, res, roleCode))) {
       return;
     }
 
@@ -528,7 +706,7 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
 
     const stepRoleCode = normalizeRoleCode(approvalStep.role_code);
 
-    if (!ensureQueueAccess(req, res, stepRoleCode, approvalRequest)) {
+    if (!(await ensureQueueAccess(req, res, stepRoleCode, approvalRequest))) {
       return;
     }
 
@@ -638,7 +816,7 @@ router.post("/service-requests/:serviceRequestId/decision", async (req, res) => 
       });
     }
 
-    if (!ensureQueueAccess(req, res, serviceRoleCode, approvalRequest)) {
+    if (!(await ensureQueueAccess(req, res, serviceRoleCode, approvalRequest))) {
       return;
     }
 
