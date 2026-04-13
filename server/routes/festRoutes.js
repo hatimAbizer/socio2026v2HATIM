@@ -57,6 +57,7 @@ const parseJsonLikeField = (value, fallbackValue) => {
 };
 
 const FEST_BUDGET_SETTINGS_KEY = "__budget_approval__";
+const FEST_APPROVAL_SETTINGS_KEY = "__approval_workflow__";
 
 const normalizeWorkflowStatus = (value, fallback = "") => {
   const normalized = String(value || "").trim().toUpperCase();
@@ -90,6 +91,104 @@ export const extractBudgetApprovalRequirement = (customFieldsValue) => {
     fieldValue.requiresBudgetApproval === true ||
     String(fieldValue.requiresBudgetApproval || "").trim().toLowerCase() === "true"
   );
+};
+
+const parseBooleanWithFallback = (value, fallbackValue) => {
+  if (value === true || value === "true" || value === 1 || value === "1") {
+    return true;
+  }
+
+  if (value === false || value === "false" || value === 0 || value === "0") {
+    return false;
+  }
+
+  return fallbackValue;
+};
+
+const normalizeFestApprovalWorkflow = (value) => {
+  const candidate =
+    value && typeof value === "object" && !Array.isArray(value) ? value : {};
+
+  const requiresHodApproval = parseBooleanWithFallback(
+    candidate.requiresHodApproval ?? candidate.requires_hod_approval,
+    true
+  );
+  const requiresDeanApproval = parseBooleanWithFallback(
+    candidate.requiresDeanApproval ?? candidate.requires_dean_approval,
+    true
+  );
+
+  if (!requiresHodApproval && !requiresDeanApproval) {
+    return {
+      requiresHodApproval: false,
+      requiresDeanApproval: true,
+    };
+  }
+
+  return {
+    requiresHodApproval,
+    requiresDeanApproval,
+  };
+};
+
+const extractFestApprovalWorkflow = ({ customFieldsValue, directValue }) => {
+  const parsedDirectValue = parseJsonLikeField(directValue, null);
+  if (
+    parsedDirectValue &&
+    typeof parsedDirectValue === "object" &&
+    !Array.isArray(parsedDirectValue)
+  ) {
+    return normalizeFestApprovalWorkflow(parsedDirectValue);
+  }
+
+  const parsedCustomFields = parseJsonLikeField(customFieldsValue, []);
+  if (!Array.isArray(parsedCustomFields)) {
+    return normalizeFestApprovalWorkflow(null);
+  }
+
+  const approvalField = parsedCustomFields.find((field) => {
+    if (!field || typeof field !== "object" || Array.isArray(field)) {
+      return false;
+    }
+
+    return String(field.key || "").trim() === FEST_APPROVAL_SETTINGS_KEY;
+  });
+
+  if (!approvalField || typeof approvalField !== "object" || Array.isArray(approvalField)) {
+    return normalizeFestApprovalWorkflow(null);
+  }
+
+  return normalizeFestApprovalWorkflow(approvalField.value);
+};
+
+const formatApprovalPathLabel = ({ approvalWorkflow, isBudgetRelated }) => {
+  const stages = [];
+
+  if (approvalWorkflow?.requiresHodApproval) {
+    stages.push("HOD");
+  }
+
+  if (approvalWorkflow?.requiresDeanApproval) {
+    stages.push("Dean");
+  }
+
+  if (Boolean(isBudgetRelated)) {
+    stages.push("CFO");
+  }
+
+  if (stages.length === 0) {
+    return "approval";
+  }
+
+  if (stages.length === 1) {
+    return `${stages[0]} approval`;
+  }
+
+  if (stages.length === 2) {
+    return `${stages[0]} and ${stages[1]} approvals`;
+  }
+
+  return `${stages.slice(0, -1).join(", ")}, and ${stages[stages.length - 1]} approvals`;
 };
 
 export const findActiveApprovalRequestForEntity = async ({ entityType, entityRef }) => {
@@ -129,11 +228,18 @@ export const findActiveApprovalRequestForEntity = async ({ entityType, entityRef
   }
 };
 
-export const createFestApprovalRequest = async ({ festRecord, userInfo, isBudgetRelated }) => {
+export const createFestApprovalRequest = async ({
+  festRecord,
+  userInfo,
+  isBudgetRelated,
+  approvalWorkflow,
+}) => {
   const festId = String(festRecord?.fest_id || "").trim();
   if (!festId) {
     return null;
   }
+
+  const normalizedApprovalWorkflow = normalizeFestApprovalWorkflow(approvalWorkflow);
 
   const existingRequest = await findActiveApprovalRequestForEntity({
     entityType: "FEST",
@@ -168,25 +274,42 @@ export const createFestApprovalRequest = async ({ festRecord, userInfo, isBudget
       return null;
     }
 
-    const approvalSteps = [
-      {
+    const approvalSteps = [];
+    let stepOrder = 1;
+
+    if (normalizedApprovalWorkflow.requiresHodApproval) {
+      approvalSteps.push({
+        approval_request_id: approvalRequest.id,
+        step_code: "HOD",
+        role_code: ROLE_CODES.HOD,
+        step_group: stepOrder,
+        sequence_order: stepOrder,
+        required_count: 1,
+        status: "PENDING",
+      });
+      stepOrder += 1;
+    }
+
+    if (normalizedApprovalWorkflow.requiresDeanApproval) {
+      approvalSteps.push({
         approval_request_id: approvalRequest.id,
         step_code: "DEAN",
         role_code: ROLE_CODES.DEAN,
-        step_group: 1,
-        sequence_order: 1,
+        step_group: stepOrder,
+        sequence_order: stepOrder,
         required_count: 1,
         status: "PENDING",
-      },
-    ];
+      });
+      stepOrder += 1;
+    }
 
     if (Boolean(isBudgetRelated)) {
       approvalSteps.push({
         approval_request_id: approvalRequest.id,
         step_code: "CFO",
         role_code: ROLE_CODES.CFO,
-        step_group: 2,
-        sequence_order: 2,
+        step_group: stepOrder,
+        sequence_order: stepOrder,
         required_count: 1,
         status: "PENDING",
       });
@@ -940,6 +1063,10 @@ router.post(
           []
         ) || [];
       const isBudgetRelated = extractBudgetApprovalRequirement(parsedCustomFields);
+      const approvalWorkflow = extractFestApprovalWorkflow({
+        customFieldsValue: parsedCustomFields,
+        directValue: pickDefined(festData.approval_settings, festData.approvalSettings),
+      });
 
       const festPayload = {
         fest_id,
@@ -988,6 +1115,7 @@ router.post(
           },
           userInfo: req.userInfo,
           isBudgetRelated,
+          approvalWorkflow,
         });
 
         if (workflowApprovalRequest) {
@@ -1063,9 +1191,10 @@ router.post(
 
       return res.status(201).json({
         message: workflowApprovalRequest
-          ? (isBudgetRelated
-              ? "Fest submitted successfully and routed to Dean and CFO approvals"
-              : "Fest submitted successfully and routed to Dean approval")
+          ? `Fest submitted successfully and routed to ${formatApprovalPathLabel({
+              approvalWorkflow,
+              isBudgetRelated,
+            })}`
           : "Fest created successfully",
         fest: mapFestResponse(createdFest),
         approval_request_id: workflowApprovalRequest?.request_id || null,
@@ -1273,6 +1402,10 @@ router.put(
       const effectiveCustomFields =
         parsedCustomFields === undefined ? existingFest.custom_fields : parsedCustomFields;
       const isBudgetRelated = extractBudgetApprovalRequirement(effectiveCustomFields);
+      const approvalWorkflow = extractFestApprovalWorkflow({
+        customFieldsValue: effectiveCustomFields,
+        directValue: pickDefined(updateData.approval_settings, updateData.approvalSettings),
+      });
 
       console.log(`[Fest Update] Image URL received: ${JSON.stringify(incomingImageUrl)} (type: ${typeof incomingImageUrl})`);
       console.log(`[Fest Update] 'festImageUrl' in body: ${'festImageUrl' in updateData}`);
@@ -1386,6 +1519,7 @@ router.put(
           },
           userInfo: req.userInfo,
           isBudgetRelated,
+          approvalWorkflow,
         });
 
         if (workflowApprovalRequest) {
@@ -1477,9 +1611,10 @@ router.put(
 
       console.log(`[response] About to send success response for fest ${festId}`);
       const responseMessage = workflowApprovalRequest
-        ? (pendingCfoApproval
-            ? "Fest submitted successfully and routed to Dean and CFO approvals"
-            : "Fest submitted successfully and routed to Dean approval")
+        ? `Fest submitted successfully and routed to ${formatApprovalPathLabel({
+            approvalWorkflow,
+            isBudgetRelated: pendingCfoApproval,
+          })}`
         : "Fest updated successfully";
 
       return res.status(200).json({

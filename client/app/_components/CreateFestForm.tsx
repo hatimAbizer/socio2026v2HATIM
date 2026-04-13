@@ -83,6 +83,7 @@ const toDateTimeLocalInputValue = (value: string | null): string => {
 
 const FEST_TEAM_SETTINGS_KEY = "__team_event_settings__";
 const FEST_BUDGET_SETTINGS_KEY = "__budget_approval__";
+const FEST_APPROVAL_SETTINGS_KEY = "__approval_workflow__";
 
 interface FestTeamSettings {
   isTeamEvent: boolean;
@@ -106,6 +107,11 @@ interface FestBudgetSettings {
   requiresBudgetApproval: boolean;
   items: FestBudgetItem[];
   totalSponsorship: string;
+}
+
+interface FestApprovalSettings {
+  requiresHodApproval: boolean;
+  requiresDeanApproval: boolean;
 }
 
 type ClientKeyedItem = object;
@@ -149,6 +155,46 @@ const toPositiveNumber = (value: unknown): number => {
     return 0;
   }
   return parsed;
+};
+
+const parseBooleanWithFallback = (value: unknown, fallbackValue: boolean): boolean => {
+  if (value === true || value === "true" || value === 1 || value === "1") {
+    return true;
+  }
+
+  if (value === false || value === "false" || value === 0 || value === "0") {
+    return false;
+  }
+
+  return fallbackValue;
+};
+
+const normalizeFestApprovalSettings = (value: unknown): FestApprovalSettings => {
+  const candidate =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+
+  const requiresHodApproval = parseBooleanWithFallback(
+    candidate.requiresHodApproval,
+    true
+  );
+  const requiresDeanApproval = parseBooleanWithFallback(
+    candidate.requiresDeanApproval,
+    true
+  );
+
+  if (!requiresHodApproval && !requiresDeanApproval) {
+    return {
+      requiresHodApproval: false,
+      requiresDeanApproval: true,
+    };
+  }
+
+  return {
+    requiresHodApproval,
+    requiresDeanApproval,
+  };
 };
 
 const extractBudgetSettingsFromCustomFields = (
@@ -229,6 +275,52 @@ const upsertBudgetSettingsInCustomFields = (
         requiresBudgetApproval: budgetSettings.requiresBudgetApproval,
         items: budgetSettings.items,
         totalSponsorship: budgetSettings.totalSponsorship,
+      },
+    },
+  ];
+};
+
+const extractApprovalSettingsFromCustomFields = (
+  customFields: unknown
+): FestApprovalSettings => {
+  const parsedFields = parseFestCustomFields(customFields);
+  const settingsEntry = parsedFields.find(
+    (field) =>
+      field &&
+      typeof field === "object" &&
+      !Array.isArray(field) &&
+      field.key === FEST_APPROVAL_SETTINGS_KEY
+  );
+
+  if (!settingsEntry || typeof settingsEntry !== "object" || Array.isArray(settingsEntry)) {
+    return normalizeFestApprovalSettings(null);
+  }
+
+  const rawValue = (settingsEntry as { value?: unknown }).value;
+  return normalizeFestApprovalSettings(rawValue);
+};
+
+const upsertApprovalSettingsInCustomFields = (
+  customFields: unknown,
+  approvalSettings: FestApprovalSettings
+): any[] => {
+  const parsedFields = parseFestCustomFields(customFields).filter(
+    (field) =>
+      !(
+        field &&
+        typeof field === "object" &&
+        !Array.isArray(field) &&
+        field.key === FEST_APPROVAL_SETTINGS_KEY
+      )
+  );
+
+  return [
+    ...parsedFields,
+    {
+      key: FEST_APPROVAL_SETTINGS_KEY,
+      value: {
+        requiresHodApproval: approvalSettings.requiresHodApproval,
+        requiresDeanApproval: approvalSettings.requiresDeanApproval,
       },
     },
   ];
@@ -1012,6 +1104,7 @@ function CreateFestForm(props?: CreateFestProps) {
   // New props for edit mode
   const isEditMode = props?.isEditMode || false;
   const initialBudgetSettings = extractBudgetSettingsFromCustomFields(customFields);
+  const initialApprovalSettings = extractApprovalSettingsFromCustomFields(customFields);
   const existingImageFileUrl = props?.existingImageFileUrl || null;
   const existingBannerFileUrl = props?.existingBannerFileUrl || null;
   const existingPdfFileUrl = props?.existingPdfFileUrl || null;
@@ -1029,6 +1122,12 @@ function CreateFestForm(props?: CreateFestProps) {
   const [creationStep, setCreationStep] = useState<"details" | "budget">("details");
   const [requiresBudgetApproval, setRequiresBudgetApproval] = useState(
     initialBudgetSettings?.requiresBudgetApproval ?? false
+  );
+  const [requiresHodApproval, setRequiresHodApproval] = useState(
+    initialApprovalSettings.requiresHodApproval
+  );
+  const [requiresDeanApproval, setRequiresDeanApproval] = useState(
+    initialApprovalSettings.requiresDeanApproval
   );
   const [budgetItems, setBudgetItems] = useState<FestBudgetItem[]>(
     initialBudgetSettings?.items?.length
@@ -1174,6 +1273,9 @@ function CreateFestForm(props?: CreateFestProps) {
 
             const parsedCustomFields = parseFestCustomFields(data.fest.custom_fields);
             const parsedBudgetSettings = extractBudgetSettingsFromCustomFields(parsedCustomFields);
+            const parsedApprovalSettings = extractApprovalSettingsFromCustomFields(
+              parsedCustomFields
+            );
             const loadedOpeningDate = data.fest.opening_date
               ? formatDateToYYYYMMDD(new Date(data.fest.opening_date))
               : "";
@@ -1211,6 +1313,8 @@ function CreateFestForm(props?: CreateFestProps) {
               customFields: parsedCustomFields,
             });
             setRequiresBudgetApproval(parsedBudgetSettings?.requiresBudgetApproval ?? false);
+            setRequiresHodApproval(parsedApprovalSettings.requiresHodApproval);
+            setRequiresDeanApproval(parsedApprovalSettings.requiresDeanApproval);
             setBudgetItems(
               parsedBudgetSettings?.items?.length
                 ? withClientUiKeys(parsedBudgetSettings.items, "budget")
@@ -1687,6 +1791,11 @@ function CreateFestForm(props?: CreateFestProps) {
 
       fieldsToValidate.forEach((field) => validateSync(field, formData[field]));
 
+      if (!requiresHodApproval && !requiresDeanApproval) {
+        currentValidationErrors.approvalWorkflow =
+          "Select at least one approval stage (HOD or Dean).";
+      }
+
       formData.eventHeads.forEach((head, index) => {
         const normalizedHeadEmail = normalizeEmail(head.email);
 
@@ -1717,7 +1826,14 @@ function CreateFestForm(props?: CreateFestProps) {
 
       return currentValidationErrors;
     },
-    [formData, imageFile, isEditMode, existingImageFileUrl]
+    [
+      formData,
+      imageFile,
+      isEditMode,
+      existingImageFileUrl,
+      requiresHodApproval,
+      requiresDeanApproval,
+    ]
   );
 
   const scrollToFirstFestError = useCallback(
@@ -1737,6 +1853,7 @@ function CreateFestForm(props?: CreateFestProps) {
         "organizingSchool",
         "organizingDept",
         "department",
+        "approvalWorkflow",
         "category",
         "imageFile",
         "contactEmail",
@@ -1755,6 +1872,7 @@ function CreateFestForm(props?: CreateFestProps) {
       if (firstKey === "allowedCampuses") selector = "#allowedCampuses-group";
       if (firstKey === "organizingSchool") selector = "#organizingSchool";
       if (firstKey === "imageFile") selector = "#image-upload-input";
+      if (firstKey === "approvalWorkflow") selector = "#approval-workflow-section";
 
       if (firstKey.startsWith("eventHead_")) {
         const index = firstKey.replace("eventHead_", "");
@@ -1900,6 +2018,15 @@ function CreateFestForm(props?: CreateFestProps) {
     setErrors((prev) => ({ ...prev, submit: undefined }));
     setSubmitIntent(saveAsDraft ? "draft" : "publish");
 
+    if (!requiresHodApproval && !requiresDeanApproval) {
+      setErrors((prev) => ({
+        ...prev,
+        approvalWorkflow: "Select at least one approval stage (HOD or Dean).",
+        submit: "Please configure the approval workflow.",
+      }));
+      return;
+    }
+
     if (!saveAsDraft) {
       const budgetValidationError = validateBudgetForm();
       if (budgetValidationError) {
@@ -2030,6 +2157,11 @@ function CreateFestForm(props?: CreateFestProps) {
           totalSponsorship: totalSponsorshipAmount.trim(),
         }
       );
+      const customFieldsWithApprovalBudgetAndTeam =
+        upsertApprovalSettingsInCustomFields(customFieldsWithBudgetAndTeam, {
+          requiresHodApproval,
+          requiresDeanApproval,
+        });
 
       // Determine the final image URL:
       // - If a new file was uploaded, use the new URL
@@ -2099,7 +2231,13 @@ function CreateFestForm(props?: CreateFestProps) {
         department_hosted_at: formData.departmentHostedAt || null,
         allow_outsiders: formData.allowOutsiders,
         organizing_school: formData.organizingSchool,
-        custom_fields: customFieldsWithBudgetAndTeam,
+        custom_fields: customFieldsWithApprovalBudgetAndTeam,
+        approval_settings: {
+          requires_hod_approval: requiresHodApproval,
+          requires_dean_approval: requiresDeanApproval,
+          requiresHodApproval,
+          requiresDeanApproval,
+        },
         // Always include festImageUrl so backend always updates the DB column
         festImageUrl: finalImageUrl,
         is_draft: saveAsDraft,
@@ -3697,6 +3835,91 @@ function CreateFestForm(props?: CreateFestProps) {
 
                 {creationStep === "budget" && (
                   <div className="space-y-6">
+                    <div
+                      id="approval-workflow-section"
+                      className="rounded-2xl border border-gray-200 bg-white p-5 sm:p-6"
+                    >
+                      <h3 className="text-base sm:text-lg font-semibold text-[#063168] mb-2">
+                        Approval workflow
+                      </h3>
+                      <p className="text-sm text-gray-500 mb-4">
+                        Choose who must approve this fest before it goes live.
+                      </p>
+
+                      <div className="space-y-3">
+                        <label className="flex items-start gap-3 rounded-lg border border-gray-200 px-4 py-3 hover:border-[#154CB3] transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={requiresHodApproval}
+                            onChange={(event) => {
+                              const nextHod = event.target.checked;
+                              setRequiresHodApproval(nextHod);
+                              setErrors((prev) => {
+                                const nextErrors = { ...prev };
+                                if (nextHod || requiresDeanApproval) {
+                                  delete nextErrors.approvalWorkflow;
+                                }
+                                return nextErrors;
+                              });
+                            }}
+                            className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[#154CB3] focus:ring-[#154CB3]"
+                          />
+                          <span>
+                            <span className="block text-sm font-semibold text-gray-900">
+                              HOD approval
+                            </span>
+                            <span className="block text-xs text-gray-500 mt-1">
+                              Routes to the HOD queue for the selected organizing department.
+                            </span>
+                          </span>
+                        </label>
+
+                        <label className="flex items-start gap-3 rounded-lg border border-gray-200 px-4 py-3 hover:border-[#154CB3] transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={requiresDeanApproval}
+                            onChange={(event) => {
+                              const nextDean = event.target.checked;
+                              setRequiresDeanApproval(nextDean);
+                              setErrors((prev) => {
+                                const nextErrors = { ...prev };
+                                if (requiresHodApproval || nextDean) {
+                                  delete nextErrors.approvalWorkflow;
+                                }
+                                return nextErrors;
+                              });
+                            }}
+                            className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[#154CB3] focus:ring-[#154CB3]"
+                          />
+                          <span>
+                            <span className="block text-sm font-semibold text-gray-900">
+                              Dean approval
+                            </span>
+                            <span className="block text-xs text-gray-500 mt-1">
+                              Adds dean review before publication.
+                            </span>
+                          </span>
+                        </label>
+                      </div>
+
+                      <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-gray-700">
+                        <p className="font-semibold text-[#063168]">Route preview</p>
+                        <p className="mt-1">
+                          {requiresHodApproval && requiresDeanApproval
+                            ? "Fest will go to HOD first, then Dean."
+                            : requiresHodApproval
+                              ? "Fest will go to HOD approval."
+                              : requiresDeanApproval
+                                ? "Fest will go to Dean approval."
+                                : "Select at least one stage to continue."}
+                        </p>
+                      </div>
+
+                      {errors.approvalWorkflow ? (
+                        <p className="mt-2 text-xs text-red-500">{errors.approvalWorkflow}</p>
+                      ) : null}
+                    </div>
+
                     <div className="rounded-2xl border border-gray-200 bg-white p-5 sm:p-6">
                       <h3 className="text-base sm:text-lg font-semibold text-[#063168] mb-2">
                         Does this fest require a budget approval?
@@ -3707,7 +3930,13 @@ function CreateFestForm(props?: CreateFestProps) {
                       <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm">
                         <p className="font-semibold text-[#063168]">Approval route preview</p>
                         <p className="mt-1 text-gray-700">
-                          Dean approval is mandatory for every fest.
+                          {requiresHodApproval && requiresDeanApproval
+                            ? "HOD and Dean approvals are enabled."
+                            : requiresHodApproval
+                              ? "HOD approval is enabled; Dean approval is disabled."
+                              : requiresDeanApproval
+                                ? "Dean approval is enabled; HOD approval is disabled."
+                                : "At least one approval stage is required."}
                           {" "}
                           {requiresBudgetApproval
                             ? "CFO approval is also required because budget approval is enabled."

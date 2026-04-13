@@ -1,4 +1,5 @@
 import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { getCurrentUserProfileWithRoleCodes } from "@/lib/serverRoleProfile";
@@ -19,6 +20,10 @@ function hasSupabaseConfig(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 }
 
+function hasServiceRoleConfig(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
 async function buildSupabaseServerClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -34,6 +39,18 @@ async function buildSupabaseServerClient() {
           cookieStore.set(name, value, options);
         });
       },
+    },
+  });
+}
+
+function buildSupabaseAdminClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+  return createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
     },
   });
 }
@@ -59,7 +76,11 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   }
 
-  const profile = await getCurrentUserProfileWithRoleCodes(supabase, {
+  const profileClient = hasServiceRoleConfig()
+    ? buildSupabaseAdminClient()
+    : supabase;
+
+  const profile = await getCurrentUserProfileWithRoleCodes(profileClient, {
     id: user.id,
     email: user.email,
   });
