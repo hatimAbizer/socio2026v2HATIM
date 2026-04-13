@@ -809,12 +809,129 @@ async function fetchSingleUserByAuthUuidWithFallback(adminClient: any, authUuid:
   return null;
 }
 
+function createEmptyAssignmentFallback(): AssignmentFallback {
+  return {
+    is_masteradmin: false,
+    is_hod: false,
+    is_dean: false,
+    is_cfo: false,
+    is_finance_officer: false,
+    is_organiser: false,
+    is_student_organiser: false,
+    is_volunteer: false,
+    is_support: false,
+    is_venue_manager: false,
+    is_it_service: false,
+    is_catering_vendors: false,
+    is_stalls_misc: false,
+    department_id: null,
+    school_id: null,
+    campus: null,
+    venue_id: null,
+  };
+}
+
+function buildAssignmentFallbackMap(
+  assignments: RoleMatrixAssignment[],
+  userIds?: Array<string | number>
+): Map<string, AssignmentFallback> {
+  const map = new Map<string, AssignmentFallback>();
+  const userIdFilter =
+    userIds && userIds.length > 0 ? new Set(userIds.map((id) => String(id))) : null;
+
+  assignments.forEach((assignment: RoleMatrixAssignment) => {
+    if (!isRoleAssignmentActive(assignment)) {
+      return;
+    }
+
+    const userId = String(assignment.user_id || "");
+    if (!userId) {
+      return;
+    }
+
+    if (userIdFilter && !userIdFilter.has(userId)) {
+      return;
+    }
+
+    if (!map.has(userId)) {
+      map.set(userId, createEmptyAssignmentFallback());
+    }
+
+    const entry = map.get(userId)!;
+    const roleCode = normalizeRoleCode(assignment.role_code);
+
+    if (roleCode === ROLE_CODE_ORGANIZER_STUDENT) {
+      entry.is_student_organiser = true;
+    }
+
+    if (roleCode === ROLE_CODE_MASTER_ADMIN) {
+      entry.is_masteradmin = true;
+    }
+
+    if (roleCode === ROLE_CODE_HOD) {
+      entry.is_hod = true;
+      entry.department_id = normalizeNullableText(assignment.department_scope) || entry.department_id;
+      entry.campus = normalizeNullableText(assignment.campus_scope) || entry.campus;
+    }
+
+    if (roleCode === ROLE_CODE_DEAN) {
+      entry.is_dean = true;
+      entry.school_id = normalizeNullableText(assignment.department_scope) || entry.school_id;
+      entry.campus = normalizeNullableText(assignment.campus_scope) || entry.campus;
+    }
+
+    if (roleCode === ROLE_CODE_CFO) {
+      entry.is_cfo = true;
+      entry.campus =
+        normalizeNullableText(assignment.campus_scope) ||
+        normalizeNullableText(assignment.department_scope) ||
+        entry.campus;
+    }
+
+    if (roleCode === ROLE_CODE_ORGANIZER_TEACHER) {
+      entry.is_organiser = true;
+    }
+
+    if (roleCode === ROLE_CODE_ORGANIZER_VOLUNTEER) {
+      entry.is_volunteer = true;
+    }
+
+    if (roleCode === ROLE_CODE_SUPPORT) {
+      entry.is_support = true;
+    }
+
+    if (roleCode === ROLE_CODE_FINANCE_OFFICER || roleCode === ROLE_CODE_ACCOUNTS) {
+      entry.is_finance_officer = true;
+    }
+
+    if (roleCode === ROLE_CODE_SERVICE_IT) {
+      entry.is_it_service = true;
+    }
+
+    if (roleCode === ROLE_CODE_SERVICE_VENUE) {
+      entry.is_venue_manager = true;
+      entry.venue_id =
+        normalizeNullableText(assignment.department_scope) ||
+        normalizeNullableText(assignment.campus_scope) ||
+        entry.venue_id;
+    }
+
+    if (roleCode === ROLE_CODE_SERVICE_CATERING) {
+      entry.is_catering_vendors = true;
+    }
+
+    if (roleCode === ROLE_CODE_SERVICE_STALLS) {
+      entry.is_stalls_misc = true;
+    }
+  });
+
+  return map;
+}
+
 async function fetchRoleAssignmentFallbacks(
   adminClient: any,
   userIds?: Array<string | number>
 ): Promise<Map<string, AssignmentFallback>> {
-  const map = new Map<string, AssignmentFallback>();
-
   let query = adminClient
     .from("user_role_assignments")
     .select("user_id,role_code,department_scope,campus_scope,is_active,valid_from,valid_until")
@@ -845,112 +962,22 @@ async function fetchRoleAssignmentFallbacks(
   const { data, error } = await query;
   if (error) {
     if (isMissingRelationError(error) || isMissingColumnError(error)) {
-      return map;
+      return new Map<string, AssignmentFallback>();
     }
     throw new Error(error.message || "Failed to load role assignment fallback.");
   }
 
-  (data || []).forEach((row: any) => {
-    if (!isRoleAssignmentActive(row)) {
-      return;
-    }
+  const assignments = (data || []).map((row: any) => ({
+    user_id: String(row?.user_id || ""),
+    role_code: normalizeRoleCode(row?.role_code),
+    department_scope: normalizeNullableText(row?.department_scope),
+    campus_scope: normalizeNullableText(row?.campus_scope),
+    is_active: row?.is_active !== false,
+    valid_from: normalizeNullableText(row?.valid_from),
+    valid_until: normalizeNullableText(row?.valid_until),
+  }));
 
-    const userId = String(row.user_id || "");
-    if (!userId) {
-      return;
-    }
-
-    if (!map.has(userId)) {
-      map.set(userId, {
-        is_masteradmin: false,
-        is_hod: false,
-        is_dean: false,
-        is_cfo: false,
-        is_finance_officer: false,
-        is_organiser: false,
-        is_student_organiser: false,
-        is_volunteer: false,
-        is_support: false,
-        is_venue_manager: false,
-        is_it_service: false,
-        is_catering_vendors: false,
-        is_stalls_misc: false,
-        department_id: null,
-        school_id: null,
-        campus: null,
-        venue_id: null,
-      });
-    }
-
-    const entry = map.get(userId)!;
-    const roleCode = normalizeRoleCode(row.role_code);
-
-    if (roleCode === ROLE_CODE_ORGANIZER_STUDENT) {
-      entry.is_student_organiser = true;
-    }
-
-    if (roleCode === ROLE_CODE_MASTER_ADMIN) {
-      entry.is_masteradmin = true;
-    }
-
-    if (roleCode === ROLE_CODE_HOD) {
-      entry.is_hod = true;
-      entry.department_id = normalizeNullableText(row.department_scope) || entry.department_id;
-      entry.campus = normalizeNullableText(row.campus_scope) || entry.campus;
-    }
-
-    if (roleCode === ROLE_CODE_DEAN) {
-      entry.is_dean = true;
-      entry.school_id = normalizeNullableText(row.department_scope) || entry.school_id;
-      entry.campus = normalizeNullableText(row.campus_scope) || entry.campus;
-    }
-
-    if (roleCode === ROLE_CODE_CFO) {
-      entry.is_cfo = true;
-      entry.campus =
-        normalizeNullableText(row.campus_scope) ||
-        normalizeNullableText(row.department_scope) ||
-        entry.campus;
-    }
-
-    if (roleCode === ROLE_CODE_ORGANIZER_TEACHER) {
-      entry.is_organiser = true;
-    }
-
-    if (roleCode === ROLE_CODE_ORGANIZER_VOLUNTEER) {
-      entry.is_volunteer = true;
-    }
-
-    if (roleCode === ROLE_CODE_SUPPORT) {
-      entry.is_support = true;
-    }
-
-    if (roleCode === ROLE_CODE_FINANCE_OFFICER || roleCode === ROLE_CODE_ACCOUNTS) {
-      entry.is_finance_officer = true;
-    }
-
-    if (roleCode === ROLE_CODE_SERVICE_IT) {
-      entry.is_it_service = true;
-    }
-
-    if (roleCode === ROLE_CODE_SERVICE_VENUE) {
-      entry.is_venue_manager = true;
-      entry.venue_id =
-        normalizeNullableText(row.department_scope) ||
-        normalizeNullableText(row.campus_scope) ||
-        entry.venue_id;
-    }
-
-    if (roleCode === ROLE_CODE_SERVICE_CATERING) {
-      entry.is_catering_vendors = true;
-    }
-
-    if (roleCode === ROLE_CODE_SERVICE_STALLS) {
-      entry.is_stalls_misc = true;
-    }
-  });
-
-  return map;
+  return buildAssignmentFallbackMap(assignments, userIds);
 }
 
 async function fetchRoleAssignments(adminClient: any): Promise<RoleMatrixAssignment[]> {
@@ -976,83 +1003,67 @@ async function fetchRoleAssignments(adminClient: any): Promise<RoleMatrixAssignm
   }));
 }
 
-async function buildCateringShopOptions(
-  adminClient: any,
-  assignments: RoleMatrixAssignment[]
-): Promise<string[]> {
-  const values = new Set<string>();
+function buildServiceScopeOptions(assignments: RoleMatrixAssignment[], serviceRows: any[]) {
+  const cateringShops = new Set<string>();
+  const stallsScopes = new Set<string>();
 
   assignments.forEach((assignment: RoleMatrixAssignment) => {
-    if (
-      normalizeRoleCode(assignment.role_code) === ROLE_CODE_SERVICE_CATERING &&
-      isRoleAssignmentActive(assignment)
-    ) {
-      const scope = normalizeNullableText(assignment.department_scope);
-      if (scope) {
-        values.add(scope);
+    if (!isRoleAssignmentActive(assignment)) {
+      return;
+    }
+
+    const scope = normalizeNullableText(assignment.department_scope);
+    if (!scope) {
+      return;
+    }
+
+    const roleCode = normalizeRoleCode(assignment.role_code);
+    if (roleCode === ROLE_CODE_SERVICE_CATERING) {
+      cateringShops.add(scope);
+    }
+
+    if (roleCode === ROLE_CODE_SERVICE_STALLS) {
+      stallsScopes.add(scope);
+    }
+  });
+
+  serviceRows.forEach((row: any) => {
+    const roleCode = normalizeRoleCode(row?.service_role_code);
+
+    if (roleCode === ROLE_CODE_SERVICE_CATERING) {
+      const candidate = readDetailCandidate(row?.details, [
+        "shop_name",
+        "vendor_name",
+        "supplier_name",
+        "resource_name",
+        "item_name",
+        "name",
+      ]);
+
+      if (candidate) {
+        cateringShops.add(candidate);
+      }
+    }
+
+    if (roleCode === ROLE_CODE_SERVICE_STALLS) {
+      const candidate = readDetailCandidate(row?.details, [
+        "stall_name",
+        "stall",
+        "scope",
+        "resource_name",
+        "name",
+      ]);
+
+      if (candidate) {
+        stallsScopes.add(candidate);
       }
     }
   });
 
-  const serviceRows = await fetchRowsWithSelectFallback(adminClient, "service_requests", [
-    "service_role_code,details",
-    "service_role_code",
-  ]);
-
-  serviceRows.forEach((row: any) => {
-    if (normalizeRoleCode(row?.service_role_code) !== ROLE_CODE_SERVICE_CATERING) {
-      return;
-    }
-
-    const candidate = readDetailCandidate(row?.details, [
-      "shop_name",
-      "vendor_name",
-      "supplier_name",
-      "resource_name",
-      "item_name",
-      "name",
-    ]);
-
-    if (candidate) {
-      values.add(candidate);
-    }
-  });
-
-  return Array.from(values.values()).sort((a, b) => a.localeCompare(b));
-}
-
-async function buildStallsScopeOptions(
-  adminClient: any,
-  assignments: RoleMatrixAssignment[]
-): Promise<string[]> {
-  const values = new Set<string>();
-
-  assignments.forEach((assignment: RoleMatrixAssignment) => {
-    if (normalizeRoleCode(assignment.role_code) === ROLE_CODE_SERVICE_STALLS && isRoleAssignmentActive(assignment)) {
-      const scope = normalizeNullableText(assignment.department_scope);
-      if (scope) {
-        values.add(scope);
-      }
-    }
-  });
-
-  const serviceRows = await fetchRowsWithSelectFallback(adminClient, "service_requests", [
-    "service_role_code,details",
-    "service_role_code",
-  ]);
-
-  serviceRows.forEach((row: any) => {
-    if (normalizeRoleCode(row?.service_role_code) !== ROLE_CODE_SERVICE_STALLS) {
-      return;
-    }
-
-    const candidate = readDetailCandidate(row?.details, ["stall_name", "stall", "scope", "resource_name", "name"]);
-    if (candidate) {
-      values.add(candidate);
-    }
-  });
-
-  return Array.from(values.values()).sort((a, b) => a.localeCompare(b));
+  return {
+    cateringShops: Array.from(cateringShops.values()).sort((a, b) => a.localeCompare(b)),
+    stallsScopes: Array.from(stallsScopes.values()).sort((a, b) => a.localeCompare(b)),
+  };
 }
 
 function roleRequiresScope(role: RoleMatrixAssignableRole): boolean {
@@ -1345,17 +1356,27 @@ async function buildRolesAnalytics(adminClient: any): Promise<RolesAnalytics> {
 export async function getRolesTableData(): Promise<RolesPageData> {
   const { adminClient } = await assertMasterAdmin();
 
-  const usersRows = await fetchUsersWithFallback(adminClient);
-  const assignmentFallbackMap = await fetchRoleAssignmentFallbacks(
-    adminClient,
+  const [usersRows, roleAssignments, departmentRows, eventVenueRows, festVenueRows, serviceRows] =
+    await Promise.all([
+      fetchUsersWithFallback(adminClient),
+      fetchRoleAssignments(adminClient),
+      fetchRowsWithSelectFallback(adminClient, "departments_courses", [
+        "id,department_name,school",
+        "id,department_name",
+        "id",
+      ]),
+      fetchRowsWithSelectFallback(adminClient, "events", ["venue,campus_hosted_at", "venue"]),
+      fetchRowsWithSelectFallback(adminClient, "fests", ["venue,campus_hosted_at", "venue"]),
+      fetchRowsWithSelectFallback(adminClient, "service_requests", [
+        "service_role_code,details",
+        "service_role_code",
+      ]),
+    ]);
+
+  const assignmentFallbackMap = buildAssignmentFallbackMap(
+    roleAssignments,
     usersRows.map((row: any) => row.id)
   );
-
-  const departmentRows = await fetchRowsWithSelectFallback(adminClient, "departments_courses", [
-    "id,department_name,school",
-    "id,department_name",
-    "id",
-  ]);
 
   const resolvedDepartmentRows =
     Array.isArray(departmentRows) && departmentRows.length > 0 ? departmentRows : FALLBACK_DEPARTMENT_OPTIONS;
@@ -1392,15 +1413,6 @@ export async function getRolesTableData(): Promise<RolesPageData> {
     }
   });
 
-  const eventVenueRows = await fetchRowsWithSelectFallback(adminClient, "events", [
-    "venue,campus_hosted_at",
-    "venue",
-  ]);
-  const festVenueRows = await fetchRowsWithSelectFallback(adminClient, "fests", [
-    "venue,campus_hosted_at",
-    "venue",
-  ]);
-
   const venues = buildVenueOptions(eventVenueRows, festVenueRows, usersRows);
 
   const campusesSet = new Set<string>(CAMPUS_OPTIONS);
@@ -1423,11 +1435,7 @@ export async function getRolesTableData(): Promise<RolesPageData> {
     }
   });
 
-  const roleAssignments = await fetchRoleAssignments(adminClient);
-  const [cateringShops, stallsScopes] = await Promise.all([
-    buildCateringShopOptions(adminClient, roleAssignments),
-    buildStallsScopeOptions(adminClient, roleAssignments),
-  ]);
+  const { cateringShops, stallsScopes } = buildServiceScopeOptions(roleAssignments, serviceRows);
 
   return {
     users: usersRows.map((row: any) => normalizeUserRecord(row, assignmentFallbackMap.get(String(row.id)))),
@@ -1448,9 +1456,15 @@ export async function getRolesTableData(): Promise<RolesPageData> {
     cateringShops,
     stallsScopes,
     roleAssignments,
-    analytics: await buildRolesAnalytics(adminClient),
+    analytics: emptyAnalytics(),
   };
 }
+
+export async function getRolesAnalyticsData(): Promise<RolesAnalytics> {
+  const { adminClient } = await assertMasterAdmin();
+  return buildRolesAnalytics(adminClient);
+}
+
 export async function updateUserAccess(
   userId: string | number,
   rolePayload: UserAccessPayload
