@@ -45,6 +45,17 @@ type BudgetRow = {
   total_actual_expense?: number | string | null;
 };
 
+type EventScopeJoinRow = {
+  event_id?: string | null;
+  event_date?: string | null;
+  organizing_dept?: string | null;
+  campus_hosted_at?: string | null;
+};
+
+type YtdBudgetRow = BudgetRow & {
+  events?: EventScopeJoinRow[] | EventScopeJoinRow | null;
+};
+
 type UserNameRow = {
   email?: string | null;
   name?: string | null;
@@ -78,6 +89,25 @@ function normalizeEntityType(value: unknown): string {
 
 function normalizeScope(value: unknown): string {
   return normalizeText(value).toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizeDepartmentScope(value: unknown): string {
+  const normalized = normalizeScope(value);
+  if (!normalized) {
+    return "";
+  }
+
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized)) {
+    return normalized;
+  }
+
+  return normalized
+    .replace(/[_-]+/g, " ")
+    .replace(/^department of\s+/, "")
+    .replace(/^dept(?:\.)?\s+of\s+/, "")
+    .replace(/^dept(?:\.)?\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isMissingRelationError(
@@ -171,13 +201,24 @@ async function fetchFestRowsWithFallback(
 export async function fetchHodDashboardData({
   supabase,
   departmentId,
+  departmentScopes,
   campusScope,
 }: {
   supabase: any;
   departmentId?: string | null;
+  departmentScopes?: string[] | null;
   campusScope?: string | null;
 }): Promise<HodDashboardData> {
-  const normalizedDepartmentScope = normalizeScope(departmentId);
+  const normalizedDepartmentScopes = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(departmentScopes) ? departmentScopes : []),
+        normalizeText(departmentId),
+      ]
+        .map((scope) => normalizeDepartmentScope(scope))
+        .filter((scope) => scope.length > 0)
+    )
+  );
   const normalizedCampusScope = normalizeScope(campusScope);
 
   let pendingQuery = supabase
@@ -275,15 +316,18 @@ export async function fetchHodDashboardData({
     const entityRef = normalizeText(requestRow.entity_ref);
     const isFestEntity = entityType === "FEST";
 
-    const requestDepartmentScope = normalizeScope(requestRow.organizing_dept);
-    const fallbackDepartmentScope = normalizeScope(
+    const requestDepartmentScope = normalizeDepartmentScope(requestRow.organizing_dept);
+    const fallbackDepartmentScope = normalizeDepartmentScope(
       isFestEntity
         ? festRowsById.get(entityRef)?.organizing_dept
         : eventRowsById.get(entityRef)?.organizing_dept
     );
     const effectiveDepartmentScope = requestDepartmentScope || fallbackDepartmentScope;
 
-    if (normalizedDepartmentScope && effectiveDepartmentScope !== normalizedDepartmentScope) {
+    if (
+      normalizedDepartmentScopes.length > 0 &&
+      !normalizedDepartmentScopes.includes(effectiveDepartmentScope)
+    ) {
       return false;
     }
 
@@ -439,14 +483,6 @@ export async function fetchHodDashboardData({
     .gte("events.event_date", startDate)
     .lte("events.event_date", endDate);
 
-  if (normalizedDepartmentScope) {
-    ytdBudgetQuery = ytdBudgetQuery.eq("events.organizing_dept", normalizedDepartmentScope);
-  }
-
-  if (normalizedCampusScope) {
-    ytdBudgetQuery = ytdBudgetQuery.eq("events.campus_hosted_at", normalizedCampusScope);
-  }
-
   const { data: ytdBudgetData, error: ytdBudgetError } = await ytdBudgetQuery;
 
   if (ytdBudgetError && !isMissingRelationError(ytdBudgetError, "event_budgets")) {
@@ -456,8 +492,29 @@ export async function fetchHodDashboardData({
   const ytdRows =
     ytdBudgetError || !Array.isArray(ytdBudgetData)
       ? []
-      : (ytdBudgetData as BudgetRow[]);
-  const deptBudgetUsedYtd = ytdRows.reduce((sum, row) => {
+      : (ytdBudgetData as YtdBudgetRow[]);
+
+  const filteredYtdRows = ytdRows.filter((row) => {
+    const eventScopeRow = toSingleRecord(row.events);
+
+    if (normalizedDepartmentScopes.length > 0) {
+      const eventDepartmentScope = normalizeDepartmentScope(eventScopeRow?.organizing_dept);
+      if (!normalizedDepartmentScopes.includes(eventDepartmentScope)) {
+        return false;
+      }
+    }
+
+    if (normalizedCampusScope) {
+      const eventCampusScope = normalizeScope(eventScopeRow?.campus_hosted_at);
+      if (eventCampusScope && eventCampusScope !== normalizedCampusScope) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  const deptBudgetUsedYtd = filteredYtdRows.reduce((sum, row) => {
     const actual = toNumber(row.total_actual_expense);
     const estimated = toNumber(row.total_estimated_expense);
     return sum + (actual > 0 ? actual : estimated);

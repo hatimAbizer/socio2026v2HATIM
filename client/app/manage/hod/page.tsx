@@ -10,7 +10,7 @@ import { getCurrentUserProfileWithRoleCodes } from "@/lib/serverRoleProfile";
 export const dynamic = "force-dynamic";
 
 function normalizeScope(value: unknown): string {
-  return String(value || "").trim().toLowerCase();
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function isAssignmentActive(assignment: Record<string, unknown>, nowDate: Date = new Date()): boolean {
@@ -37,24 +37,61 @@ function isAssignmentActive(assignment: Record<string, unknown>, nowDate: Date =
   return true;
 }
 
-function resolveHodDepartmentScope(userProfile: Record<string, unknown>): string {
+function collectHodDepartmentScopes(userProfile: Record<string, unknown>): string[] {
+  const scopes = new Set<string>();
+  const addScope = (value: unknown) => {
+    const normalized = normalizeScope(value);
+    if (normalized.length > 0) {
+      scopes.add(normalized);
+    }
+  };
+
   const assignmentRows = Array.isArray(userProfile.role_assignments)
     ? (userProfile.role_assignments as Array<Record<string, unknown>>)
     : [];
 
-  const scopedDepartment = assignmentRows.find(
-    (assignment) =>
+  assignmentRows.forEach((assignment) => {
+    if (
       String(assignment.role_code || "").trim().toUpperCase() === "HOD" &&
       isAssignmentActive(assignment) &&
       normalizeScope(assignment.department_scope).length > 0
-  );
+    ) {
+      addScope(assignment.department_scope);
+    }
+  });
 
-  const assignmentScope = normalizeScope(scopedDepartment?.department_scope);
-  if (assignmentScope) {
-    return assignmentScope;
+  addScope(userProfile.department_id);
+  addScope(userProfile.department);
+  addScope(userProfile.role_matrix_department);
+
+  const roleMatrixAssignments = Array.isArray(userProfile.role_matrix_assignments)
+    ? (userProfile.role_matrix_assignments as Array<Record<string, unknown>>)
+    : [];
+
+  roleMatrixAssignments.forEach((assignment) => {
+    if (String(assignment.role_code || "").trim().toUpperCase() !== "HOD") {
+      return;
+    }
+
+    addScope(assignment.department_scope);
+    addScope(assignment.department_label);
+  });
+
+  return Array.from(scopes);
+}
+
+function resolveHodDepartmentLabel(userProfile: Record<string, unknown>, scopes: string[]): string {
+  const roleMatrixDepartment = String(userProfile.role_matrix_department || "").trim();
+  if (roleMatrixDepartment) {
+    return roleMatrixDepartment;
   }
 
-  return normalizeScope(userProfile.department_id) || normalizeScope(userProfile.department);
+  const profileDepartment = String(userProfile.department || "").trim();
+  if (profileDepartment) {
+    return profileDepartment;
+  }
+
+  return scopes[0] || "My Department";
 }
 
 function hasSupabaseConfig(): boolean {
@@ -116,8 +153,8 @@ export default async function HodManagePage() {
     redirect("/error");
   }
 
-  const hodDepartmentScope = resolveHodDepartmentScope(userProfile);
-  if (!isMasterAdmin && !hodDepartmentScope) {
+  const hodDepartmentScopes = collectHodDepartmentScopes(userProfile);
+  if (!isMasterAdmin && hodDepartmentScopes.length === 0) {
     redirect("/error");
   }
 
@@ -137,7 +174,7 @@ export default async function HodManagePage() {
   try {
     dashboardData = await fetchHodDashboardData({
       supabase,
-      departmentId: isMasterAdmin ? null : hodDepartmentScope,
+      departmentScopes: isMasterAdmin ? null : hodDepartmentScopes,
       campusScope: isMasterAdmin ? null : campusName,
     });
   } catch (error) {
@@ -145,7 +182,9 @@ export default async function HodManagePage() {
       error instanceof Error ? error.message : "Unable to load HOD dashboard data right now.";
   }
 
-  const departmentName = isMasterAdmin ? "All Departments" : hodDepartmentScope;
+  const departmentName = isMasterAdmin
+    ? "All Departments"
+    : resolveHodDepartmentLabel(userProfile, hodDepartmentScopes);
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">

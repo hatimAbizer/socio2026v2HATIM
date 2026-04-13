@@ -43,7 +43,7 @@ export default function HodApprovalTable({
       <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center">
         <h3 className="text-lg font-semibold text-slate-800">No pending L1 approvals</h3>
         <p className="mt-2 text-sm text-slate-600">
-          You are all caught up for standalone events in your department.
+          You are all caught up for event and fest approvals in your department.
         </p>
       </div>
     );
