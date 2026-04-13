@@ -57,6 +57,8 @@ interface Fest {
   is_archived?: boolean;
   archived_at?: string | null;
   workflow_status?: string | null;
+  status?: string | null;
+  lifecycle_status?: string | null;
   approval_request_id?: string | null;
   is_budget_related?: boolean | null;
 }
@@ -914,7 +916,7 @@ export default function ManageDashboard() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/fests?sortBy=created_at&sortOrder=desc`, {
+      const response = await fetch(`${API_URL}/api/fests?sortBy=created_at&sortOrder=desc&include_drafts=true`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -948,9 +950,16 @@ export default function ManageDashboard() {
             ? fest.eventHeads
             : [],
         campus_hosted_at: fest.campus_hosted_at || fest.campus || null,
+        is_draft:
+          fest.is_draft === true ||
+          fest.is_draft === 1 ||
+          fest.is_draft === "1" ||
+          fest.is_draft === "true",
         is_archived: fest.is_archived === true,
         archived_at: fest.archived_at || null,
         workflow_status: fest.workflow_status || null,
+        status: fest.status || null,
+        lifecycle_status: fest.lifecycle_status || null,
         approval_request_id: fest.approval_request_id || null,
         is_budget_related:
           fest.is_budget_related === true ||
@@ -1031,7 +1040,7 @@ export default function ManageDashboard() {
           return;
         }
 
-        const response = await fetch(`${API_URL}/api/events?sortBy=created_at&sortOrder=desc`, {
+        const response = await fetch(`${API_URL}/api/events?sortBy=created_at&sortOrder=desc&include_drafts=true`, {
           headers: {
             Authorization: `Bearer ${authToken}`,
           },
@@ -1328,7 +1337,7 @@ export default function ManageDashboard() {
         return;
       }
 
-      const response = await fetch(`${API_URL}/api/events?sortBy=created_at&sortOrder=desc`, {
+      const response = await fetch(`${API_URL}/api/events?sortBy=created_at&sortOrder=desc&include_drafts=true`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },

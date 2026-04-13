@@ -13,13 +13,17 @@ import {
 import { sendBroadcastNotification } from "./notificationRoutes.js";
 import { pushFestToGated, isGatedEnabled } from "../utils/gatedSync.js";
 import { getFestTableForDatabase } from "../utils/festTableResolver.js";
-import { ROLE_CODES } from "../utils/roleAccessService.js";
+import { ROLE_CODES, hasAnyRoleCode } from "../utils/roleAccessService.js";
 import { resolveDepartmentApproverRole } from "../utils/departmentApprovalRouting.js";
 import {
   LIFECYCLE_STATUS,
   normalizeLifecycleStatus,
   shouldEntityRemainDraft,
 } from "../utils/lifecycleStatus.js";
+import {
+  isRecordLiveForNotifications,
+  shouldSendLifecycleNotification,
+} from "../utils/notificationLifecycle.js";
 
 const router = express.Router();
 
@@ -81,24 +85,7 @@ const normalizeFestLifecycleStatus = (festRecord, fallback) => {
 };
 
 const isFestLiveForNotifications = (festRecord) => {
-  if (!festRecord) {
-    return false;
-  }
-
-  if (asBoolean(festRecord?.is_draft)) {
-    return false;
-  }
-
-  const activationState = normalizeWorkflowStatus(festRecord?.activation_state, "ACTIVE");
-  if (activationState !== "ACTIVE") {
-    return false;
-  }
-
-  const lifecycleStatus = normalizeFestLifecycleStatus(festRecord);
-  return (
-    lifecycleStatus === LIFECYCLE_STATUS.PUBLISHED ||
-    lifecycleStatus === LIFECYCLE_STATUS.APPROVED
-  );
+  return isRecordLiveForNotifications(festRecord);
 };
 
 const hasApprovedStepForCodes = (steps, requiredCodes) => {
@@ -726,8 +713,10 @@ const mapFestResponse = (fest) => {
 // GET all fests
 router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
   try {
-    const { page, pageSize, search, status, archive, sortBy, sortOrder } = req.query;
+    const { page, pageSize, search, status, archive, sortBy, sortOrder, include_drafts } = req.query;
     const today = new Date().toISOString().split('T')[0];
+    const includeDraftsRequested =
+      typeof include_drafts === "string" && include_drafts.toLowerCase() === "true";
 
     let queryOptions = {
       order: { column: "created_at", ascending: false }
@@ -867,9 +856,20 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
 
     const normalizedArchive = typeof archive === "string" ? archive.toLowerCase() : "all";
 
-    // Filter out archived fests for non-organizers/admins
+    // Filter out archived/draft fests for public callers unless draft inclusion is explicitly allowed.
     const userInfo = req.userInfo;
-    const isAdminOrOrganizer = userInfo && (userInfo.is_masteradmin || userInfo.is_organiser);
+    const roleCodes = Array.isArray(userInfo?.role_codes) ? userInfo.role_codes : [];
+    const isAdminOrOrganizer = Boolean(
+      userInfo &&
+        (userInfo.is_masteradmin ||
+          userInfo.is_organiser ||
+          hasAnyRoleCode(roleCodes, [
+            ROLE_CODES.MASTER_ADMIN,
+            ROLE_CODES.ORGANIZER_TEACHER,
+            ROLE_CODES.ORGANIZER_STUDENT,
+          ]))
+    );
+    const shouldIncludeDrafts = includeDraftsRequested && isAdminOrOrganizer;
     
     if (!isAdminOrOrganizer) {
       processedFests = processedFests.filter((fest) => !fest.is_archived && !asBoolean(fest.is_draft));
@@ -882,7 +882,11 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
     if (normalizedArchive === "archived") {
       processedFests = processedFests.filter((fest) => Boolean(fest.is_archived));
     } else if (normalizedArchive === "active") {
-      processedFests = processedFests.filter((fest) => !fest.is_archived && !asBoolean(fest.is_draft));
+      processedFests = processedFests.filter(
+        (fest) => !fest.is_archived && (shouldIncludeDrafts || !asBoolean(fest.is_draft))
+      );
+    } else if (!shouldIncludeDrafts) {
+      processedFests = processedFests.filter((fest) => !asBoolean(fest.is_draft));
     }
 
     const hasExplicitSortBy = typeof sortBy === "string" && sortBy.trim() !== "";
@@ -1058,13 +1062,6 @@ router.post(
         festData.send_notifications,
         festData.sendNotifications
       );
-      const hasExplicitNotificationPreference =
-        sendNotificationsInput !== undefined &&
-        sendNotificationsInput !== null &&
-        String(sendNotificationsInput).trim() !== "";
-      const shouldSendNotifications =
-        !shouldSaveAsDraft &&
-        (hasExplicitNotificationPreference ? asBoolean(sendNotificationsInput) : true);
 
       // Basic validation
       const title = String(festData.festTitle || festData.title || "").trim();
@@ -1298,6 +1295,11 @@ router.post(
       }
 
       const isFestReadyForNotifications = isFestLiveForNotifications(createdFest);
+      const shouldSendNotifications = shouldSendLifecycleNotification({
+        record: createdFest,
+        sendNotificationsInput,
+        defaultSendNotifications: true,
+      });
 
       // Send notifications to all users about the new fest (non-blocking)
       if (shouldSendNotifications && shouldPublishNow && isFestReadyForNotifications) {
@@ -2008,16 +2010,13 @@ router.post(
 
       const refreshedFest = await queryOne(festTable, { where: { fest_id: festId } });
       const publishedFest = refreshedFest || festRecord;
-      const sendNotificationsInput = req.body?.send_notifications;
-      const hasExplicitNotificationPreference =
-        sendNotificationsInput !== undefined &&
-        sendNotificationsInput !== null &&
-        String(sendNotificationsInput).trim() !== "";
-      const shouldSendNotifications =
-        !hasExplicitNotificationPreference || asBoolean(sendNotificationsInput);
-      const canSendPublishNotifications = isFestLiveForNotifications(publishedFest);
+      const shouldSendNotifications = shouldSendLifecycleNotification({
+        record: publishedFest,
+        sendNotificationsInput: req.body?.send_notifications,
+        defaultSendNotifications: true,
+      });
 
-      if (shouldSendNotifications && canSendPublishNotifications) {
+      if (shouldSendNotifications) {
         sendBroadcastNotification({
           title: "Fest Published",
           message: `${publishedFest.fest_title || "A fest"} is now live!`,

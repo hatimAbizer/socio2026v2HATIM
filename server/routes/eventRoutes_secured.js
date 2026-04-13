@@ -27,6 +27,10 @@ import {
   normalizeLifecycleStatus,
   shouldEntityRemainDraft,
 } from "../utils/lifecycleStatus.js";
+import {
+  isRecordLiveForNotifications,
+  shouldSendLifecycleNotification,
+} from "../utils/notificationLifecycle.js";
 
 const router = express.Router();
 const debugRoutesEnabled = process.env.NODE_ENV !== "production";
@@ -238,24 +242,7 @@ const normalizeEventLifecycleStatus = (eventRecord, fallback) => {
 };
 
 const isEventLiveForNotifications = (eventRecord) => {
-  if (!eventRecord) {
-    return false;
-  }
-
-  if (asBoolean(eventRecord?.is_draft)) {
-    return false;
-  }
-
-  const activationState = normalizeWorkflowStatus(eventRecord?.activation_state, "ACTIVE");
-  if (activationState !== "ACTIVE") {
-    return false;
-  }
-
-  const lifecycleStatus = normalizeEventLifecycleStatus(eventRecord);
-  return (
-    lifecycleStatus === LIFECYCLE_STATUS.PUBLISHED ||
-    lifecycleStatus === LIFECYCLE_STATUS.APPROVED
-  );
+  return isRecordLiveForNotifications(eventRecord);
 };
 
 const isBudgetRelatedFromEventPayload = ({
@@ -1675,7 +1662,11 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
     const today = new Date().toISOString().split('T')[0];
     const includeDraftsRequested =
       typeof include_drafts === "string" && include_drafts.toLowerCase() === "true";
-    const canViewDrafts = Boolean(req.userInfo?.is_masteradmin || req.userInfo?.is_organiser);
+    const canViewDrafts = Boolean(
+      isMasterAdminUser(req.userInfo) ||
+      isOrganizerTeacherUser(req.userInfo) ||
+      isOrganizerStudentOnlyUser(req.userInfo)
+    );
     const shouldIncludeDrafts = includeDraftsRequested && canViewDrafts;
     
     let queryOptions = { 
@@ -1945,13 +1936,6 @@ router.post(
       const shouldSaveAsDraft = shouldSaveAsDraftByInput || userIsOrganizerStudentOnly;
       const shouldArchiveOnCreate =
         asBoolean(is_archived) && !shouldSaveAsDraft && !userIsOrganizerStudentOnly;
-      const hasExplicitNotificationPreference =
-        send_notifications !== undefined &&
-        send_notifications !== null &&
-        String(send_notifications).trim() !== "";
-      const shouldSendNotificationsByPreference =
-        !shouldSaveAsDraft &&
-        (hasExplicitNotificationPreference ? asBoolean(send_notifications) : true);
       const parsedRegistrationFee = parseOptionalFloat(registration_fee);
       const claimsApplicable =
         claims_applicable === "true" || claims_applicable === true;
@@ -2353,8 +2337,11 @@ router.post(
         !shouldArchiveOnCreate &&
         activationState === "ACTIVE";
       const isEventReadyForNotifications = isEventLiveForNotifications(createdEventRecord);
-      const shouldSendNotifications =
-        shouldSendNotificationsByPreference && isEventReadyForNotifications;
+      const shouldSendNotifications = shouldSendLifecycleNotification({
+        record: createdEventRecord,
+        sendNotificationsInput: send_notifications,
+        defaultSendNotifications: true,
+      });
 
       // Send notifications to all users about the new event (non-blocking)
       if (shouldSendNotifications) {
@@ -3499,16 +3486,13 @@ router.post(
 
       const refreshedEvent =
         (await queryOne("events", { where: { event_id: eventId } })) || eventRecord;
-      const sendNotificationsInput = req.body?.send_notifications;
-      const hasExplicitNotificationPreference =
-        sendNotificationsInput !== undefined &&
-        sendNotificationsInput !== null &&
-        String(sendNotificationsInput).trim() !== "";
-      const shouldSendNotifications =
-        !hasExplicitNotificationPreference || asBoolean(sendNotificationsInput);
-      const canSendPublishNotifications = isEventLiveForNotifications(refreshedEvent);
+      const shouldSendNotifications = shouldSendLifecycleNotification({
+        record: refreshedEvent,
+        sendNotificationsInput: req.body?.send_notifications,
+        defaultSendNotifications: true,
+      });
 
-      if (shouldSendNotifications && canSendPublishNotifications) {
+      if (shouldSendNotifications) {
         sendBroadcastNotification({
           title: "Event Published",
           message: `${refreshedEvent?.title || "An event"} is now live! Check it out.`,
