@@ -720,17 +720,17 @@ async function fetchRowsWithSelectFallback(adminClient: any, tableName: string, 
   return [];
 }
 
-async function fetchUsersWithFallback(adminClient: any) {
+async function resolveUserSelectColumns(adminClient: any): Promise<string[]> {
   const columns = [...USER_SELECT_COLUMNS];
 
   while (columns.length > 0) {
-    const { data, error } = await adminClient
+    const { error } = await adminClient
       .from("users")
       .select(columns.join(","))
-      .order("created_at", { ascending: false });
+      .limit(1);
 
     if (!error) {
-      return data || [];
+      return columns;
     }
 
     const missingColumn = parseMissingColumnName(error);
@@ -739,10 +739,24 @@ async function fetchUsersWithFallback(adminClient: any) {
       continue;
     }
 
-    throw new Error(error.message || "Failed to load users.");
+    throw new Error(error.message || "Failed to resolve users table columns.");
   }
 
   throw new Error("Unable to load users because required role columns are missing.");
+}
+
+async function fetchUsersWithFallback(adminClient: any) {
+  const columns = await resolveUserSelectColumns(adminClient);
+  const { data, error } = await adminClient
+    .from("users")
+    .select(columns.join(","))
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new Error(error.message || "Failed to load users.");
+  }
+
+  return data || [];
 }
 
 async function fetchSingleUserWithFallback(adminClient: any, userId: string | number) {
@@ -1402,7 +1416,7 @@ async function buildRolesAnalytics(adminClient: any): Promise<RolesAnalytics> {
 export async function getRolesTableData(): Promise<RolesPageData> {
   const { adminClient } = await assertMasterAdmin();
 
-  const [usersRows, roleAssignments, departmentRows, eventVenueRows, festVenueRows, serviceRows] =
+  const [usersRows, roleAssignments, departmentRows] =
     await Promise.all([
       fetchUsersWithFallback(adminClient),
       fetchRoleAssignments(adminClient),
@@ -1410,12 +1424,6 @@ export async function getRolesTableData(): Promise<RolesPageData> {
         "id,department_name,school",
         "id,department_name",
         "id",
-      ]),
-      fetchRowsWithSelectFallback(adminClient, "events", ["venue,campus_hosted_at", "venue"]),
-      fetchRowsWithSelectFallback(adminClient, "fests", ["venue,campus_hosted_at", "venue"]),
-      fetchRowsWithSelectFallback(adminClient, "service_requests", [
-        "service_role_code,details",
-        "service_role_code",
       ]),
     ]);
 
@@ -1459,7 +1467,7 @@ export async function getRolesTableData(): Promise<RolesPageData> {
     }
   });
 
-  const venues = buildVenueOptions(eventVenueRows, festVenueRows, usersRows);
+  const venues = buildVenueOptions([], [], usersRows);
 
   const campusesSet = new Set<string>(CAMPUS_OPTIONS);
   usersRows.forEach((row: any) => {
@@ -1468,20 +1476,8 @@ export async function getRolesTableData(): Promise<RolesPageData> {
       campusesSet.add(campus);
     }
   });
-  eventVenueRows.forEach((row: any) => {
-    const campus = normalizeNullableText(row?.campus_hosted_at);
-    if (campus && !isExcludedCampusValue(campus)) {
-      campusesSet.add(campus);
-    }
-  });
-  festVenueRows.forEach((row: any) => {
-    const campus = normalizeNullableText(row?.campus_hosted_at);
-    if (campus && !isExcludedCampusValue(campus)) {
-      campusesSet.add(campus);
-    }
-  });
 
-  const { cateringShops, stallsScopes } = buildServiceScopeOptions(roleAssignments, serviceRows);
+  const { cateringShops, stallsScopes } = buildServiceScopeOptions(roleAssignments, []);
 
   return {
     users: usersRows.map((row: any) => normalizeUserRecord(row, assignmentFallbackMap.get(String(row.id)))),
