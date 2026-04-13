@@ -632,10 +632,12 @@ function PaginationControls({
 export default function RolesManagementTable({ initialData }: RolesManagementTableProps) {
   const router = useRouter();
 
-  const [activeTab, setActiveTab] = useState<"access" | "analytics">("access");
+  const [activeTab, setActiveTab] = useState<"users" | "assignments" | "analytics">("users");
   const [data, setData] = useState<RolesPageData>(initialData);
   const [users, setUsers] = useState<UserRoleRow[]>(initialData.users);
   const [searchText, setSearchText] = useState("");
+  const [roleFilter, setRoleFilter] = useState("all");
+  const [campusFilter, setCampusFilter] = useState("all");
   const [pendingDeleteUserId, setPendingDeleteUserId] = useState<string | number | null>(null);
   const [pendingUpdateUserId, setPendingUpdateUserId] = useState<string | number | null>(null);
   const [userPage, setUserPage] = useState(1);
@@ -946,25 +948,107 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
     };
   }, [data.departments, data.roleAssignments, departmentNameById, userById, users]);
 
+  const activeAssignments = useMemo(
+    () => data.roleAssignments.filter((assignment) => isRoleAssignmentActive(assignment)),
+    [data.roleAssignments]
+  );
+
+  const domainRoleHolders = useMemo(() => {
+    return users.filter(
+      (user) => user.access.is_hod || user.access.is_dean || user.access.is_cfo || user.access.is_venue_manager
+    ).length;
+  }, [users]);
+
+  const pendingScopeIssues = useMemo(() => {
+    return users.filter((user) => {
+      if (user.access.is_hod) {
+        return !user.access.department_id || !user.access.campus;
+      }
+      if (user.access.is_dean) {
+        return !user.access.school_id || !user.access.campus;
+      }
+      if (user.access.is_cfo) {
+        return !user.access.campus;
+      }
+      if (user.access.is_venue_manager) {
+        return !user.access.venue_id || !user.access.campus;
+      }
+      return false;
+    }).length;
+  }, [users]);
+
+  const hasRole = (user: UserRoleRow, normalizedRoleFilter: string) => {
+    if (normalizedRoleFilter === "hod") return user.access.is_hod;
+    if (normalizedRoleFilter === "dean") return user.access.is_dean;
+    if (normalizedRoleFilter === "cfo") return user.access.is_cfo;
+    if (normalizedRoleFilter === "organiser") return user.access.is_organiser;
+    if (normalizedRoleFilter === "support") return user.access.is_support;
+    if (normalizedRoleFilter === "finance") return user.access.is_finance_officer;
+    if (normalizedRoleFilter === "master_admin") return user.access.is_masteradmin;
+    if (normalizedRoleFilter === "venue") return user.access.is_venue_manager;
+    return true;
+  };
+
+  const userRoleTags = (user: UserRoleRow): string[] => {
+    const tags: string[] = [];
+    if (user.access.is_hod) tags.push("HOD");
+    if (user.access.is_dean) tags.push("DEAN");
+    if (user.access.is_cfo) tags.push("CFO");
+    if (user.access.is_finance_officer) tags.push("FINANCE");
+    if (user.access.is_masteradmin) tags.push("ADMIN");
+    if (user.access.is_organiser) tags.push("ORG");
+    if (user.access.is_support) tags.push("SUPPORT");
+    if (user.access.is_venue_manager) tags.push("VENUE");
+    if (user.access.is_it_service) tags.push("IT");
+    if (user.access.is_catering_vendors) tags.push("CATERING");
+    if (user.access.is_stalls_misc) tags.push("STALLS");
+    return tags;
+  };
+
   const filteredUsers = useMemo(() => {
     const normalized = searchText.trim().toLowerCase();
-    if (!normalized) {
-      return users;
-    }
+    const normalizedRoleFilter = roleFilter.trim().toLowerCase();
+    const normalizedCampusFilter = campusFilter.trim().toLowerCase();
 
     return users.filter((user) => {
+      const matchesSearch =
+        !normalized ||
+        (user.name || "").toLowerCase().includes(normalized) ||
+        user.email.toLowerCase().includes(normalized);
+
+      const matchesRole =
+        normalizedRoleFilter === "all" || hasRole(user, normalizedRoleFilter);
+
+      const matchesCampus =
+        normalizedCampusFilter === "all" ||
+        String(user.campus || "").trim().toLowerCase() === normalizedCampusFilter;
+
       return (
-        (user.name || "").toLowerCase().includes(normalized) || user.email.toLowerCase().includes(normalized)
+        matchesSearch && matchesRole && matchesCampus
       );
     });
-  }, [users, searchText]);
+  }, [users, searchText, roleFilter, campusFilter]);
 
-  const visibleUsers = useMemo(() => {
-    return filteredUsers.slice(0, ITEMS_PER_PAGE);
-  }, [filteredUsers]);
+  const filteredAssignmentRows = useMemo(() => {
+    const normalized = searchText.trim().toLowerCase();
+    if (!normalized) {
+      return activeAssignments;
+    }
+
+    return activeAssignments.filter((assignment) => {
+      const user = userById.get(String(assignment.user_id));
+      return (
+        String(assignment.role_code || "").toLowerCase().includes(normalized) ||
+        String(assignment.campus_scope || "").toLowerCase().includes(normalized) ||
+        String(assignment.department_scope || "").toLowerCase().includes(normalized) ||
+        String(user?.email || "").toLowerCase().includes(normalized) ||
+        String(user?.name || "").toLowerCase().includes(normalized)
+      );
+    });
+  }, [activeAssignments, searchText, userById]);
 
   const userPagination = useMemo<PaginationState>(() => {
-    const totalItems = visibleUsers.length;
+    const totalItems = filteredUsers.length;
     const totalPages = Math.max(Math.ceil(totalItems / ITEMS_PER_PAGE), 1);
     const page = Math.min(userPage, totalPages);
 
@@ -976,16 +1060,16 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
       hasNext: page < totalPages,
       hasPrev: page > 1,
     };
-  }, [visibleUsers.length, userPage]);
+  }, [filteredUsers.length, userPage]);
 
   const paginatedUsers = useMemo(() => {
     const startIndex = (userPagination.page - 1) * userPagination.pageSize;
-    return visibleUsers.slice(startIndex, startIndex + userPagination.pageSize);
-  }, [visibleUsers, userPagination.page, userPagination.pageSize]);
+    return filteredUsers.slice(startIndex, startIndex + userPagination.pageSize);
+  }, [filteredUsers, userPagination.page, userPagination.pageSize]);
 
   useEffect(() => {
     setUserPage(1);
-  }, [searchText]);
+  }, [searchText, roleFilter, campusFilter]);
 
   useEffect(() => {
     if (userPagination.page !== userPage) {
@@ -1168,203 +1252,384 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
   };
 
   return (
-    <div className="space-y-5">
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-slate-900">Access Control Matrix</h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Toggle Master Admin, CFO, Finance, Dean, HOD, Organiser, Student Organizer, Volunteer, Stall, IT, Venue, Catering, and Support access.
-            </p>
-          </div>
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-3xl font-black text-slate-900">Role Matrix</h2>
+          <p className="mt-1 text-sm text-slate-600">Manage scoped roles and user access across all campuses.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => router.refresh()}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+          >
+            Refresh
+          </button>
+          <button
+            type="button"
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+          >
+            Export
+          </button>
+        </div>
+      </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Total Users</p>
+          <p className="mt-2 text-3xl font-black text-slate-900">{users.length}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Active Assignments</p>
+          <p className="mt-2 text-3xl font-black text-slate-900">{activeAssignments.length}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Pending Scope Issues</p>
+          <p className="mt-2 text-3xl font-black text-rose-600">{pendingScopeIssues}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Domain Role Holders</p>
+          <p className="mt-2 text-3xl font-black text-slate-900">{domainRoleHolders}</p>
+        </div>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[340px_1fr]">
+        <aside className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="rounded-t-2xl border-b border-slate-200 bg-slate-100 px-5 py-4">
+            <h3 className="text-lg font-bold text-slate-900">Assignment Panel</h3>
+            <p className="mt-1 text-xs text-slate-600">Create new scoped user permissions</p>
+          </div>
+          <div className="space-y-4 p-5">
+            <label className="block space-y-2">
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">User Email</span>
+              <input
+                type="email"
+                value={assignmentEmail}
+                onChange={(event) => setAssignmentEmail(event.target.value)}
+                placeholder="e.g. alex.smith@christuniversity.in"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+              />
+            </label>
+
+            <label className="block space-y-2">
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Role Profile</span>
+              <select
+                value={assignmentRole}
+                onChange={(event) => {
+                  setAssignmentRole(event.target.value as RoleMatrixAssignableRole);
+                  setAssignmentScope("");
+                }}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+              >
+                {roleOptions.map((roleOption) => (
+                  <option key={roleOption.value} value={roleOption.value}>
+                    {roleOption.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block space-y-2">
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Campus</span>
+              <select
+                value={assignmentCampus}
+                onChange={(event) => setAssignmentCampus(event.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+              >
+                <option value="">Select campus</option>
+                {data.campuses.map((campus) => (
+                  <option key={campus} value={campus}>
+                    {campus}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {scopeRequiredRoles.has(assignmentRole) && (
+              <label className="block space-y-2">
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                  {roleMatrixScopeLabel(assignmentRole)}
+                </span>
+                {(scopeOptions.length > 0 || strictDropdownScopeRoles.has(assignmentRole)) ? (
+                  <select
+                    value={assignmentScope}
+                    onChange={(event) => setAssignmentScope(event.target.value)}
+                    disabled={scopeOptions.length === 0}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  >
+                    <option value="">Select {roleMatrixScopeLabel(assignmentRole)}</option>
+                    {scopeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={assignmentScope}
+                    onChange={(event) => setAssignmentScope(event.target.value)}
+                    placeholder={`Enter ${roleMatrixScopeLabel(assignmentRole).toLowerCase()}`}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  />
+                )}
+              </label>
+            )}
+
             <button
               type="button"
-              onClick={() => setActiveTab("access")}
-              className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
-                activeTab === "access"
-                  ? "bg-slate-900 text-white"
-                  : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              }`}
+              disabled={isPending}
+              onClick={handleAssignRoleMatrix}
+              className="w-full rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              Access Control
+              {isPending ? "Assigning..." : "Assign Role"}
             </button>
             <button
               type="button"
               onClick={() => {
-                setActiveTab("analytics");
-                void loadAnalytics();
+                setAssignmentEmail("");
+                setAssignmentCampus("");
+                setAssignmentScope("");
               }}
-              className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
-                activeTab === "analytics"
-                  ? "bg-slate-900 text-white"
-                  : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              }`}
+              className="w-full rounded-lg bg-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-300"
             >
-              Global Analytics
+              Clear Fields
             </button>
           </div>
-        </div>
-      </div>
+        </aside>
 
-      {activeTab === "access" && (
-        <>
-          <div className="grid gap-5 lg:grid-cols-[1.2fr_1fr]">
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="text-base font-bold text-slate-900">Role Matrix Assignment</h3>
-              <p className="mt-1 text-sm text-slate-600">
-                Assign a role by user email with campus and role-specific scope.
-              </p>
+        <section className="space-y-4">
+          <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab("users")}
+                className={`rounded-md px-4 py-2 text-sm font-semibold transition ${
+                  activeTab === "users"
+                    ? "bg-blue-700 text-white"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                Users
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("assignments")}
+                className={`rounded-md px-4 py-2 text-sm font-semibold transition ${
+                  activeTab === "assignments"
+                    ? "bg-blue-700 text-white"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                Role Assignments
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab("analytics");
+                  void loadAnalytics();
+                }}
+                className={`rounded-md px-4 py-2 text-sm font-semibold transition ${
+                  activeTab === "analytics"
+                    ? "bg-blue-700 text-white"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                Analytics
+              </button>
+            </div>
+          </div>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <label className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">User Email</span>
-                  <input
-                    type="email"
-                    value={assignmentEmail}
-                    onChange={(event) => setAssignmentEmail(event.target.value)}
-                    placeholder="name@christuniversity.in"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                  />
-                </label>
-
-                <label className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Campus</span>
-                  <select
-                    value={assignmentCampus}
-                    onChange={(event) => setAssignmentCampus(event.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                  >
-                    <option value="">Select Campus</option>
-                    {data.campuses.map((campus) => (
-                      <option key={campus} value={campus}>
-                        {campus}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Role</span>
-                  <select
-                    value={assignmentRole}
-                    onChange={(event) => {
-                      setAssignmentRole(event.target.value as RoleMatrixAssignableRole);
-                      setAssignmentScope("");
-                    }}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                  >
-                    {roleOptions.map((roleOption) => (
-                      <option key={roleOption.value} value={roleOption.value}>
-                        {roleOption.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                {scopeRequiredRoles.has(assignmentRole) &&
-                  (scopeOptions.length > 0 || strictDropdownScopeRoles.has(assignmentRole)) && (
-                  <label className="space-y-1">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      {roleMatrixScopeLabel(assignmentRole)}
-                    </span>
+          {(activeTab === "users" || activeTab === "assignments") && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="grid gap-3 md:grid-cols-3">
+                <input
+                  type="text"
+                  value={searchText}
+                  onChange={(event) => setSearchText(event.target.value)}
+                  placeholder={activeTab === "users" ? "Filter by name or email..." : "Search assignments..."}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                />
+                {activeTab === "users" && (
+                  <>
                     <select
-                      value={assignmentScope}
-                      onChange={(event) => setAssignmentScope(event.target.value)}
-                      disabled={scopeOptions.length === 0}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                      value={roleFilter}
+                      onChange={(event) => setRoleFilter(event.target.value)}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
                     >
-                      <option value="">
-                        {scopeOptions.length === 0
-                          ? `No ${roleMatrixScopeLabel(assignmentRole).toLowerCase()} options available`
-                          : `Select ${roleMatrixScopeLabel(assignmentRole)}`}
-                      </option>
-                      {scopeOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
+                      <option value="all">All Roles</option>
+                      <option value="hod">HOD</option>
+                      <option value="dean">Dean</option>
+                      <option value="cfo">CFO</option>
+                      <option value="organiser">Organiser</option>
+                      <option value="support">Support</option>
+                      <option value="finance">Finance Officer</option>
+                      <option value="master_admin">Master Admin</option>
+                      <option value="venue">Venue</option>
+                    </select>
+                    <select
+                      value={campusFilter}
+                      onChange={(event) => setCampusFilter(event.target.value)}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                    >
+                      <option value="all">All Campuses</option>
+                      {data.campuses.map((campus) => (
+                        <option key={campus} value={campus}>
+                          {campus}
                         </option>
                       ))}
                     </select>
-                  </label>
-                )}
-
-                {scopeRequiredRoles.has(assignmentRole) &&
-                  scopeOptions.length === 0 &&
-                  !strictDropdownScopeRoles.has(assignmentRole) && (
-                  <label className="space-y-1">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      {roleMatrixScopeLabel(assignmentRole)}
-                    </span>
-                    <input
-                      type="text"
-                      value={assignmentScope}
-                      onChange={(event) => setAssignmentScope(event.target.value)}
-                      placeholder={`Enter ${roleMatrixScopeLabel(assignmentRole).toLowerCase()}`}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                    />
-                  </label>
+                  </>
                 )}
               </div>
-
-              <div className="mt-4">
-                <button
-                  type="button"
-                  disabled={isPending}
-                  onClick={handleAssignRoleMatrix}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  {isPending ? "Assigning..." : "Assign Role"}
-                </button>
-              </div>
             </div>
+          )}
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="text-base font-bold text-slate-900">Matrix Summary</h3>
-              <p className="mt-1 text-sm text-slate-600">
-                Snapshot of the current academic role matrix coverage.
-              </p>
-              <div className="mt-4 grid grid-cols-1 gap-3">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Academic Rows</p>
-                  <p className="mt-2 text-xl font-black text-slate-900">{matrixSections.academic.length}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="w-full max-w-5xl">
+          {activeTab === "users" && (
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <div className="flex items-center justify-between border-b border-slate-200 bg-gradient-to-r from-emerald-50 via-white to-white px-5 py-4">
-                <h3 className="text-sm font-bold text-slate-900">Academic Matrix</h3>
-                <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                  {matrixSections.academic.length} rows
-                </span>
-              </div>
               <div className="overflow-x-auto">
                 <table className="min-w-full border-collapse">
-                  <thead className="bg-white text-left">
+                  <thead className="bg-slate-100 text-left">
                     <tr>
-                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Role</th>
-                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Scope</th>
-                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Campus</th>
-                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500">Assignees</th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Name & Email</th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Campus</th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Role Tags</th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Updated</th>
+                      <th className="px-4 py-3 text-right text-xs font-bold uppercase tracking-wide text-slate-600">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {matrixSections.academic.map((row) => (
-                      <tr key={`Academic Matrix-${row.role}-${row.scope}`} className="border-t border-slate-200 align-top">
-                        <td className="px-4 py-3 text-sm font-semibold text-slate-800">{row.role}</td>
-                        <td className="px-4 py-3 text-sm text-slate-700">{row.scope}</td>
-                        <td className="px-4 py-3 text-sm text-slate-700">{row.campus}</td>
-                        <td className="px-4 py-3 text-sm text-slate-700">{row.holders}</td>
-                      </tr>
-                    ))}
+                    {paginatedUsers.map((user) => {
+                      const isUpdating = pendingUpdateUserId !== null && sameUserId(pendingUpdateUserId, user.id);
+                      const isDeleting = pendingDeleteUserId !== null && sameUserId(pendingDeleteUserId, user.id);
+                      const disabled = isPending || isUpdating || isDeleting;
 
-                    {matrixSections.academic.length === 0 && (
+                      return (
+                        <tr key={`${user.id}-${user.email}`} className="border-t border-slate-200 align-top">
+                          <td className="px-4 py-4">
+                            <p className="text-sm font-semibold text-slate-900">{user.name || "Unnamed User"}</p>
+                            <p className="text-xs text-slate-500">{user.email}</p>
+                          </td>
+                          <td className="px-4 py-4 text-sm text-slate-700">
+                            <p>{user.campus || "-"}</p>
+                            <p className="text-xs text-slate-500">{resolveDomainSummary(user, data)}</p>
+                          </td>
+                          <td className="px-4 py-4">
+                            <div className="flex flex-wrap gap-1.5">
+                              {userRoleTags(user).map((tag) => (
+                                <span
+                                  key={`${user.id}-${tag}`}
+                                  className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-700"
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                              {userRoleTags(user).length === 0 && (
+                                <span className="text-xs text-slate-400">No active tags</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 text-sm text-slate-600">{formatDate(user.created_at)}</td>
+                          <td className="px-4 py-4">
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                disabled={disabled}
+                                onClick={() => handleRoleToggle(user, "hod")}
+                                className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                              >
+                                HOD
+                              </button>
+                              <button
+                                type="button"
+                                disabled={disabled}
+                                onClick={() => handleRoleToggle(user, "dean")}
+                                className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                              >
+                                DEAN
+                              </button>
+                              <button
+                                type="button"
+                                disabled={disabled}
+                                onClick={() => handleRoleToggle(user, "cfo")}
+                                className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                              >
+                                CFO
+                              </button>
+                              <button
+                                type="button"
+                                disabled={disabled}
+                                onClick={() => requestDelete(user)}
+                                className="rounded-md border border-rose-200 px-2.5 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+
+                    {filteredUsers.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
-                          No assignments available.
+                        <td colSpan={5} className="px-4 py-12 text-center text-sm font-medium text-slate-500">
+                          No users matched your filters.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {filteredUsers.length > 0 && (
+                <PaginationControls
+                  currentPage={userPagination.page}
+                  totalPages={userPagination.totalPages}
+                  hasNext={userPagination.hasNext}
+                  hasPrev={userPagination.hasPrev}
+                  onNext={() => setUserPage((previous) => previous + 1)}
+                  onPrev={() => setUserPage((previous) => previous - 1)}
+                  totalItems={userPagination.totalItems}
+                />
+              )}
+            </div>
+          )}
+
+          {activeTab === "assignments" && (
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="min-w-full border-collapse">
+                  <thead className="bg-slate-100 text-left">
+                    <tr>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">User</th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Role Code</th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Department Scope</th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Campus Scope</th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Valid From</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredAssignmentRows.map((assignment) => {
+                      const user = userById.get(String(assignment.user_id));
+                      return (
+                        <tr
+                          key={`${assignment.user_id}-${assignment.role_code}-${assignment.valid_from || ""}`}
+                          className="border-t border-slate-200"
+                        >
+                          <td className="px-4 py-3 text-sm text-slate-700">{user?.email || assignment.user_id}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-slate-900">{assignment.role_code}</td>
+                          <td className="px-4 py-3 text-sm text-slate-700">{assignment.department_scope || "-"}</td>
+                          <td className="px-4 py-3 text-sm text-slate-700">{assignment.campus_scope || "-"}</td>
+                          <td className="px-4 py-3 text-sm text-slate-600">{formatDate(assignment.valid_from)}</td>
+                        </tr>
+                      );
+                    })}
+
+                    {filteredAssignmentRows.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-12 text-center text-sm font-medium text-slate-500">
+                          No assignments matched your search.
                         </td>
                       </tr>
                     )}
@@ -1372,207 +1637,13 @@ export default function RolesManagementTable({ initialData }: RolesManagementTab
                 </table>
               </div>
             </div>
-          </div>
+          )}
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <input
-              type="text"
-              value={searchText}
-              onChange={(event) => setSearchText(event.target.value)}
-              placeholder="Search name or email"
-              className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm text-slate-700 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-            />
-          </div>
-
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="min-w-[2400px] w-full border-collapse">
-                <thead className="bg-slate-100/80 text-left">
-                  <tr>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Name</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Email</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Joined</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Master Admin</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">CFO</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Finance</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Dean</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">HOD</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Organiser</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Student Organizer</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Volunteer</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Stall</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">IT</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Venue</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Catering</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Support</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-600">Domain Scope</th>
-                    <th className="px-4 py-3 text-right text-xs font-bold uppercase tracking-wide text-slate-600">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {paginatedUsers.map((user) => {
-                    const isUpdating = pendingUpdateUserId !== null && sameUserId(pendingUpdateUserId, user.id);
-                    const isDeleting = pendingDeleteUserId !== null && sameUserId(pendingDeleteUserId, user.id);
-                    const disabled = isPending || isUpdating || isDeleting;
-
-                    return (
-                      <tr key={`${user.id}-${user.email}`} className="border-t border-slate-200 align-top">
-                        <td className="px-4 py-4 text-sm font-semibold text-slate-900">
-                          {user.name || "Unnamed User"}
-                        </td>
-                        <td className="px-4 py-4 text-sm text-slate-700">{user.email}</td>
-                        <td className="px-4 py-4 text-sm text-slate-700">{formatDate(user.created_at)}</td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_masteradmin}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "master_admin")}
-                            label="Toggle master admin"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_cfo}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "cfo")}
-                            label="Toggle CFO"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_finance_officer}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "finance")}
-                            label="Toggle finance"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_dean}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "dean")}
-                            label="Toggle Dean"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_hod}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "hod")}
-                            label="Toggle HOD"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_organiser}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "organiser")}
-                            label="Toggle organiser"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_student_organiser}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "student_organiser")}
-                            label="Toggle student organizer"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_volunteer}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "volunteer")}
-                            label="Toggle volunteer"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_stalls_misc}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "stalls_misc")}
-                            label="Toggle stall"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_it_service}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "it_service")}
-                            label="Toggle IT"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_venue_manager}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "venue_manager")}
-                            label="Toggle venue"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_catering_vendors}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "catering_vendors")}
-                            label="Toggle catering"
-                          />
-                        </td>
-                        <td className="px-4 py-4">
-                          <ToggleCell
-                            checked={user.access.is_support}
-                            disabled={disabled}
-                            onChange={() => handleRoleToggle(user, "support")}
-                            label="Toggle support"
-                          />
-                        </td>
-                        <td className="px-4 py-4 text-sm font-medium text-slate-700">
-                          {resolveDomainSummary(user, data)}
-                        </td>
-                        <td className="px-4 py-4 text-right">
-                          <button
-                            type="button"
-                            disabled={disabled}
-                            onClick={() => requestDelete(user)}
-                            className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                          >
-                            {isDeleting ? "Deleting..." : "Delete"}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-
-                  {filteredUsers.length === 0 && (
-                    <tr>
-                      <td colSpan={18} className="px-4 py-12 text-center text-sm font-medium text-slate-500">
-                        No users matched your search.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            {filteredUsers.length > 0 && (
-              <PaginationControls
-                currentPage={userPagination.page}
-                totalPages={userPagination.totalPages}
-                hasNext={userPagination.hasNext}
-                hasPrev={userPagination.hasPrev}
-                onNext={() => setUserPage((previous) => previous + 1)}
-                onPrev={() => setUserPage((previous) => previous - 1)}
-                totalItems={userPagination.totalItems}
-              />
-            )}
-          </div>
-        </>
-      )}
-
-      {activeTab === "analytics" && (
-        <RolesAnalyticsPanel analytics={data.analytics} isLoading={isAnalyticsLoading} error={analyticsError} />
-      )}
+          {activeTab === "analytics" && (
+            <RolesAnalyticsPanel analytics={data.analytics} isLoading={isAnalyticsLoading} error={analyticsError} />
+          )}
+        </section>
+      </div>
 
       <DomainScopeModal
         isOpen={domainModal.isOpen}
