@@ -1021,8 +1021,76 @@ const ADDITIONAL_REQUEST_STEPS = [
   { key: "stalls", label: "Stalls" },
 ] as const;
 
+const STANDALONE_FLOW_STEPS = [
+  { key: "details", label: "Details" },
+  { key: "approvals", label: "Approvals" },
+  { key: "budget", label: "Budget" },
+] as const;
+
+type StandaloneFlowStep =
+  (typeof STANDALONE_FLOW_STEPS)[number]["key"];
+
 type AdditionalRequestStepKey =
   (typeof ADDITIONAL_REQUEST_STEPS)[number]["key"];
+
+const renderStandaloneFlowStepIcon = (
+  stepKey: StandaloneFlowStep
+): React.ReactNode => {
+  switch (stepKey) {
+    case "details":
+      return (
+        <svg
+          className="h-4 w-4"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M4 5h16" />
+          <path d="M4 12h16" />
+          <path d="M4 19h10" />
+        </svg>
+      );
+    case "approvals":
+      return (
+        <svg
+          className="h-4 w-4"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M12 3l7 3v6c0 4.2-2.9 7.8-7 8.9-4.1-1.1-7-4.7-7-8.9V6l7-3z" />
+          <path d="M9.5 12.5l1.8 1.8 3.2-3.2" />
+        </svg>
+      );
+    case "budget":
+      return (
+        <svg
+          className="h-4 w-4"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="3" y="6" width="18" height="12" rx="2" />
+          <path d="M3 10h18" />
+          <path d="M8 14h4" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+};
 
 const renderAdditionalRequestStepIcon = (
   stepKey: AdditionalRequestStepKey
@@ -1289,6 +1357,8 @@ export default function EventForm({
     useState(0);
   const [maxUnlockedAdditionalRequestStep, setMaxUnlockedAdditionalRequestStep] =
     useState(0);
+  const [standaloneFlowStep, setStandaloneFlowStep] =
+    useState<StandaloneFlowStep>("details");
 
   const validateAdditionalRequestStep = React.useCallback(
     async (stepIndex: number) => {
