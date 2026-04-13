@@ -119,6 +119,8 @@ export const deriveRoleCodesFromUserRecord = (userRecord = null) => {
 
   if (
     isTruthy(userRecord?.is_organiser_student) ||
+    isTruthy(userRecord?.is_student_organiser) ||
+    isTruthy(userRecord?.is_student_organizer) ||
     normalizedUniversityRole === "organizer_student" ||
     normalizedUniversityRole === "organiser_student"
   ) {
@@ -133,14 +135,24 @@ export const deriveRoleCodesFromUserRecord = (userRecord = null) => {
     roleCodes.add(ROLE_CODES.ORGANIZER_VOLUNTEER);
   }
 
-  if (isTruthy(userRecord?.is_service_it) || normalizedUniversityRole === "service_it") {
+  if (
+    isTruthy(userRecord?.is_service_it) ||
+    isTruthy(userRecord?.is_it_service) ||
+    isTruthy(userRecord?.is_it) ||
+    normalizedUniversityRole === "service_it" ||
+    normalizedUniversityRole === "it_service" ||
+    normalizedUniversityRole === "it"
+  ) {
     roleCodes.add(ROLE_CODES.SERVICE_IT);
   }
 
   if (
     isTruthy(userRecord?.is_service_venue) ||
+    isTruthy(userRecord?.is_venue) ||
     isTruthy(userRecord?.is_venue_manager) ||
     normalizedUniversityRole === "service_venue" ||
+    normalizedUniversityRole === "venue_service" ||
+    normalizedUniversityRole === "venue" ||
     normalizedUniversityRole === "venue_manager"
   ) {
     roleCodes.add(ROLE_CODES.SERVICE_VENUE);
@@ -148,21 +160,37 @@ export const deriveRoleCodesFromUserRecord = (userRecord = null) => {
 
   if (
     isTruthy(userRecord?.is_service_catering) ||
-    normalizedUniversityRole === "service_catering"
+    isTruthy(userRecord?.is_catering_vendors) ||
+    isTruthy(userRecord?.is_catering_vendor) ||
+    normalizedUniversityRole === "service_catering" ||
+    normalizedUniversityRole === "catering_service" ||
+    normalizedUniversityRole === "catering_vendors" ||
+    normalizedUniversityRole === "catering_vendor" ||
+    normalizedUniversityRole === "catering"
   ) {
     roleCodes.add(ROLE_CODES.SERVICE_CATERING);
   }
 
   if (
     isTruthy(userRecord?.is_service_stalls) ||
-    normalizedUniversityRole === "service_stalls"
+    isTruthy(userRecord?.is_stalls_misc) ||
+    isTruthy(userRecord?.is_stall_misc) ||
+    isTruthy(userRecord?.is_stalls) ||
+    normalizedUniversityRole === "service_stalls" ||
+    normalizedUniversityRole === "stalls_service" ||
+    normalizedUniversityRole === "stalls_misc" ||
+    normalizedUniversityRole === "stall_misc" ||
+    normalizedUniversityRole === "stalls" ||
+    normalizedUniversityRole === "stall"
   ) {
     roleCodes.add(ROLE_CODES.SERVICE_STALLS);
   }
 
   if (
     isTruthy(userRecord?.is_service_security) ||
-    normalizedUniversityRole === "service_security"
+    normalizedUniversityRole === "service_security" ||
+    normalizedUniversityRole === "security_service" ||
+    normalizedUniversityRole === "security"
   ) {
     roleCodes.add(ROLE_CODES.SERVICE_SECURITY);
   }
@@ -228,12 +256,22 @@ export const deriveLegacyFlagsFromRoleCodes = (roleCodes = [], fallbackUser = nu
     is_finance_officer: Boolean(fallbackUser?.is_finance_officer) || hasFinanceOfficerRole,
     is_finance_office: Boolean(fallbackUser?.is_finance_office) || hasFinanceOfficerRole,
     is_organiser_student: Boolean(fallbackUser?.is_organiser_student) || hasOrganizerStudentRole,
+    is_student_organiser: Boolean(fallbackUser?.is_student_organiser) || hasOrganizerStudentRole,
+    is_student_organizer: Boolean(fallbackUser?.is_student_organizer) || hasOrganizerStudentRole,
     is_volunteer: Boolean(fallbackUser?.is_volunteer) || hasOrganizerVolunteerRole,
     is_service_it: Boolean(fallbackUser?.is_service_it) || hasServiceItRole,
+    is_it_service: Boolean(fallbackUser?.is_it_service) || hasServiceItRole,
+    is_it: Boolean(fallbackUser?.is_it) || hasServiceItRole,
     is_service_venue: Boolean(fallbackUser?.is_service_venue) || hasServiceVenueRole,
+    is_venue: Boolean(fallbackUser?.is_venue) || hasServiceVenueRole,
     is_venue_manager: Boolean(fallbackUser?.is_venue_manager) || hasServiceVenueRole,
     is_service_catering: Boolean(fallbackUser?.is_service_catering) || hasServiceCateringRole,
+    is_catering_vendors: Boolean(fallbackUser?.is_catering_vendors) || hasServiceCateringRole,
+    is_catering_vendor: Boolean(fallbackUser?.is_catering_vendor) || hasServiceCateringRole,
     is_service_stalls: Boolean(fallbackUser?.is_service_stalls) || hasServiceStallsRole,
+    is_stalls_misc: Boolean(fallbackUser?.is_stalls_misc) || hasServiceStallsRole,
+    is_stall_misc: Boolean(fallbackUser?.is_stall_misc) || hasServiceStallsRole,
+    is_stalls: Boolean(fallbackUser?.is_stalls) || hasServiceStallsRole,
     is_service_security: Boolean(fallbackUser?.is_service_security) || hasServiceSecurityRole,
   };
 };

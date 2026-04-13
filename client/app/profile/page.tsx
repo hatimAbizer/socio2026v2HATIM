@@ -71,12 +71,22 @@ interface UserData {
   is_finance_officer?: boolean;
   is_finance_office?: boolean;
   is_organiser_student?: boolean;
+  is_student_organiser?: boolean;
+  is_student_organizer?: boolean;
   is_volunteer?: boolean;
   is_service_it?: boolean;
+  is_it_service?: boolean;
+  is_it?: boolean;
   is_service_venue?: boolean;
   is_venue_manager?: boolean;
+  is_venue?: boolean;
   is_service_catering?: boolean;
+  is_catering_vendors?: boolean;
+  is_catering_vendor?: boolean;
   is_service_stalls?: boolean;
+  is_stalls_misc?: boolean;
+  is_stall_misc?: boolean;
+  is_stalls?: boolean;
   is_service_security?: boolean;
   university_role?: string | null;
   role_codes?: string[];
@@ -122,11 +132,23 @@ const UNIVERSITY_ROLE_TO_ROLE_CODES: Record<string, string[]> = {
   organiser_volunteer: ["ORGANIZER_VOLUNTEER"],
   organizer_volunteer: ["ORGANIZER_VOLUNTEER"],
   volunteer: ["ORGANIZER_VOLUNTEER"],
+  it: ["SERVICE_IT"],
+  it_service: ["SERVICE_IT"],
   service_it: ["SERVICE_IT"],
+  venue: ["SERVICE_VENUE"],
+  venue_service: ["SERVICE_VENUE"],
   service_venue: ["SERVICE_VENUE"],
   venue_manager: ["SERVICE_VENUE"],
+  catering_service: ["SERVICE_CATERING"],
+  catering_vendors: ["SERVICE_CATERING"],
+  catering_vendor: ["SERVICE_CATERING"],
   service_catering: ["SERVICE_CATERING"],
+  stalls_service: ["SERVICE_STALLS"],
+  stalls_misc: ["SERVICE_STALLS"],
+  stall_misc: ["SERVICE_STALLS"],
+  stalls: ["SERVICE_STALLS"],
   service_stalls: ["SERVICE_STALLS"],
+  security: ["SERVICE_SECURITY"],
   service_security: ["SERVICE_SECURITY"],
 };
 
@@ -151,13 +173,21 @@ const ROLE_TAG_LABEL_ALIASES: Record<string, string> = {
   "finance officer": "Finance Officer",
   "accounts": "Accounts",
   "it": "IT",
+  "it service": "IT",
   "service it": "IT",
   "venue": "Venue",
+  "venue service": "Venue",
   "venue manager": "Venue",
   "service venue": "Venue",
   "catering": "Catering",
+  "catering service": "Catering",
+  "catering vendors": "Catering",
+  "catering vendor": "Catering",
   "service catering": "Catering",
+  "stall": "Stalls/Misc",
   "stalls": "Stalls/Misc",
+  "stall misc": "Stalls/Misc",
+  "stalls service": "Stalls/Misc",
   "stalls misc": "Stalls/Misc",
   "service stalls": "Stalls/Misc",
   "security": "Security",
@@ -311,12 +341,18 @@ const resolveProfileRoleTags = (userData: UserData | null): string[] => {
     addRoleTag("Finance Officer");
     addRoleTag("Accounts");
   }
-  if (userData.is_organiser_student) addRoleTag("Student Organizer");
+  if (userData.is_organiser_student || userData.is_student_organiser || userData.is_student_organizer) {
+    addRoleTag("Student Organizer");
+  }
   if (userData.is_volunteer) addRoleTag("Volunteer");
-  if (userData.is_service_it) addRoleTag("IT");
-  if (userData.is_service_venue || userData.is_venue_manager) addRoleTag("Venue");
-  if (userData.is_service_catering) addRoleTag("Catering");
-  if (userData.is_service_stalls) addRoleTag("Stalls/Misc");
+  if (userData.is_service_it || userData.is_it_service || userData.is_it) addRoleTag("IT");
+  if (userData.is_service_venue || userData.is_venue_manager || userData.is_venue) addRoleTag("Venue");
+  if (userData.is_service_catering || userData.is_catering_vendors || userData.is_catering_vendor) {
+    addRoleTag("Catering");
+  }
+  if (userData.is_service_stalls || userData.is_stalls_misc || userData.is_stall_misc || userData.is_stalls) {
+    addRoleTag("Stalls/Misc");
+  }
   if (userData.is_service_security) addRoleTag("Security");
 
   return Array.from(tags.values());
