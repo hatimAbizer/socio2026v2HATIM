@@ -17,7 +17,9 @@ import chatRoutes from "./routes/chatRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import statuscheckRoutes from "./routes/statuscheckRoutes.js";
 import approvalsRoutes from "./routes/approvalsRoutes.js";
-
+import festsApprovalRoutes from "./routes/fests.approval.js";
+import eventsApprovalRoutes from "./routes/events.approval.js";
+import serviceRequestsRoutes from "./routes/service-requests.js";
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -160,7 +162,9 @@ app.use("/api/chat", chatRoutes);
 app.use("/api", reportRoutes);
 app.use("/api/statuscheck", statuscheckRoutes);
 app.use("/api/approvals", approvalsRoutes);
-
+app.use("/api/fests", festsApprovalRoutes);
+app.use("/api/events", eventsApprovalRoutes);
+app.use("/api/service-requests", serviceRequestsRoutes);
 // Global error handler - ensures CORS headers are always sent
 app.use((err, req, res, next) => {
   console.error('Global error:', err);
