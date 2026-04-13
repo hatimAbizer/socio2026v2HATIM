@@ -54,8 +54,6 @@ const hasLegacyFlagForRole = (userInfo, roleCode) => {
       return Boolean(userInfo?.is_service_catering);
     case ROLE_CODES.SERVICE_STALLS:
       return Boolean(userInfo?.is_service_stalls);
-    case ROLE_CODES.SERVICE_SECURITY:
-      return Boolean(userInfo?.is_service_security);
     default:
       return false;
   }

@@ -13,7 +13,6 @@ export const ROLE_CODES = Object.freeze({
   SERVICE_VENUE: "SERVICE_VENUE",
   SERVICE_CATERING: "SERVICE_CATERING",
   SERVICE_STALLS: "SERVICE_STALLS",
-  SERVICE_SECURITY: "SERVICE_SECURITY",
 });
 
 export const SERVICE_ROLE_CODES = Object.freeze([
@@ -21,7 +20,6 @@ export const SERVICE_ROLE_CODES = Object.freeze([
   ROLE_CODES.SERVICE_VENUE,
   ROLE_CODES.SERVICE_CATERING,
   ROLE_CODES.SERVICE_STALLS,
-  ROLE_CODES.SERVICE_SECURITY,
 ]);
 
 const SERVICE_ROLE_SET = new Set(SERVICE_ROLE_CODES);
@@ -186,15 +184,6 @@ export const deriveRoleCodesFromUserRecord = (userRecord = null) => {
     roleCodes.add(ROLE_CODES.SERVICE_STALLS);
   }
 
-  if (
-    isTruthy(userRecord?.is_service_security) ||
-    normalizedUniversityRole === "service_security" ||
-    normalizedUniversityRole === "security_service" ||
-    normalizedUniversityRole === "security"
-  ) {
-    roleCodes.add(ROLE_CODES.SERVICE_SECURITY);
-  }
-
   return Array.from(roleCodes);
 };
 
@@ -244,7 +233,6 @@ export const deriveLegacyFlagsFromRoleCodes = (roleCodes = [], fallbackUser = nu
   const hasServiceVenueRole = roleSet.has(ROLE_CODES.SERVICE_VENUE);
   const hasServiceCateringRole = roleSet.has(ROLE_CODES.SERVICE_CATERING);
   const hasServiceStallsRole = roleSet.has(ROLE_CODES.SERVICE_STALLS);
-  const hasServiceSecurityRole = roleSet.has(ROLE_CODES.SERVICE_SECURITY);
 
   return {
     is_masteradmin: Boolean(fallbackUser?.is_masteradmin) || hasMasterAdminRole,
@@ -272,6 +260,5 @@ export const deriveLegacyFlagsFromRoleCodes = (roleCodes = [], fallbackUser = nu
     is_stalls_misc: Boolean(fallbackUser?.is_stalls_misc) || hasServiceStallsRole,
     is_stall_misc: Boolean(fallbackUser?.is_stall_misc) || hasServiceStallsRole,
     is_stalls: Boolean(fallbackUser?.is_stalls) || hasServiceStallsRole,
-    is_service_security: Boolean(fallbackUser?.is_service_security) || hasServiceSecurityRole,
   };
 };

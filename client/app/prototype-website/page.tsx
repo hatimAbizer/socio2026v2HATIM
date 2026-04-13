@@ -62,7 +62,6 @@ const facilityOptions = [
   "IT",
   "Audio",
   "Catering",
-  "Security",
   "Transport",
 ];
 

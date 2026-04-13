@@ -686,7 +686,6 @@ router.put("/:email/roles", authenticateUser, getUserInfo(), checkRoleExpiration
       is_service_venue,
       is_service_catering,
       is_service_stalls,
-      is_service_security,
       university_role
     } = req.body;
 
@@ -749,10 +748,6 @@ router.put("/:email/roles", authenticateUser, getUserInfo(), checkRoleExpiration
 
     if (typeof is_service_stalls === 'boolean') {
       updates.is_service_stalls = is_service_stalls;
-    }
-
-    if (typeof is_service_security === 'boolean') {
-      updates.is_service_security = is_service_security;
     }
 
     const roleScopePayloadProvided =

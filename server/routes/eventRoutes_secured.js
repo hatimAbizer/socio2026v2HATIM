@@ -673,10 +673,6 @@ const collectRequestedServiceRoleCodes = (additionalRequests = {}) => {
     requestedRoleCodes.push(ROLE_CODES.SERVICE_STALLS);
   }
 
-  if (asBoolean(additionalRequests?.security?.enabled)) {
-    requestedRoleCodes.push(ROLE_CODES.SERVICE_SECURITY);
-  }
-
   return requestedRoleCodes;
 };
 
@@ -697,10 +693,6 @@ const getServiceRequestDetails = (additionalRequests, roleCode) => {
 
   if (normalizedRoleCode === ROLE_CODES.SERVICE_STALLS) {
     return additionalRequests?.stalls || {};
-  }
-
-  if (normalizedRoleCode === ROLE_CODES.SERVICE_SECURITY) {
-    return additionalRequests?.security || {};
   }
 
   return {};
@@ -1171,10 +1163,6 @@ const DEFAULT_ADDITIONAL_REQUESTS = {
     hardboardDescription: "",
     description: "",
   },
-  security: {
-    enabled: false,
-    description: "",
-  },
 };
 
 const buildAdditionalRequestsDefaults = () => ({
@@ -1182,7 +1170,6 @@ const buildAdditionalRequestsDefaults = () => ({
   venue: { ...DEFAULT_ADDITIONAL_REQUESTS.venue },
   catering: { ...DEFAULT_ADDITIONAL_REQUESTS.catering },
   stalls: { ...DEFAULT_ADDITIONAL_REQUESTS.stalls },
-  security: { ...DEFAULT_ADDITIONAL_REQUESTS.security },
 });
 
 const parseAdditionalRequestsValue = (value) => {
@@ -1240,11 +1227,6 @@ const sanitizeAdditionalRequests = (value) => {
           parsed?.stalls?.canopyDescription ||
           ""
       ),
-    },
-    security: {
-      ...defaults.security,
-      ...(parsed.security || {}),
-      description: normalizeSingleStringField(parsed?.security?.description || ""),
     },
   };
 };
@@ -1571,15 +1553,6 @@ const validateAdditionalRequestsPayload = ({
       addFieldError(
         "additionalRequests.stalls.canopyQuantity",
         "At least one selected stall type must have quantity greater than 0"
-      );
-    }
-  }
-
-  if (asBoolean(additionalRequests.security.enabled)) {
-    if (!normalizeSingleStringField(additionalRequests.security.description)) {
-      addFieldError(
-        "additionalRequests.security.description",
-        "Security description is required when Security module is selected"
       );
     }
   }

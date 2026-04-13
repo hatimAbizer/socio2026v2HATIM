@@ -87,7 +87,6 @@ interface UserData {
   is_stalls_misc?: boolean;
   is_stall_misc?: boolean;
   is_stalls?: boolean;
-  is_service_security?: boolean;
   university_role?: string | null;
   role_codes?: string[];
   role_matrix_assignments?: RoleMatrixAssignmentSummary[];
@@ -111,7 +110,6 @@ const ROLE_CODE_PROFILE_LABELS: Record<string, string> = {
   SERVICE_VENUE: "Venue",
   SERVICE_CATERING: "Catering",
   SERVICE_STALLS: "Stalls/Misc",
-  SERVICE_SECURITY: "Security",
 };
 
 const UNIVERSITY_ROLE_TO_ROLE_CODES: Record<string, string[]> = {
@@ -148,8 +146,6 @@ const UNIVERSITY_ROLE_TO_ROLE_CODES: Record<string, string[]> = {
   stall_misc: ["SERVICE_STALLS"],
   stalls: ["SERVICE_STALLS"],
   service_stalls: ["SERVICE_STALLS"],
-  security: ["SERVICE_SECURITY"],
-  service_security: ["SERVICE_SECURITY"],
 };
 
 const ROLE_TAG_LABEL_ALIASES: Record<string, string> = {
@@ -190,8 +186,6 @@ const ROLE_TAG_LABEL_ALIASES: Record<string, string> = {
   "stalls service": "Stalls/Misc",
   "stalls misc": "Stalls/Misc",
   "service stalls": "Stalls/Misc",
-  "security": "Security",
-  "service security": "Security",
 };
 
 const normalizeText = (value: unknown): string => String(value || "").trim();
@@ -282,6 +276,10 @@ const resolveProfileRoleTags = (userData: UserData | null): string[] => {
     const canonicalRoleTag = canonicalizeRoleTag(roleTag);
     const normalizedRoleTagKey = normalizeRoleTagKey(canonicalRoleTag);
 
+    if (normalizedRoleTagKey === "security" || normalizedRoleTagKey === "service security") {
+      return;
+    }
+
     if (!normalizedRoleTagKey || tags.has(normalizedRoleTagKey)) {
       return;
     }
@@ -355,7 +353,6 @@ const resolveProfileRoleTags = (userData: UserData | null): string[] => {
   if (userData.is_service_stalls || userData.is_stalls_misc || userData.is_stall_misc || userData.is_stalls) {
     addRoleTag("Stalls/Misc");
   }
-  if (userData.is_service_security) addRoleTag("Security");
 
   if (!userData.is_cfo) {
     tags.delete(normalizeRoleTagKey("Accounts"));
@@ -386,8 +383,7 @@ const getRoleTagClassName = (roleTag: string): string => {
     normalizedRoleTag.includes("it") ||
     normalizedRoleTag.includes("venue") ||
     normalizedRoleTag.includes("catering") ||
-    normalizedRoleTag.includes("stall") ||
-    normalizedRoleTag.includes("security")
+    normalizedRoleTag.includes("stall")
   ) {
     return "text-gray-800 font-medium bg-teal-100 px-2 py-1 rounded-full text-xs inline-block";
   }
