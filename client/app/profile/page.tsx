@@ -69,7 +69,16 @@ interface UserData {
   is_dean?: boolean;
   is_cfo?: boolean;
   is_finance_officer?: boolean;
+  is_finance_office?: boolean;
+  is_organiser_student?: boolean;
   is_volunteer?: boolean;
+  is_service_it?: boolean;
+  is_service_venue?: boolean;
+  is_venue_manager?: boolean;
+  is_service_catering?: boolean;
+  is_service_stalls?: boolean;
+  is_service_security?: boolean;
+  university_role?: string | null;
   role_codes?: string[];
   role_matrix_assignments?: RoleMatrixAssignmentSummary[];
   role_matrix_tags?: string[];
@@ -92,13 +101,103 @@ const ROLE_CODE_PROFILE_LABELS: Record<string, string> = {
   SERVICE_VENUE: "Venue",
   SERVICE_CATERING: "Catering",
   SERVICE_STALLS: "Stalls/Misc",
+  SERVICE_SECURITY: "Security",
+};
+
+const UNIVERSITY_ROLE_TO_ROLE_CODES: Record<string, string[]> = {
+  masteradmin: ["MASTER_ADMIN"],
+  master_admin: ["MASTER_ADMIN"],
+  support: ["SUPPORT"],
+  organiser: ["ORGANIZER_TEACHER"],
+  organizer: ["ORGANIZER_TEACHER"],
+  organiser_teacher: ["ORGANIZER_TEACHER"],
+  organizer_teacher: ["ORGANIZER_TEACHER"],
+  hod: ["HOD"],
+  dean: ["DEAN"],
+  cfo: ["CFO"],
+  finance_officer: ["FINANCE_OFFICER", "ACCOUNTS"],
+  accounts: ["ACCOUNTS", "FINANCE_OFFICER"],
+  organiser_student: ["ORGANIZER_STUDENT"],
+  organizer_student: ["ORGANIZER_STUDENT"],
+  organiser_volunteer: ["ORGANIZER_VOLUNTEER"],
+  organizer_volunteer: ["ORGANIZER_VOLUNTEER"],
+  volunteer: ["ORGANIZER_VOLUNTEER"],
+  service_it: ["SERVICE_IT"],
+  service_venue: ["SERVICE_VENUE"],
+  venue_manager: ["SERVICE_VENUE"],
+  service_catering: ["SERVICE_CATERING"],
+  service_stalls: ["SERVICE_STALLS"],
+  service_security: ["SERVICE_SECURITY"],
+};
+
+const ROLE_TAG_LABEL_ALIASES: Record<string, string> = {
+  "masteradmin": "Master Admin",
+  "master admin": "Master Admin",
+  "support": "Support",
+  "hod": "HOD",
+  "dean": "Dean",
+  "cfo": "CFO",
+  "organiser": "Organiser",
+  "organizer": "Organiser",
+  "organiser teacher": "Organiser",
+  "organizer teacher": "Organiser",
+  "student organiser": "Student Organizer",
+  "student organizer": "Student Organizer",
+  "organiser student": "Student Organizer",
+  "organizer student": "Student Organizer",
+  "volunteer": "Volunteer",
+  "organiser volunteer": "Volunteer",
+  "organizer volunteer": "Volunteer",
+  "finance officer": "Finance Officer",
+  "accounts": "Accounts",
+  "it": "IT",
+  "service it": "IT",
+  "venue": "Venue",
+  "venue manager": "Venue",
+  "service venue": "Venue",
+  "catering": "Catering",
+  "service catering": "Catering",
+  "stalls": "Stalls/Misc",
+  "stalls misc": "Stalls/Misc",
+  "service stalls": "Stalls/Misc",
+  "security": "Security",
+  "service security": "Security",
 };
 
 const normalizeText = (value: unknown): string => String(value || "").trim();
 
+const normalizeRoleTagKey = (value: unknown): string =>
+  normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
 const normalizeNullableText = (value: unknown): string | null => {
   const normalized = normalizeText(value);
   return normalized.length > 0 ? normalized : null;
+};
+
+const canonicalizeRoleTag = (roleTag: unknown): string => {
+  const rawRoleTag = normalizeText(roleTag);
+  if (!rawRoleTag) {
+    return "";
+  }
+
+  const aliasKey = normalizeRoleTagKey(rawRoleTag.replace(/_/g, " "));
+  return ROLE_TAG_LABEL_ALIASES[aliasKey] || rawRoleTag;
+};
+
+const deriveRoleCodesFromUniversityRole = (universityRole: unknown): string[] => {
+  const normalizedRoleKey = normalizeText(universityRole)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  if (!normalizedRoleKey) {
+    return [];
+  }
+
+  return UNIVERSITY_ROLE_TO_ROLE_CODES[normalizedRoleKey] || [];
 };
 
 const toRoleTag = (roleCode: string): string => {
@@ -148,26 +247,36 @@ const resolveProfileRoleTags = (userData: UserData | null): string[] => {
     return [];
   }
 
-  const tags = new Set<string>();
+  const tags = new Map<string, string>();
+  const addRoleTag = (roleTag: unknown): void => {
+    const canonicalRoleTag = canonicalizeRoleTag(roleTag);
+    const normalizedRoleTagKey = normalizeRoleTagKey(canonicalRoleTag);
+
+    if (!normalizedRoleTagKey || tags.has(normalizedRoleTagKey)) {
+      return;
+    }
+
+    tags.set(normalizedRoleTagKey, canonicalRoleTag);
+  };
 
   if (Array.isArray(userData.role_matrix_tags)) {
     userData.role_matrix_tags
       .map((tag) => normalizeText(tag))
       .filter((tag) => tag.length > 0)
-      .forEach((tag) => tags.add(tag));
+      .forEach((tag) => addRoleTag(tag));
   }
 
   if (Array.isArray(userData.role_matrix_assignments)) {
     userData.role_matrix_assignments.forEach((assignment) => {
       const roleTag = normalizeNullableText(assignment?.role_tag);
       if (roleTag) {
-        tags.add(roleTag);
+        addRoleTag(roleTag);
         return;
       }
 
       const roleCode = normalizeText(assignment?.role_code).toUpperCase();
       if (roleCode) {
-        tags.add(toRoleTag(roleCode));
+        addRoleTag(toRoleTag(roleCode));
       }
     });
   }
@@ -176,17 +285,39 @@ const resolveProfileRoleTags = (userData: UserData | null): string[] => {
     userData.role_codes
       .map((roleCode) => normalizeText(roleCode).toUpperCase())
       .filter((roleCode) => roleCode.length > 0)
-      .forEach((roleCode) => tags.add(toRoleTag(roleCode)));
+      .forEach((roleCode) => addRoleTag(toRoleTag(roleCode)));
   }
 
-  if (userData.is_organiser) tags.add("Organiser");
-  if (userData.is_support) tags.add("Support");
-  if (userData.is_masteradmin) tags.add("Master Admin");
-  if (userData.is_hod) tags.add("HOD");
-  if (userData.is_dean) tags.add("Dean");
-  if (userData.is_cfo) tags.add("CFO");
-  if (userData.is_finance_officer) tags.add("Finance Officer");
-  if (userData.is_volunteer) tags.add("Volunteer");
+  const normalizedUniversityRole = normalizeNullableText(userData.university_role);
+  if (normalizedUniversityRole) {
+    const derivedUniversityRoleCodes = deriveRoleCodesFromUniversityRole(
+      normalizedUniversityRole
+    );
+
+    if (derivedUniversityRoleCodes.length > 0) {
+      derivedUniversityRoleCodes.forEach((roleCode) => addRoleTag(toRoleTag(roleCode)));
+    } else {
+      addRoleTag(normalizedUniversityRole);
+    }
+  }
+
+  if (userData.is_organiser) addRoleTag("Organiser");
+  if (userData.is_support) addRoleTag("Support");
+  if (userData.is_masteradmin) addRoleTag("Master Admin");
+  if (userData.is_hod) addRoleTag("HOD");
+  if (userData.is_dean) addRoleTag("Dean");
+  if (userData.is_cfo) addRoleTag("CFO");
+  if (userData.is_finance_officer || userData.is_finance_office) {
+    addRoleTag("Finance Officer");
+    addRoleTag("Accounts");
+  }
+  if (userData.is_organiser_student) addRoleTag("Student Organizer");
+  if (userData.is_volunteer) addRoleTag("Volunteer");
+  if (userData.is_service_it) addRoleTag("IT");
+  if (userData.is_service_venue || userData.is_venue_manager) addRoleTag("Venue");
+  if (userData.is_service_catering) addRoleTag("Catering");
+  if (userData.is_service_stalls) addRoleTag("Stalls/Misc");
+  if (userData.is_service_security) addRoleTag("Security");
 
   return Array.from(tags.values());
 };
@@ -213,7 +344,8 @@ const getRoleTagClassName = (roleTag: string): string => {
     normalizedRoleTag.includes("it") ||
     normalizedRoleTag.includes("venue") ||
     normalizedRoleTag.includes("catering") ||
-    normalizedRoleTag.includes("stall")
+    normalizedRoleTag.includes("stall") ||
+    normalizedRoleTag.includes("security")
   ) {
     return "text-gray-800 font-medium bg-teal-100 px-2 py-1 rounded-full text-xs inline-block";
   }
