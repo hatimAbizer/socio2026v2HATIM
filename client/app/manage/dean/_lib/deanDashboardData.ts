@@ -12,6 +12,7 @@ type ApprovalRequestJoinRow = {
   entity_type?: string | null;
   entity_ref?: string | null;
   organizing_dept?: string | null;
+  organizing_school?: string | null;
   campus_hosted_at?: string | null;
   status?: string | null;
   submitted_at?: string | null;
@@ -335,7 +336,7 @@ export async function fetchDeanDashboardData({
 
       const scopeCandidate = normalizeText(
         isFestEntity ? festRow?.organizing_school : eventRow?.organizing_school
-      ).toLowerCase() || normalizeText(requestRow.organizing_dept).toLowerCase();
+      ).toLowerCase() || normalizeText(requestRow.organizing_school).toLowerCase();
 
       if (normalizedSchoolId && scopeCandidate !== normalizedSchoolId) {
         return null;
@@ -394,14 +395,15 @@ export async function fetchDeanDashboardData({
           id,
           entity_type,
           entity_ref,
-          organizing_dept
+          organizing_dept,
+          organizing_school
         )
       `
     )
     .eq("role_code", "DEAN");
 
   if (normalizedSchoolId) {
-    kpiStepsQuery = kpiStepsQuery.eq("approval_requests.organizing_dept", normalizedSchoolId);
+    kpiStepsQuery = kpiStepsQuery.eq("approval_requests.organizing_school", normalizedSchoolId);
   }
 
   const { data: kpiStepsData, error: kpiStepsError } = await kpiStepsQuery;

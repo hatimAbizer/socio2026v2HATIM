@@ -854,6 +854,26 @@ const normalizeCategoryValue = (value: unknown): string => {
   return mapped?.value || "";
 };
 
+const normalizeSchoolValue = (value: unknown): string => {
+  const first = normalizeStringArray(value)[0];
+  if (!first) return "";
+
+  const directValueMatch = schoolOptions.find((school) => school.value === first);
+  if (directValueMatch) return directValueMatch.value;
+
+  const directLabelMatch = schoolOptions.find((school) => school.label === first);
+  if (directLabelMatch) return directLabelMatch.value;
+
+  const canonicalEntry = toCanonical(first);
+  const mapped = schoolOptions.find(
+    (school) =>
+      toCanonical(school.value) === canonicalEntry ||
+      toCanonical(school.label) === canonicalEntry
+  );
+
+  return mapped?.value || first;
+};
+
 const normalizeCampusEntry = (value: string): string | null => {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -1259,10 +1279,13 @@ export default function EventForm({
               value: normalizeFestOptionValue(f),
               label: normalizeFestOptionLabel(f),
               departmentAccess: normalizeDepartmentAccess(f.department_access),
-              organizingSchool:
-                typeof f.organizing_school === "string"
-                  ? f.organizing_school.trim()
-                  : "",
+              organizingSchool: normalizeSchoolValue(
+                f.organizing_school ??
+                  f.organizingSchool ??
+                  f.school ??
+                  f.school_scope ??
+                  f.schoolScope
+              ),
               organizingDept:
                 typeof f.organizing_dept === "string" ? f.organizing_dept.trim() : "",
               category: normalizeCategoryValue(f.category),

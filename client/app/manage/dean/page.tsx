@@ -39,19 +39,21 @@ function isAssignmentActive(assignment: Record<string, unknown>, nowDate: Date =
   return true;
 }
 
-function resolveDeanDepartmentScope(userProfile: Record<string, unknown>): string {
+function resolveDeanSchoolScope(userProfile: Record<string, unknown>): string {
   const assignmentRows = Array.isArray(userProfile.role_assignments)
     ? (userProfile.role_assignments as Array<Record<string, unknown>>)
     : [];
 
-  const scopedDepartment = assignmentRows.find(
+  const scopedSchool = assignmentRows.find(
     (assignment) =>
       String(assignment.role_code || "").trim().toUpperCase() === "DEAN" &&
       isAssignmentActive(assignment) &&
-      normalizeScope(assignment.department_scope).length > 0
+      normalizeScope(assignment.school_scope || assignment.department_scope).length > 0
   );
 
-  const assignmentScope = normalizeScope(scopedDepartment?.department_scope);
+  const assignmentScope = normalizeScope(
+    scopedSchool?.school_scope || scopedSchool?.department_scope
+  );
   if (assignmentScope) {
     return assignmentScope;
   }
@@ -141,8 +143,8 @@ export default async function DeanManagePage() {
     redirect("/manage");
   }
 
-  const deanDepartmentScope = resolveDeanDepartmentScope(userProfile);
-  if (!isMasterAdmin && !deanDepartmentScope) {
+  const deanSchoolScope = resolveDeanSchoolScope(userProfile);
+  if (!isMasterAdmin && !deanSchoolScope) {
     redirect("/error");
   }
 
@@ -163,7 +165,7 @@ export default async function DeanManagePage() {
   try {
     dashboardData = await fetchDeanDashboardData({
       supabase,
-      schoolId: isMasterAdmin ? null : deanDepartmentScope,
+      schoolId: isMasterAdmin ? null : deanSchoolScope,
       campusScope: isMasterAdmin ? null : campusName,
       l1Threshold,
     });
@@ -180,7 +182,7 @@ export default async function DeanManagePage() {
         </div>
       ) : null}
       <DeanDashboardClient
-        schoolName={isMasterAdmin ? "All Departments" : deanDepartmentScope}
+        schoolName={isMasterAdmin ? "All Departments" : deanSchoolScope}
         l1Threshold={l1Threshold}
         initialQueue={dashboardData.queue}
         initialMetrics={dashboardData.metrics}

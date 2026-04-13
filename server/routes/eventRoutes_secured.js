@@ -164,21 +164,32 @@ const createTeacherApprovalRequestForChildEvent = async ({ eventRecord, userInfo
     const nowIso = new Date().toISOString();
     const isBudgetRelated = Number(eventRecord.registration_fee || 0) > 0;
 
-    const insertedRequest = await insert("approval_requests", [
-      {
-        request_id: requestId,
-        entity_type: "FEST_CHILD_EVENT",
-        entity_ref: eventRecord.event_id,
-        parent_fest_ref: eventRecord.fest_id,
-        requested_by_user_id: userInfo?.id || null,
-        requested_by_email: userInfo?.email || null,
-        organizing_dept: eventRecord.organizing_dept || null,
-        campus_hosted_at: eventRecord.campus_hosted_at || null,
-        is_budget_related: isBudgetRelated,
-        status: "UNDER_REVIEW",
-        submitted_at: nowIso,
-      },
-    ]);
+    const requestPayload = {
+      request_id: requestId,
+      entity_type: "FEST_CHILD_EVENT",
+      entity_ref: eventRecord.event_id,
+      parent_fest_ref: eventRecord.fest_id,
+      requested_by_user_id: userInfo?.id || null,
+      requested_by_email: userInfo?.email || null,
+      organizing_dept: eventRecord.organizing_dept || null,
+      organizing_school: eventRecord.organizing_school || null,
+      campus_hosted_at: eventRecord.campus_hosted_at || null,
+      is_budget_related: isBudgetRelated,
+      status: "UNDER_REVIEW",
+      submitted_at: nowIso,
+    };
+
+    let insertedRequest;
+    try {
+      insertedRequest = await insert("approval_requests", [requestPayload]);
+    } catch (insertError) {
+      if (!isMissingColumnError(insertError, "organizing_school")) {
+        throw insertError;
+      }
+
+      delete requestPayload.organizing_school;
+      insertedRequest = await insert("approval_requests", [requestPayload]);
+    }
 
     const approvalRequest = insertedRequest?.[0];
     if (!approvalRequest) {
@@ -256,6 +267,37 @@ const isBudgetRelatedFromEventPayload = ({
 
   const parsedFee = Number(registrationFee || 0);
   return Boolean(claimsApplicable) || (Number.isFinite(parsedFee) && parsedFee > 0);
+};
+
+const parseBooleanPreference = (value) => {
+  if (value === true || value === "true" || value === 1 || value === "1") {
+    return true;
+  }
+
+  if (value === false || value === "false" || value === 0 || value === "0") {
+    return false;
+  }
+
+  return null;
+};
+
+const resolveStandaloneApprovalPreferences = (
+  payload = {},
+  fallback = { requiresHodApproval: true, requiresDeanApproval: true }
+) => {
+  const hodPreference = parseBooleanPreference(
+    payload?.requires_hod_approval ?? payload?.standaloneRequiresHodApproval
+  );
+  const deanPreference = parseBooleanPreference(
+    payload?.requires_dean_approval ?? payload?.standaloneRequiresDeanApproval
+  );
+
+  return {
+    requiresHodApproval:
+      hodPreference === null ? Boolean(fallback?.requiresHodApproval) : hodPreference,
+    requiresDeanApproval:
+      deanPreference === null ? Boolean(fallback?.requiresDeanApproval) : deanPreference,
+  };
 };
 
 const parseCustomFieldsForNoFinancialRequirements = (customFieldsValue) => {
@@ -349,6 +391,7 @@ const createApprovalRequestWithSteps = async ({
   parentFestRef = null,
   userInfo,
   organizingDept = null,
+  organizingSchool = null,
   campusHostedAt = null,
   isBudgetRelated = false,
   steps = [],
@@ -371,21 +414,32 @@ const createApprovalRequestWithSteps = async ({
 
   try {
     const nowIso = new Date().toISOString();
-    const insertedRequest = await insert("approval_requests", [
-      {
-        request_id: `APR-${normalizedEntityType}-${normalizedEntityRef}-${Date.now()}`,
-        entity_type: normalizedEntityType,
-        entity_ref: normalizedEntityRef,
-        parent_fest_ref: parentFestRef,
-        requested_by_user_id: userInfo?.id || null,
-        requested_by_email: userInfo?.email || null,
-        organizing_dept: organizingDept,
-        campus_hosted_at: campusHostedAt,
-        is_budget_related: Boolean(isBudgetRelated),
-        status: "UNDER_REVIEW",
-        submitted_at: nowIso,
-      },
-    ]);
+    const requestPayload = {
+      request_id: `APR-${normalizedEntityType}-${normalizedEntityRef}-${Date.now()}`,
+      entity_type: normalizedEntityType,
+      entity_ref: normalizedEntityRef,
+      parent_fest_ref: parentFestRef,
+      requested_by_user_id: userInfo?.id || null,
+      requested_by_email: userInfo?.email || null,
+      organizing_dept: organizingDept,
+      organizing_school: organizingSchool,
+      campus_hosted_at: campusHostedAt,
+      is_budget_related: Boolean(isBudgetRelated),
+      status: "UNDER_REVIEW",
+      submitted_at: nowIso,
+    };
+
+    let insertedRequest;
+    try {
+      insertedRequest = await insert("approval_requests", [requestPayload]);
+    } catch (insertError) {
+      if (!isMissingColumnError(insertError, "organizing_school")) {
+        throw insertError;
+      }
+
+      delete requestPayload.organizing_school;
+      insertedRequest = await insert("approval_requests", [requestPayload]);
+    }
 
     const approvalRequest = insertedRequest?.[0];
     if (!approvalRequest) {
@@ -431,34 +485,58 @@ const createStandaloneApprovalRequestForEvent = async ({
   eventRecord,
   userInfo,
   isBudgetRelated,
+  requiresHodApproval = true,
+  requiresDeanApproval = true,
 }) => {
   const eventId = String(eventRecord?.event_id || "").trim();
   if (!eventId) {
     return null;
   }
-  const approvalSteps = [
-    {
+
+  const approvalSteps = [];
+  let stepSequence = 1;
+
+  if (Boolean(requiresHodApproval)) {
+    approvalSteps.push({
       stepCode: "HOD",
       roleCode: ROLE_CODES.HOD,
-      stepGroup: 1,
-      sequenceOrder: 1,
+      stepGroup: stepSequence,
+      sequenceOrder: stepSequence,
       requiredCount: 1,
-    },
-    {
+    });
+    stepSequence += 1;
+  }
+
+  if (Boolean(requiresDeanApproval)) {
+    approvalSteps.push({
       stepCode: "DEAN",
       roleCode: ROLE_CODES.DEAN,
-      stepGroup: 2,
-      sequenceOrder: 2,
+      stepGroup: stepSequence,
+      sequenceOrder: stepSequence,
       requiredCount: 1,
-    },
-  ];
+    });
+    stepSequence += 1;
+  }
+
+  if (approvalSteps.length === 0) {
+    return null;
+  }
 
   if (Boolean(isBudgetRelated)) {
     approvalSteps.push({
       stepCode: "CFO",
       roleCode: ROLE_CODES.CFO,
-      stepGroup: 3,
-      sequenceOrder: 3,
+      stepGroup: stepSequence,
+      sequenceOrder: stepSequence,
+      requiredCount: 1,
+    });
+    stepSequence += 1;
+
+    approvalSteps.push({
+      stepCode: "ACCOUNTS",
+      roleCode: ROLE_CODES.ACCOUNTS,
+      stepGroup: stepSequence,
+      sequenceOrder: stepSequence,
       requiredCount: 1,
     });
   }
@@ -469,10 +547,16 @@ const createStandaloneApprovalRequestForEvent = async ({
     parentFestRef: null,
     userInfo,
     organizingDept: eventRecord?.organizing_dept || null,
+    organizingSchool: eventRecord?.organizing_school || null,
     campusHostedAt: eventRecord?.campus_hosted_at || null,
     isBudgetRelated: Boolean(isBudgetRelated),
     steps: approvalSteps,
   });
+
+  if (approvalRequest) {
+    approvalRequest.primary_role_code = approvalSteps[0]?.roleCode || null;
+    approvalRequest.primary_step_code = approvalSteps[0]?.stepCode || null;
+  }
 
   return approvalRequest;
 };
@@ -1945,6 +2029,10 @@ router.post(
         registrationFee: parsedRegistrationFee,
         noFinancialRequirements: noFinancialRequirementsRequested,
       });
+      const standaloneApprovalPreferences = resolveStandaloneApprovalPreferences(req.body, {
+        requiresHodApproval: true,
+        requiresDeanApproval: true,
+      });
 
       let parentFest = null;
       let childFestApproved = false;
@@ -2266,6 +2354,16 @@ router.post(
         !shouldArchiveOnCreate &&
         !Boolean(normalizedFestReference);
 
+      if (
+        queueStandaloneApproval &&
+        !standaloneApprovalPreferences.requiresHodApproval &&
+        !standaloneApprovalPreferences.requiresDeanApproval
+      ) {
+        return res.status(400).json({
+          error: "Select at least one standalone approval stage (HOD or Dean).",
+        });
+      }
+
       if (queueTeacherApproval) {
         primaryApprovalRequest = await createTeacherApprovalRequestForChildEvent({
           eventRecord: createdEventRecord,
@@ -2280,6 +2378,8 @@ router.post(
           eventRecord: createdEventRecord,
           userInfo: req.userInfo,
           isBudgetRelated: isStandaloneBudgetRelated,
+          requiresHodApproval: standaloneApprovalPreferences.requiresHodApproval,
+          requiresDeanApproval: standaloneApprovalPreferences.requiresDeanApproval,
         });
 
         if (primaryApprovalRequest) {
@@ -2723,6 +2823,10 @@ router.put(
         claimsApplicable,
         registrationFee: parsedRegistrationFee,
         noFinancialRequirements: noFinancialRequirementsRequested,
+      });
+      const standaloneApprovalPreferences = resolveStandaloneApprovalPreferences(req.body, {
+        requiresHodApproval: true,
+        requiresDeanApproval: true,
       });
       const organizerEmailInput = normalizeSingleStringField(req.body.organizer_email || "");
       const resolvedOrganizerEmail = normalizeEmailAddress(
@@ -3170,12 +3274,23 @@ router.put(
             nextApprovalState = "UNDER_REVIEW";
           }
         } else if (isStandalonePublish) {
+          if (
+            !standaloneApprovalPreferences.requiresHodApproval &&
+            !standaloneApprovalPreferences.requiresDeanApproval
+          ) {
+            return res.status(400).json({
+              error: "Select at least one standalone approval stage (HOD or Dean).",
+            });
+          }
+
           standaloneBudgetRelated = isStandaloneBudgetRelated;
 
           workflowApprovalRequest = await createStandaloneApprovalRequestForEvent({
             eventRecord: updatedEvent,
             userInfo: req.userInfo,
             isBudgetRelated: standaloneBudgetRelated,
+            requiresHodApproval: standaloneApprovalPreferences.requiresHodApproval,
+            requiresDeanApproval: standaloneApprovalPreferences.requiresDeanApproval,
           });
 
           if (workflowApprovalRequest) {

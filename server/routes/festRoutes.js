@@ -268,6 +268,7 @@ const formatApprovalPathLabel = ({ approvalWorkflow, isBudgetRelated }) => {
 
   if (Boolean(isBudgetRelated)) {
     stages.push("CFO");
+    stages.push("Accounts");
   }
 
   if (stages.length === 0) {
@@ -360,22 +361,33 @@ export const createFestApprovalRequest = async ({
 
   try {
     const nowIso = new Date().toISOString();
-    const insertedRequest = await insert("approval_requests", [
-      {
-        request_id: `APR-FEST-${festId}-${Date.now()}`,
-        entity_type: "FEST",
-        entity_ref: festId,
-        parent_fest_ref: null,
-        requested_by_user_id: userInfo?.id || null,
-        requested_by_email: userInfo?.email || null,
-        organizing_dept: festRecord?.organizing_dept || null,
-        campus_hosted_at:
-          festRecord?.campus_hosted_at || festRecord?.department_hosted_at || null,
-        is_budget_related: Boolean(isBudgetRelated),
-        status: "UNDER_REVIEW",
-        submitted_at: nowIso,
-      },
-    ]);
+    const requestPayload = {
+      request_id: `APR-FEST-${festId}-${Date.now()}`,
+      entity_type: "FEST",
+      entity_ref: festId,
+      parent_fest_ref: null,
+      requested_by_user_id: userInfo?.id || null,
+      requested_by_email: userInfo?.email || null,
+      organizing_dept: festRecord?.organizing_dept || null,
+      organizing_school: festRecord?.organizing_school || null,
+      campus_hosted_at:
+        festRecord?.campus_hosted_at || festRecord?.department_hosted_at || null,
+      is_budget_related: Boolean(isBudgetRelated),
+      status: "UNDER_REVIEW",
+      submitted_at: nowIso,
+    };
+
+    let insertedRequest;
+    try {
+      insertedRequest = await insert("approval_requests", [requestPayload]);
+    } catch (insertError) {
+      if (!isMissingColumnError(insertError, "organizing_school")) {
+        throw insertError;
+      }
+
+      delete requestPayload.organizing_school;
+      insertedRequest = await insert("approval_requests", [requestPayload]);
+    }
 
     const approvalRequest = insertedRequest?.[0];
     if (!approvalRequest) {
@@ -401,6 +413,16 @@ export const createFestApprovalRequest = async ({
         role_code: ROLE_CODES.CFO,
         step_group: 2,
         sequence_order: 2,
+        required_count: 1,
+        status: "PENDING",
+      });
+
+      approvalSteps.push({
+        approval_request_id: approvalRequest.id,
+        step_code: "ACCOUNTS",
+        role_code: ROLE_CODES.ACCOUNTS,
+        step_group: 3,
+        sequence_order: 3,
         required_count: 1,
         status: "PENDING",
       });

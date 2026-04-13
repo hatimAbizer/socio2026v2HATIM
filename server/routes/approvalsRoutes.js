@@ -385,6 +385,12 @@ const normalizeDepartmentScopeValue = (value) =>
     .toLowerCase()
     .replace(/\s+/g, " ");
 
+const normalizeSchoolScopeValue = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
 const isRoleAssignmentActive = (assignment) => {
   if (!assignment || assignment.is_active === false) {
     return false;
@@ -502,6 +508,158 @@ const resolveHodDepartmentScope = async (req) => {
   return departmentScope;
 };
 
+const resolveDeanSchoolScope = async (req) => {
+  if (req.__deanSchoolScope instanceof Set) {
+    return req.__deanSchoolScope;
+  }
+
+  const schoolScope = new Set();
+
+  const addScopeValue = (value) => {
+    const normalizedValue = normalizeSchoolScopeValue(value);
+    if (normalizedValue) {
+      schoolScope.add(normalizedValue);
+    }
+  };
+
+  addScopeValue(req.userInfo?.school_id);
+  addScopeValue(req.userInfo?.school);
+
+  const userId = String(req.userInfo?.id || "").trim();
+  if (userId) {
+    try {
+      const assignments = await queryAll("user_role_assignments", {
+        where: { user_id: userId, role_code: ROLE_CODES.DEAN },
+        select: "school_scope,department_scope,is_active,valid_from,valid_until",
+      });
+
+      for (const assignment of assignments || []) {
+        if (!isRoleAssignmentActive(assignment)) {
+          continue;
+        }
+
+        const schoolScopeValue = String(
+          assignment.school_scope || assignment.department_scope || ""
+        ).trim();
+        if (!schoolScopeValue) {
+          continue;
+        }
+
+        addScopeValue(schoolScopeValue);
+      }
+    } catch (error) {
+      if (isMissingRelationError(error)) {
+        // No RBAC scope table available.
+      } else if (isMissingColumnError(error, "school_scope")) {
+        try {
+          const fallbackAssignments = await queryAll("user_role_assignments", {
+            where: { user_id: userId, role_code: ROLE_CODES.DEAN },
+            select: "department_scope,is_active,valid_from,valid_until",
+          });
+
+          for (const assignment of fallbackAssignments || []) {
+            if (!isRoleAssignmentActive(assignment)) {
+              continue;
+            }
+
+            const schoolScopeValue = String(assignment.department_scope || "").trim();
+            if (!schoolScopeValue) {
+              continue;
+            }
+
+            addScopeValue(schoolScopeValue);
+          }
+        } catch (fallbackError) {
+          if (!isMissingRelationError(fallbackError)) {
+            throw fallbackError;
+          }
+        }
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  req.__deanSchoolScope = schoolScope;
+  return schoolScope;
+};
+
+const resolveApprovalRequestScopeValue = async ({
+  approvalRequest,
+  scopeColumn,
+  normalizeScopeValue,
+}) => {
+  const directScopeValue = normalizeScopeValue(approvalRequest?.[scopeColumn]);
+  if (directScopeValue) {
+    return directScopeValue;
+  }
+
+  const entityType = normalizeWorkflowStatus(approvalRequest?.entity_type);
+  const entityRef = String(approvalRequest?.entity_ref || "").trim();
+
+  if (!entityRef) {
+    return "";
+  }
+
+  try {
+    if (["EVENT", "STANDALONE_EVENT", "FEST_CHILD_EVENT"].includes(entityType)) {
+      const event = await queryOne("events", {
+        where: { event_id: entityRef },
+        select: `event_id,${scopeColumn}`,
+      });
+
+      return normalizeScopeValue(event?.[scopeColumn]);
+    }
+
+    if (entityType === "FEST") {
+      for (const tableName of ["fests", "fest"]) {
+        try {
+          const fest = await queryOne(tableName, {
+            where: { fest_id: entityRef },
+            select: `fest_id,${scopeColumn}`,
+          });
+
+          if (!fest) {
+            continue;
+          }
+
+          return normalizeScopeValue(fest?.[scopeColumn]);
+        } catch (error) {
+          if (isMissingRelationError(error) || isMissingColumnError(error, scopeColumn)) {
+            continue;
+          }
+
+          throw error;
+        }
+      }
+    }
+  } catch (error) {
+    if (isMissingRelationError(error) || isMissingColumnError(error, scopeColumn)) {
+      return "";
+    }
+
+    throw error;
+  }
+
+  return "";
+};
+
+const resolveApprovalRequestDepartmentScopeValue = async (approvalRequest) => {
+  return resolveApprovalRequestScopeValue({
+    approvalRequest,
+    scopeColumn: "organizing_dept",
+    normalizeScopeValue: normalizeDepartmentScopeValue,
+  });
+};
+
+const resolveApprovalRequestSchoolScopeValue = async (approvalRequest) => {
+  return resolveApprovalRequestScopeValue({
+    approvalRequest,
+    scopeColumn: "organizing_school",
+    normalizeScopeValue: normalizeSchoolScopeValue,
+  });
+};
+
 const canHodAccessApprovalRequest = async (req, approvalRequest) => {
   if (isMasterAdminRequest(req)) {
     return true;
@@ -512,8 +670,8 @@ const canHodAccessApprovalRequest = async (req, approvalRequest) => {
     return false;
   }
 
-  const requestDepartment = normalizeDepartmentScopeValue(
-    approvalRequest?.organizing_dept
+  const requestDepartment = await resolveApprovalRequestDepartmentScopeValue(
+    approvalRequest
   );
 
   if (!requestDepartment) {
@@ -521,6 +679,24 @@ const canHodAccessApprovalRequest = async (req, approvalRequest) => {
   }
 
   return departmentScope.has(requestDepartment);
+};
+
+const canDeanAccessApprovalRequest = async (req, approvalRequest) => {
+  if (isMasterAdminRequest(req)) {
+    return true;
+  }
+
+  const schoolScope = await resolveDeanSchoolScope(req);
+  if (schoolScope.size === 0) {
+    return false;
+  }
+
+  const requestSchool = await resolveApprovalRequestSchoolScopeValue(approvalRequest);
+  if (!requestSchool) {
+    return false;
+  }
+
+  return schoolScope.has(requestSchool);
 };
 
 const getUserRoleCodes = (req) => {
@@ -588,7 +764,27 @@ const canReadApprovalRequest = async (req, approvalRequest, steps = []) => {
     .filter(Boolean);
 
   if (stepRoleCodes.length > 0 && hasAnyRoleCode(userRoleCodes, stepRoleCodes)) {
-    return true;
+    const hasHodRoleForStep =
+      stepRoleCodes.includes(ROLE_CODES.HOD) &&
+      hasAnyRoleCode(userRoleCodes, [ROLE_CODES.HOD]);
+    if (hasHodRoleForStep && (await canHodAccessApprovalRequest(req, approvalRequest))) {
+      return true;
+    }
+
+    const hasDeanRoleForStep =
+      stepRoleCodes.includes(ROLE_CODES.DEAN) &&
+      hasAnyRoleCode(userRoleCodes, [ROLE_CODES.DEAN]);
+    if (hasDeanRoleForStep && (await canDeanAccessApprovalRequest(req, approvalRequest))) {
+      return true;
+    }
+
+    const nonScopedRoles = stepRoleCodes.filter(
+      (roleCode) => roleCode !== ROLE_CODES.HOD && roleCode !== ROLE_CODES.DEAN
+    );
+
+    if (nonScopedRoles.length > 0 && hasAnyRoleCode(userRoleCodes, nonScopedRoles)) {
+      return true;
+    }
   }
 
   const entityType = normalizeWorkflowStatus(approvalRequest.entity_type);
@@ -687,6 +883,26 @@ const ensureQueueAccess = async (req, res, roleCode, approvalRequest = null) => 
       if (!canAccessRequest) {
         res.status(403).json({
           error: "Access denied: this request does not belong to your department scope.",
+        });
+        return false;
+      }
+    }
+  }
+
+  if (normalizedRoleCode === ROLE_CODES.DEAN) {
+    const schoolScope = await resolveDeanSchoolScope(req);
+    if (schoolScope.size === 0) {
+      res.status(403).json({
+        error: "Access denied: no school scope is configured for this Dean account.",
+      });
+      return false;
+    }
+
+    if (approvalRequest) {
+      const canAccessRequest = await canDeanAccessApprovalRequest(req, approvalRequest);
+      if (!canAccessRequest) {
+        res.status(403).json({
+          error: "Access denied: this request does not belong to your school scope.",
         });
         return false;
       }
@@ -890,6 +1106,8 @@ router.get("/queues/:roleCode", async (req, res) => {
 
     const hodDepartmentScope =
       roleCode === ROLE_CODES.HOD ? await resolveHodDepartmentScope(req) : null;
+    const deanSchoolScope =
+      roleCode === ROLE_CODES.DEAN ? await resolveDeanSchoolScope(req) : null;
 
     const queueSteps = await queryAll("approval_steps", {
       where: { role_code: roleCode, status: "PENDING" },
@@ -914,12 +1132,21 @@ router.get("/queues/:roleCode", async (req, res) => {
         continue;
       }
 
+      if (
+        deanSchoolScope &&
+        deanSchoolScope.size > 0 &&
+        !(await canDeanAccessApprovalRequest(req, approvalRequest))
+      ) {
+        continue;
+      }
+
       items.push({
         request_id: approvalRequest.request_id,
         status: approvalRequest.status,
         entity_type: approvalRequest.entity_type,
         entity_ref: approvalRequest.entity_ref,
         organizing_dept: approvalRequest.organizing_dept,
+        organizing_school: approvalRequest.organizing_school,
         campus_hosted_at: approvalRequest.campus_hosted_at,
         step_code: step.step_code,
         step_group: step.step_group,
