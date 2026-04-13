@@ -1044,6 +1044,22 @@ router.get("/:festId", optionalAuth, checkRoleExpiration, async (req, res) => {
       }
     }
 
+    try {
+      const subheadsRecords = await queryAll("fest_subheads", {
+        where: { fest_id: fest.fest_id, is_active: true }
+      });
+      if (subheadsRecords && subheadsRecords.length > 0) {
+        fest.subheads = subheadsRecords.map(record => record.user_email);
+      } else {
+        fest.subheads = [];
+      }
+    } catch (subheadQueryError) {
+      if (!isMissingRelationError(subheadQueryError)) {
+        console.warn("Failed to fetch subheads:", subheadQueryError);
+      }
+      fest.subheads = [];
+    }
+
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     return res.status(200).json({ fest: mapFestResponse(fest) });
   } catch (error) {
@@ -1104,6 +1120,11 @@ router.post(
         : parseJsonLikeField(eventHeadsInput, []);
       const normalizedEventHeads = Array.isArray(eventHeads)
         ? eventHeads.map(normalizeEventHead).filter((head) => head.email)
+        : [];
+      
+      const subheadsInput = pickDefined(festData.subheads);
+      const subheads = Array.isArray(subheadsInput)
+        ? subheadsInput.map(email => String(email).trim()).filter(Boolean)
         : [];
 
       if (!title || !school || !dept) {
@@ -1314,6 +1335,22 @@ router.post(
           } catch (userError) {
             console.error(`Error updating organiser-student status for ${head.email}:`, userError);
           }
+        }
+      }
+
+      // Insert subheads into fest_subheads
+      if (subheads.length > 0) {
+        try {
+          const subheadsData = subheads.map(email => ({
+            fest_id,
+            user_email: email,
+            added_by: req.userInfo?.email || festPayload.created_by,
+            is_active: true
+          }));
+          await insert("fest_subheads", subheadsData);
+          console.log(`✅ Added ${subheadsData.length} subheads to fest ${fest_id}`);
+        } catch (subheadError) {
+          console.error("❌ Failed to add fest subheads:", subheadError);
         }
       }
 
@@ -1874,6 +1911,32 @@ router.put(
       } catch (eventHeadsError) {
         console.error(`❌ Error processing event heads:`, eventHeadsError.message);
         // Don't fail the entire update, just log and continue
+      }
+
+      // Update subheads if provided
+      const subheadsInput = pickDefined(updateData.subheads);
+      if (subheadsInput !== undefined) {
+        try {
+          const subheads = Array.isArray(subheadsInput)
+            ? subheadsInput.map(email => String(email).trim()).filter(Boolean)
+            : [];
+            
+          // Delete old subheads
+          await remove("fest_subheads", { fest_id: festId });
+          
+          if (subheads.length > 0) {
+            const subheadsData = subheads.map(email => ({
+              fest_id: festId,
+              user_email: email,
+              added_by: req.userInfo?.email || existingFest.created_by,
+              is_active: true
+            }));
+            await insert("fest_subheads", subheadsData);
+            console.log(`✅ Updated ${subheadsData.length} subheads for fest ${festId}`);
+          }
+        } catch (subheadsError) {
+          console.error(`❌ Error updating subheads:`, subheadsError.message);
+        }
       }
 
       console.log(`[response] About to send success response for fest ${festId}`);

@@ -56,13 +56,13 @@ export default function HodApprovalTable({
           <thead className="bg-slate-50">
             <tr>
               <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
-                Event Name
+                Event / Fest
               </th>
               <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                 Total Budget
               </th>
               <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
-                Coordinator Name
+                Coordinator
               </th>
               <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                 Date
@@ -76,16 +76,22 @@ export default function HodApprovalTable({
           <tbody className="divide-y divide-slate-100">
             {rows.map((row) => {
               const isWorking = activeRequestId === row.id;
+              const isFest = row.entityType === "fest";
+              const detailHref = isFest
+                ? `/fest/${row.eventId}`
+                : `/approvals/hod-dean/${row.eventId}`;
 
               return (
                 <tr key={row.id} className="hover:bg-slate-50/70">
                   <td className="px-5 py-4 align-top">
-                    <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-700">
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${isFest ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>
                       {row.entityType}
                     </span>
-                    <p className="text-sm font-semibold text-slate-900">{row.eventName}</p>
-                    <p className="mt-1 text-xs text-slate-500">ID: {row.eventId}</p>
-                    <p className="mt-1 text-xs text-slate-500">Department: {row.departmentName}</p>
+                    <p className="text-sm font-semibold text-slate-900 mt-1">{row.eventName}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">Dept: {row.departmentName}</p>
+                    <a href={detailHref} className="mt-1 inline-block text-xs font-semibold text-blue-600 hover:underline">
+                      View Details →
+                    </a>
                   </td>
                   <td className="px-5 py-4 align-top text-sm font-medium text-slate-800">
                     {currencyFormatter.format(row.totalBudget || 0)}

@@ -751,6 +751,7 @@ interface CreateFestState {
   allowedDepartments: string[];
   allowOutsiders: boolean;
   customFields: any[];
+  subheads: string[];
 }
 
 function DepartmentAndCategoryInputs({
@@ -1033,6 +1034,7 @@ interface CreateFestProps {
   faqs?: { question: string; answer: string }[];
   customFields?: any[];
   lifecycleStatus?: string | null;
+  subheads?: string[];
 }
 
 const FullPageSpinner: React.FC<{ text: string }> = ({ text }) => (
@@ -1151,6 +1153,7 @@ function CreateFestForm(props?: CreateFestProps) {
     allowedDepartments: [],
     allowOutsiders: false,
     customFields,
+    subheads: props?.subheads || [],
   });
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false); // Used for delete operation
@@ -1306,6 +1309,7 @@ function CreateFestForm(props?: CreateFestProps) {
               allowedDepartments: data.fest.department_access || [],
               allowOutsiders: data.fest.allow_outsiders === true || data.fest.allow_outsiders === 'true' || false,
               customFields: parsedCustomFields,
+              subheads: data.fest.subheads || [],
             });
             setRequiresBudgetApproval(parsedBudgetSettings?.requiresBudgetApproval ?? false);
             setRequiresHodApproval(true);
@@ -1625,6 +1629,13 @@ function CreateFestForm(props?: CreateFestProps) {
               newErrors.allowedCampuses = "Select at least one campus";
             else delete newErrors.allowedCampuses;
             break;
+          case "subheadEmail":
+            if (!(value as string).trim())
+              newErrors.subheadEmail = "Subhead email is required";
+            else if (!isValidEmail(value as string))
+              newErrors.subheadEmail = "Invalid email format";
+            else delete newErrors.subheadEmail;
+            break;
         }
       }
       setErrors(newErrors);
@@ -1637,6 +1648,7 @@ function CreateFestForm(props?: CreateFestProps) {
       formData.minParticipants,
       formData.maxParticipants,
       isEditMode,
+      formData.subheads,
     ] // Use prop isEditMode here
   );
 
@@ -2246,6 +2258,7 @@ function CreateFestForm(props?: CreateFestProps) {
         // Always include festImageUrl so backend always updates the DB column
         festImageUrl: finalImageUrl,
         is_draft: saveAsDraft,
+        subheads: formData.subheads,
         ...(isPublishingDraft ? { send_notifications: true } : {}),
       };
 
@@ -2648,6 +2661,45 @@ function CreateFestForm(props?: CreateFestProps) {
 
       return nextErrors;
     });
+  };
+
+  const [subheadInput, setSubheadInput] = useState("");
+  const addSubhead = () => {
+    const email = normalizeEmail(subheadInput);
+    if (!email) {
+      setErrors(prev => ({ ...prev, subheadEmail: "Please enter an email" }));
+      return;
+    }
+    if (!isValidEmail(email)) {
+      setErrors(prev => ({ ...prev, subheadEmail: "Invalid email format" }));
+      return;
+    }
+    if (formData.subheads.includes(email)) {
+      setErrors(prev => ({ ...prev, subheadEmail: "Email already added" }));
+      return;
+    }
+    if (formData.subheads.length >= 20) {
+      setErrors(prev => ({ ...prev, subheadEmail: "Max 20 subheads allowed" }));
+      return;
+    }
+
+    setFormData(prev => ({
+      ...prev,
+      subheads: [...prev.subheads, email]
+    }));
+    setSubheadInput("");
+    setErrors(prev => {
+      const next = { ...prev };
+      delete next.subheadEmail;
+      return next;
+    });
+  };
+
+  const removeSubhead = (emailToRemove: string) => {
+    setFormData(prev => ({
+      ...prev,
+      subheads: prev.subheads.filter(email => email !== emailToRemove)
+    }));
   };
 
   const minOpeningDate = new Date(currentDateRef.current);
@@ -3503,6 +3555,90 @@ function CreateFestForm(props?: CreateFestProps) {
                       </div>
                     ))}
                   </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-6 mt-6">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+                    <div className="flex items-start gap-3">
+                      <div className="bg-[#154CB3] rounded-full w-8 h-8 flex items-center justify-center shrink-0 mt-0.5">
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 16 16"
+                          fill="currentColor"
+                          className="size-4 text-white"
+                        >
+                          <path d="M8 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM3.156 11.763c.16-.629.44-1.21.813-1.72a2.5 2.5 0 0 0-2.725 1.377c-.136.287.102.58.418.58h1.449c.01-.077.025-.156.045-.237ZM12.847 11.763c.02.08.036.16.046.237h1.446c.316 0 .554-.293.417-.579a2.5 2.5 0 0 0-2.722-1.378c.374.51.653 1.09.813 1.72ZM14 7.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM3.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM5 13c-.552 0-1.013-.455-.876-.99a4.002 4.002 0 0 1 7.753 0c.136.535-.324.99-.877.99H5Z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <h3 className="text-base sm:text-lg font-bold text-[#063168]">
+                          Sub-heads (optional, max 20)
+                        </h3>
+                        <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
+                          Assistants for fest coordination.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 mb-4">
+                    <div className="flex-1">
+                      <input
+                        type="email"
+                        placeholder="subhead@christuniversity.in"
+                        value={subheadInput}
+                        onChange={(e) => setSubheadInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            addSubhead();
+                          }
+                        }}
+                        className={`w-full px-4 py-2.5 rounded-lg border ${
+                          errors.subheadEmail ? "border-red-500" : "border-gray-300"
+                        } focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent transition-all text-sm bg-white`}
+                      />
+                      {errors.subheadEmail && (
+                        <p className="text-red-500 text-xs mt-1">
+                          {errors.subheadEmail}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addSubhead}
+                      disabled={formData.subheads.length >= 20 || !normalizeEmail(subheadInput)}
+                      className="bg-[#063168] px-4 py-2.5 rounded-lg text-white cursor-pointer text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed h-fit"
+                    >
+                      Add
+                    </button>
+                  </div>
+
+                  {formData.subheads.length === 0 && (
+                    <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-5 text-sm text-slate-500">
+                      No sub-heads added yet.
+                    </div>
+                  )}
+
+                  {formData.subheads.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {formData.subheads.map((email, i) => (
+                        <div key={i} className="inline-flex items-center gap-2 bg-blue-50 text-[#154CB3] border border-blue-200 px-3 py-1.5 rounded-full text-sm">
+                          <span className="truncate max-w-[200px]">{email}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeSubhead(email)}
+                            className="text-blue-400 hover:text-red-500 transition-colors"
+                            aria-label={`Remove ${email}`}
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4">
+                              <path fillRule="evenodd" d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14Zm2.78-4.22a.75.75 0 0 1-1.06 0L8 9.06l-1.72 1.72a.75.75 0 1 1-1.06-1.06L6.94 8 5.22 6.28a.75.75 0 0 1 1.06-1.06L8 6.94l1.72-1.72a.75.75 0 1 1 1.06 1.06L9.06 8l1.72 1.72a.75.75 0 0 1 0 1.06Z" clipRule="evenodd" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Additional Fest Details Section */}
