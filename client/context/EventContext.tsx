@@ -17,6 +17,9 @@ export interface EventForCard {
   is_archived?: boolean | null;
   is_draft?: boolean | null;
   workflow_status?: string | null;
+  created_by?: string | null;
+  organizer_email?: string | null;
+  organiser_email?: string | null;
 }
 
 export interface CarouselDisplayImage {
@@ -66,6 +69,7 @@ export interface FetchedEvent {
   prizes: string | string[] | null;
   custom_fields: any[] | null;
   organizer_email: string | null;
+  organiser_email?: string | null;
   organizer_phone: number | string | null;
   whatsapp_invite_link: string | null;
   organizing_dept: string | null;
@@ -245,6 +249,9 @@ const toEventCard = (event: FetchedEvent): EventForCard => {
     is_archived: event.is_archived,
     is_draft: event.is_draft,
     workflow_status: event.workflow_status ?? null,
+    created_by: event.created_by ?? null,
+    organizer_email: event.organizer_email ?? null,
+    organiser_email: event.organiser_email ?? null,
   };
 };
 

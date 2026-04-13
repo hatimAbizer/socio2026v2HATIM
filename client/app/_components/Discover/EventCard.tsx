@@ -22,6 +22,9 @@ interface EventCardProps {
   archivedVisualMode?: "tag" | "muted";
   onArchiveToggle?: (eventId: string, shouldArchive: boolean) => Promise<void>;
   isArchiveLoading?: boolean;
+  createdBy?: string | null;
+  organizerEmail?: string | null;
+  organiserEmail?: string | null;
 }
 
 export const EventCard = ({
@@ -41,12 +44,28 @@ export const EventCard = ({
   archivedVisualMode = "tag",
   onArchiveToggle,
   isArchiveLoading = false,
+  createdBy,
+  organizerEmail,
+  organiserEmail,
 }: EventCardProps) => {
   const { userData, session, isLoading: authLoading } = useAuth();
 
+  const normalizeEmail = (value: unknown) =>
+    String(value ?? "").trim().toLowerCase();
+
   const isOutsiderUser = userData?.organization_type === "outsider";
   const showOutsiderBadge = !authLoading && isOutsiderUser && Boolean(allowOutsiders);
-  const isAdminOrOrganizer = !authLoading && (userData?.is_organiser || userData?.is_masteradmin);
+  const isMasterAdmin = !authLoading && Boolean(userData?.is_masteradmin);
+  const isOrganizer = !authLoading && Boolean(userData?.is_organiser);
+  const currentUserEmail = normalizeEmail(userData?.email);
+  const ownershipCandidates = [createdBy, organizerEmail, organiserEmail]
+    .map((owner) => normalizeEmail(owner))
+    .filter(Boolean);
+  const isOwner =
+    ownershipCandidates.length > 0 &&
+    Boolean(currentUserEmail) &&
+    ownershipCandidates.includes(currentUserEmail);
+  const canManageEvent = isMasterAdmin || (isOrganizer && isOwner);
   const reminderAuthToken = authToken || session?.access_token || "";
 
   const eventSlug = idForLink;
@@ -58,7 +77,7 @@ export const EventCard = ({
   const displayTime = formatTime(time, "Time TBD");
 
   const showArchivedTag =
-    isArchived && isAdminOrOrganizer && archivedVisualMode === "tag";
+    isArchived && canManageEvent && archivedVisualMode === "tag";
   const shouldMuteArchivedCard = isArchived && archivedVisualMode === "muted";
 
   return (
@@ -220,7 +239,7 @@ export const EventCard = ({
             <span className="truncate">{location}</span>
           </div>
         </div>
-        {!authLoading && isAdminOrOrganizer ? (
+        {!authLoading && canManageEvent ? (
           <div className="mt-auto pt-2 border-t border-gray-200 flex flex-wrap gap-x-4 gap-y-2">
             <Link
               href={participantsPageUrl}

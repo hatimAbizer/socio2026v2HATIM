@@ -26,6 +26,9 @@ interface FetchedEvent {
   organizing_dept: string | null;
   allow_outsiders?: boolean | null;
   is_archived?: boolean | null;
+  created_by?: string | null;
+  organizer_email?: string | null;
+  organiser_email?: string | null;
 }
 
 interface FilterOption {
@@ -128,7 +131,25 @@ const EventsPageContent = () => {
     return () => window.clearTimeout(timeoutId);
   }, [categoryParam, router, searchParam, searchQuery]);
 
-  const isAdminOrOrganizer = Boolean(userData?.is_organiser || userData?.is_masteradmin);
+  const isMasterAdmin = Boolean(userData?.is_masteradmin);
+  const normalizeEmail = (value: unknown) =>
+    String(value ?? "").trim().toLowerCase();
+  const currentUserEmail = normalizeEmail(userData?.email);
+  const isOwnedByCurrentUser = (event: FetchedEvent) => {
+    if (isMasterAdmin) return true;
+    if (!currentUserEmail) return false;
+
+    const ownershipCandidates = [
+      event.created_by,
+      event.organizer_email,
+      event.organiser_email,
+    ]
+      .map((owner) => normalizeEmail(owner))
+      .filter(Boolean);
+
+    if (ownershipCandidates.length === 0) return false;
+    return ownershipCandidates.includes(currentUserEmail);
+  };
   
   const eventsToFilter = Array.isArray(allEvents) ? allEvents : [];
 
@@ -198,8 +219,9 @@ const EventsPageContent = () => {
     if (localArchivedIds.has(event.event_id)) {
       return false;
     }
-    if (!isAdminOrOrganizer && event.is_archived) {
-      return false;
+    if (event.is_archived) {
+      if (isMasterAdmin) return true;
+      return isOwnedByCurrentUser(event);
     }
     
     // Category filter
@@ -424,6 +446,9 @@ const EventsPageContent = () => {
                         isArchived={Boolean(event.is_archived)}
                         onArchiveToggle={handleToggleArchive}
                         isArchiveLoading={archiveUpdatingIds.has(event.event_id)}
+                        createdBy={event.created_by}
+                        organizerEmail={event.organizer_email}
+                        organiserEmail={event.organiser_email}
                       />
                     </div>
                   ))}

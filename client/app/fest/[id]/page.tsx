@@ -692,6 +692,9 @@ const FestPage = () => {
                           event.event_image_url ||
                           process.env.NEXT_PUBLIC_EVENT_IMAGE_PLACEHOLDER_URL!
                         }
+                        createdBy={event.created_by}
+                        organizerEmail={event.organizer_email}
+                        organiserEmail={(event as any).organiser_email ?? null}
                       />
                     </div>
                   );

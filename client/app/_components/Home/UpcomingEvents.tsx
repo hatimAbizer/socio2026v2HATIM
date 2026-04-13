@@ -20,16 +20,35 @@ const UpcomingEvents = () => {
     error: errorContext,
   } = useEvents();
   const { session, userData } = useAuth();
-  const isAdminOrOrganizer = Boolean(userData?.is_organiser || userData?.is_masteradmin);
+  const isMasterAdmin = Boolean(userData?.is_masteradmin);
+  const normalizeEmail = (value: unknown) =>
+    String(value ?? "").trim().toLowerCase();
+  const currentUserEmail = normalizeEmail(userData?.email);
+  const isOwnedByCurrentUser = (event: ContextEventForCard) => {
+    if (isMasterAdmin) return true;
+    if (!currentUserEmail) return false;
+
+    const ownershipCandidates = [
+      event.created_by,
+      event.organizer_email,
+      event.organiser_email,
+    ]
+      .map((owner) => normalizeEmail(owner))
+      .filter(Boolean);
+
+    if (ownershipCandidates.length === 0) return false;
+    return ownershipCandidates.includes(currentUserEmail);
+  };
 
   // Filter out archived events for normal users (including locally archived)
   const filteredUpcomingEvents = useMemo(() =>
     upcomingEvents.filter(event => {
       if (localArchivedIds.has(String(event.event_id))) return false;
-      if (isAdminOrOrganizer) return true;
-      return !event.is_archived;
+      if (!event.is_archived) return true;
+      if (isMasterAdmin) return true;
+      return isOwnedByCurrentUser(event);
     }),
-    [upcomingEvents, isAdminOrOrganizer, localArchivedIds]
+    [upcomingEvents, isMasterAdmin, localArchivedIds, currentUserEmail]
   );
 
   const handleToggleArchive = async (eventId: string, shouldArchive: boolean) => {
@@ -215,6 +234,9 @@ const UpcomingEvents = () => {
             archivedVisualMode: "muted" as const,
             onArchiveToggle: handleToggleArchive,
             isArchiveLoading: archiveUpdatingIds.has(String(event.event_id)),
+            createdBy: event.created_by,
+            organizerEmail: event.organizer_email,
+            organiserEmail: event.organiser_email,
           };
 
           return (

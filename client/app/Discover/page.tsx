@@ -78,6 +78,25 @@ const DiscoverPageContent = () => {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const isAdminOrOrganizer = Boolean(userData?.is_organiser || userData?.is_masteradmin);
+  const isMasterAdmin = Boolean(userData?.is_masteradmin);
+  const normalizeEmail = (value: unknown) =>
+    String(value ?? "").trim().toLowerCase();
+  const currentUserEmail = normalizeEmail(userData?.email);
+  const isOwnedByCurrentUser = (event: any) => {
+    if (isMasterAdmin) return true;
+    if (!currentUserEmail) return false;
+
+    const ownershipCandidates = [
+      event?.created_by,
+      event?.organizer_email,
+      event?.organiser_email,
+    ]
+      .map((owner) => normalizeEmail(owner))
+      .filter(Boolean);
+
+    if (ownershipCandidates.length === 0) return false;
+    return ownershipCandidates.includes(currentUserEmail);
+  };
 
   const [allFests, setAllFests] = useState<Fest[]>([]);
   const [isLoadingFests, setIsLoadingFests] = useState(true);
@@ -151,10 +170,11 @@ const DiscoverPageContent = () => {
 
   // Filter out archived events for normal users (including locally archived)
   const filterArchivedForNormalUsers = (events: any[]) => {
-    const filtered = events.filter(e => {
+    const filtered = events.filter((e) => {
       if (localArchivedIds.has(String(e.event_id))) return false;
-      if (isAdminOrOrganizer) return true;
-      return !e.is_archived;
+      if (!e.is_archived) return true;
+      if (isMasterAdmin) return true;
+      return isOwnedByCurrentUser(e);
     });
     return filtered;
   };
@@ -167,7 +187,7 @@ const DiscoverPageContent = () => {
     [filteredEvents]
   );
   const campusCarouselEventsFiltered = useMemo(() => {
-    if (isAdminOrOrganizer) {
+    if (isMasterAdmin) {
       return campusCarouselEvents;
     }
 
@@ -175,7 +195,7 @@ const DiscoverPageContent = () => {
       const eventId = image.link?.split("/").filter(Boolean).pop();
       return eventId ? visibleEventIds.has(eventId) : true;
     });
-  }, [campusCarouselEvents, isAdminOrOrganizer, visibleEventIds]);
+  }, [campusCarouselEvents, isMasterAdmin, visibleEventIds]);
 
   const filteredUpcomingFests = useMemo(() => {
     const filtered = allFests.filter((fest) => {

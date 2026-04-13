@@ -62,6 +62,7 @@ export default function EditEventPage() {
   const [isDraft, setIsDraft] = useState(false);
   const [isArchiveUpdating, setIsArchiveUpdating] = useState(false);
   const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
+  const [canEditLoadedEvent, setCanEditLoadedEvent] = useState(false);
 
   const isMasterAdminUser = Boolean((userData as any)?.is_masteradmin);
   const pendingApprovalLabel = getPendingApprovalLabel(workflowStatus);
@@ -72,24 +73,28 @@ export default function EditEventPage() {
 
     if (!session) {
       setIsLoading(false);
+      setCanEditLoadedEvent(false);
       setErrorMessage("You must be logged in to edit an event.");
       return;
     }
 
     if (!userData || !(userData.is_organiser || (userData as any).is_masteradmin)) {
       setIsLoading(false);
+      setCanEditLoadedEvent(false);
       setErrorMessage("You are not authorized to edit this event.");
       return;
     }
 
     if (!eventIdSlug) {
       setIsLoading(false);
+      setCanEditLoadedEvent(false);
       setErrorMessage("Event ID (slug) is missing from URL.");
       return;
     }
 
     async function fetchEventData() {
       setIsLoading(true);
+      setCanEditLoadedEvent(false);
       setErrorMessage(null);
       let response: Response | undefined = undefined;
       try {
@@ -121,6 +126,26 @@ export default function EditEventPage() {
         const data = parsedResponse.event;
 
         if (data) {
+          const currentUserEmail = normalizeEmail(userData?.email);
+          const ownershipCandidates = [
+            data.created_by,
+            data.organizer_email,
+            data.organiser_email,
+          ]
+            .map((owner: unknown) => normalizeEmail(owner))
+            .filter(Boolean);
+          const isOwner =
+            ownershipCandidates.length > 0 &&
+            Boolean(currentUserEmail) &&
+            ownershipCandidates.includes(currentUserEmail);
+
+          if (!isMasterAdminUser && !isOwner) {
+            setErrorMessage("You can only edit events you created.");
+            setInitialData(undefined);
+            setCanEditLoadedEvent(false);
+            return;
+          }
+
           const normalizedWorkflowStatus = String(data.workflow_status || "").trim().toLowerCase();
           setWorkflowStatus(normalizedWorkflowStatus || null);
 
@@ -423,9 +448,11 @@ export default function EditEventPage() {
           setExistingImageFileUrl(data.event_image_url || null);
           setExistingBannerFileUrl(data.banner_url || null);
           setExistingPdfFileUrl(data.pdf_url || null);
+          setCanEditLoadedEvent(true);
         } else {
           setErrorMessage("Event data not found in API response.");
           setInitialData(undefined);
+          setCanEditLoadedEvent(false);
         }
       } catch (e: any) {
         console.error("Error in fetchEventData:", e);
@@ -443,6 +470,7 @@ export default function EditEventPage() {
         }
         setErrorMessage(`Failed to load event data: ${detailedMessage}`);
         setInitialData(undefined);
+        setCanEditLoadedEvent(false);
       } finally {
         setIsLoading(false);
       }
@@ -572,6 +600,12 @@ export default function EditEventPage() {
       setErrorMessage("You are not authorized to perform this action.");
       setIsSubmitting(false);
       throw new Error("Not authorized."); // Ensure EventForm knows
+    }
+
+    if (!canEditLoadedEvent) {
+      setErrorMessage("You are not authorized to edit this event.");
+      setIsSubmitting(false);
+      throw new Error("Not authorized.");
     }
 
     if (isPendingApprovalLocked) {
@@ -949,7 +983,7 @@ export default function EditEventPage() {
   return initialData &&
     session &&
     userData &&
-    (userData.is_organiser || (userData as any).is_masteradmin) ? (
+    canEditLoadedEvent ? (
     <>
       {errorMessage && !isSubmitting && (
         <div className="max-w-4xl mx-auto px-4 sm:px-6 md:px-12 pt-4">

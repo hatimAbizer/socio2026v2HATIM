@@ -185,6 +185,9 @@ const transformToEventCardData = (event: FetchedEvent): EventForCard => {
     organizing_dept: event.organizing_dept || "TBD",
     allow_outsiders: event.allow_outsiders ?? false,
     is_archived: (event as any).is_archived ?? false,
+    created_by: event.created_by ?? null,
+    organizer_email: event.organizer_email ?? null,
+    organiser_email: (event as any).organiser_email ?? null,
   };
 };
 
