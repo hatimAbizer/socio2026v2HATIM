@@ -31,6 +31,14 @@ interface ActiveQR {
   eventTitle: string;
 }
 
+interface RoleMatrixAssignmentSummary {
+  role_code?: string;
+  role_tag?: string;
+  department_scope?: string | null;
+  department_label?: string | null;
+  campus_scope?: string | null;
+}
+
 interface Student {
   name: string;
   registerNumber: string;
@@ -56,12 +64,168 @@ interface UserData {
   avatar_url?: string;
   is_organiser?: boolean;
   is_support?: boolean;
+  is_masteradmin?: boolean;
+  is_hod?: boolean;
+  is_dean?: boolean;
+  is_cfo?: boolean;
+  is_finance_officer?: boolean;
+  is_volunteer?: boolean;
+  role_codes?: string[];
+  role_matrix_assignments?: RoleMatrixAssignmentSummary[];
+  role_matrix_tags?: string[];
+  role_matrix_department?: string | null;
   organization_type?: "christ_member" | "outsider";
 }
+
+const ROLE_CODE_PROFILE_LABELS: Record<string, string> = {
+  MASTER_ADMIN: "Master Admin",
+  HOD: "HOD",
+  DEAN: "Dean",
+  CFO: "CFO",
+  ORGANIZER_TEACHER: "Organiser",
+  ORGANIZER_STUDENT: "Student Organizer",
+  ORGANIZER_VOLUNTEER: "Volunteer",
+  SUPPORT: "Support",
+  FINANCE_OFFICER: "Finance Officer",
+  ACCOUNTS: "Accounts",
+  SERVICE_IT: "IT",
+  SERVICE_VENUE: "Venue",
+  SERVICE_CATERING: "Catering",
+  SERVICE_STALLS: "Stalls/Misc",
+};
+
+const normalizeText = (value: unknown): string => String(value || "").trim();
+
+const normalizeNullableText = (value: unknown): string | null => {
+  const normalized = normalizeText(value);
+  return normalized.length > 0 ? normalized : null;
+};
+
+const toRoleTag = (roleCode: string): string => {
+  if (ROLE_CODE_PROFILE_LABELS[roleCode]) {
+    return ROLE_CODE_PROFILE_LABELS[roleCode];
+  }
+
+  return roleCode
+    .toLowerCase()
+    .split("_")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+};
+
+const resolveRoleMatrixDepartment = (userData: UserData | null): string | null => {
+  if (!userData) {
+    return null;
+  }
+
+  const explicitDepartment = normalizeNullableText(userData.role_matrix_department);
+  if (explicitDepartment) {
+    return explicitDepartment;
+  }
+
+  if (!Array.isArray(userData.role_matrix_assignments)) {
+    return null;
+  }
+
+  for (const assignment of userData.role_matrix_assignments) {
+    const departmentLabel = normalizeNullableText(assignment?.department_label);
+    if (departmentLabel) {
+      return departmentLabel;
+    }
+
+    const departmentScope = normalizeNullableText(assignment?.department_scope);
+    if (departmentScope) {
+      return departmentScope;
+    }
+  }
+
+  return null;
+};
+
+const resolveProfileRoleTags = (userData: UserData | null): string[] => {
+  if (!userData) {
+    return [];
+  }
+
+  const tags = new Set<string>();
+
+  if (Array.isArray(userData.role_matrix_tags)) {
+    userData.role_matrix_tags
+      .map((tag) => normalizeText(tag))
+      .filter((tag) => tag.length > 0)
+      .forEach((tag) => tags.add(tag));
+  }
+
+  if (Array.isArray(userData.role_matrix_assignments)) {
+    userData.role_matrix_assignments.forEach((assignment) => {
+      const roleTag = normalizeNullableText(assignment?.role_tag);
+      if (roleTag) {
+        tags.add(roleTag);
+        return;
+      }
+
+      const roleCode = normalizeText(assignment?.role_code).toUpperCase();
+      if (roleCode) {
+        tags.add(toRoleTag(roleCode));
+      }
+    });
+  }
+
+  if (Array.isArray(userData.role_codes)) {
+    userData.role_codes
+      .map((roleCode) => normalizeText(roleCode).toUpperCase())
+      .filter((roleCode) => roleCode.length > 0)
+      .forEach((roleCode) => tags.add(toRoleTag(roleCode)));
+  }
+
+  if (userData.is_organiser) tags.add("Organiser");
+  if (userData.is_support) tags.add("Support");
+  if (userData.is_masteradmin) tags.add("Master Admin");
+  if (userData.is_hod) tags.add("HOD");
+  if (userData.is_dean) tags.add("Dean");
+  if (userData.is_cfo) tags.add("CFO");
+  if (userData.is_finance_officer) tags.add("Finance Officer");
+  if (userData.is_volunteer) tags.add("Volunteer");
+
+  return Array.from(tags.values());
+};
+
+const getRoleTagClassName = (roleTag: string): string => {
+  const normalizedRoleTag = normalizeText(roleTag).toLowerCase();
+
+  if (normalizedRoleTag.includes("master")) {
+    return "text-gray-800 font-medium bg-red-100 px-2 py-1 rounded-full text-xs inline-block";
+  }
+  if (normalizedRoleTag.includes("support")) {
+    return "text-gray-800 font-medium bg-green-100 px-2 py-1 rounded-full text-xs inline-block";
+  }
+  if (
+    normalizedRoleTag.includes("hod") ||
+    normalizedRoleTag.includes("dean") ||
+    normalizedRoleTag.includes("cfo") ||
+    normalizedRoleTag.includes("finance") ||
+    normalizedRoleTag.includes("accounts")
+  ) {
+    return "text-gray-800 font-medium bg-amber-100 px-2 py-1 rounded-full text-xs inline-block";
+  }
+  if (
+    normalizedRoleTag.includes("it") ||
+    normalizedRoleTag.includes("venue") ||
+    normalizedRoleTag.includes("catering") ||
+    normalizedRoleTag.includes("stall")
+  ) {
+    return "text-gray-800 font-medium bg-teal-100 px-2 py-1 rounded-full text-xs inline-block";
+  }
+
+  return "text-gray-800 font-medium bg-blue-100 px-2 py-1 rounded-full text-xs inline-block";
+};
 
 const StudentProfile = () => {
   const { userData, signOut, session, isLoading } = useAuth();
   const router = useRouter();
+  const normalizedUserData = (userData as UserData | null) || null;
+  const profileRoleTags = resolveProfileRoleTags(normalizedUserData);
 
   const [student, setStudent] = useState<Student>({
     name: "",
@@ -86,6 +250,9 @@ const StudentProfile = () => {
 
   useEffect(() => {
     if (userData) {
+      const resolvedRoleMatrixDepartment = resolveRoleMatrixDepartment(
+        (userData as UserData | null) || null
+      );
       const createdDate = userData.created_at
         ? new Date(userData.created_at)
         : new Date();
@@ -103,7 +270,9 @@ const StudentProfile = () => {
         email: userData.email || "",
         course: isStaff ? "Staff" : (userData.course || "Not specified"),
         school: userData.school || "Not specified",
-        department: isStaff ? "Staff" : (userData.department || "Not specified"),
+        department:
+          resolvedRoleMatrixDepartment ||
+          (isStaff ? "Staff" : userData.department || "Not specified"),
         campus: userData.campus || "Not specified",
         joined: joinedFormatted,
         profilePicture: userData.avatar_url || "",
@@ -439,27 +608,17 @@ const StudentProfile = () => {
                       {student.joined}
                     </p>
                   </div>
-                  {(userData.is_organiser || userData.is_support || (userData as any).is_masteradmin) && (
+                  {profileRoleTags.length > 0 && (
                     <div>
                       <h3 className="text-sm font-medium text-gray-500">
                         Role
                       </h3>
                       <div className="flex flex-wrap gap-2 mt-1">
-                        {userData.is_organiser && (
-                          <p className="text-gray-800 font-medium bg-blue-100 px-2 py-1 rounded-full text-xs inline-block">
-                            Organiser
+                        {profileRoleTags.map((roleTag) => (
+                          <p key={roleTag} className={getRoleTagClassName(roleTag)}>
+                            {roleTag}
                           </p>
-                        )}
-                        {userData.is_support && (
-                          <p className="text-gray-800 font-medium bg-green-100 px-2 py-1 rounded-full text-xs inline-block">
-                            Support
-                          </p>
-                        )}
-                        {(userData as any).is_masteradmin && (
-                          <p className="text-gray-800 font-medium bg-red-100 px-2 py-1 rounded-full text-xs inline-block">
-                            Master Admin
-                          </p>
-                        )}
+                        ))}
                       </div>
                     </div>
                   )}
