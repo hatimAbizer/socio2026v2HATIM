@@ -106,7 +106,7 @@ DROP POLICY IF EXISTS "approval_requests_select" ON public.approval_requests;
 CREATE POLICY "approval_requests_select" ON public.approval_requests
   FOR SELECT
   USING (
-    lower(coalesce(requester_email, '')) = public.current_auth_email()
+    lower(coalesce(requested_by_email, '')) = public.current_auth_email()
     OR public.current_user_has_any_role(ARRAY['MASTER_ADMIN', 'HOD', 'DEAN', 'CFO', 'ACCOUNTS', 'FINANCE_OFFICER'])
   );
 
@@ -120,7 +120,7 @@ CREATE POLICY "approval_steps_select" ON public.approval_steps
       SELECT 1
       FROM public.approval_requests ar
       WHERE ar.id = approval_request_id
-        AND lower(coalesce(ar.requester_email, '')) = public.current_auth_email()
+        AND lower(coalesce(ar.requested_by_email, '')) = public.current_auth_email()
     )
   );
 
