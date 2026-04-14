@@ -239,6 +239,81 @@ router.get(
   }
 );
 
+router.get(
+  "/approvers",
+  authenticateUser,
+  getUserInfo(),
+  checkRoleExpiration,
+  async (req, res) => {
+    try {
+      const dept = String(req.query.dept || req.query.department || "").trim();
+      const campus = String(req.query.campus || "").trim();
+
+      if (!dept || !campus) {
+        return res.status(400).json({
+          error: "Both dept and campus query parameters are required.",
+        });
+      }
+
+      const users = await queryAll("users");
+      const normalizedDept = dept.toLowerCase();
+      const normalizedCampus = campus.toLowerCase();
+
+      const hodCandidates = (users || []).filter((user) => {
+        const isHodRole =
+          user?.is_hod === true ||
+          String(user?.university_role || "").trim().toLowerCase() === "hod";
+        if (!isHodRole) return false;
+
+        const userDept = String(user?.department || "").trim().toLowerCase();
+        const userCampus = String(user?.campus || "").trim().toLowerCase();
+        return userDept === normalizedDept && userCampus === normalizedCampus;
+      });
+
+      const hod = hodCandidates[0] || null;
+      const school = String(hod?.school || "").trim();
+
+      const deanCandidates = (users || []).filter((user) => {
+        const isDeanRole =
+          user?.is_dean === true ||
+          String(user?.university_role || "").trim().toLowerCase() === "dean";
+        if (!isDeanRole) return false;
+
+        const userCampus = String(user?.campus || "").trim().toLowerCase();
+        if (userCampus !== normalizedCampus) return false;
+
+        if (!school) return true;
+        return String(user?.school || "").trim().toLowerCase() === school.toLowerCase();
+      });
+
+      const dean = deanCandidates[0] || null;
+
+      return res.status(200).json({
+        hod: hod
+          ? {
+              name: hod.name || null,
+              email: hod.email || null,
+              department: hod.department || null,
+              campus: hod.campus || null,
+              school: hod.school || null,
+            }
+          : null,
+        dean: dean
+          ? {
+              name: dean.name || null,
+              email: dean.email || null,
+              school: dean.school || null,
+              campus: dean.campus || null,
+            }
+          : null,
+      });
+    } catch (error) {
+      console.error("Error fetching approvers:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
 router.get("/:email", async (req, res) => {
   try {
     const { email } = req.params;

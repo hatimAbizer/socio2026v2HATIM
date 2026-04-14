@@ -1,373 +1,1107 @@
 import express from "express";
 import { authenticateUser, getUserInfo } from "../middleware/authMiddleware.js";
-import { queryOne, queryAll, update, insert } from "../config/database.js";
+import { insert, queryAll, queryOne, update } from "../config/database.js";
+import { ROLE_CODES, hasAnyRoleCode } from "../utils/roleAccessService.js";
 import {
-  sendSubmittedToHodEmail,
-  sendSubmittedToDeanEmail,
-  sendSubmittedToCfoEmail,
-  sendFullyApprovedEmail,
-  sendReturnedForRevisionEmail,
-  sendFinalRejectionEmail,
+  sendFestApprovedByHodToDeanEmail,
+  sendFestApprovedToAccountsEmail,
+  sendFestApprovedToCfoEmail,
+  sendFestFullyApprovedEmail,
+  sendFestRejectedEmail,
+  sendFestSubmittedToHodEmail,
 } from "../utils/emailService.js";
-import { ROLE_CODES } from "../utils/roleAccessService.js";
 
 const router = express.Router();
 
-// Middleware to ensure user is logged in
 router.use(authenticateUser, getUserInfo());
 
-/**
- * Returns an assigned user's email based on role, dept, and campus.
- */
-async function findApproverEmail(roleCode, dept, campus) {
-  const assignments = await queryAll('user_role_assignments', { 
-    where: { role_code: roleCode, is_active: true } 
-  });
-  
-  let match = assignments.find(a => 
-    (!dept || a.department_scope?.toLowerCase() === dept?.toLowerCase()) &&
-    (!campus || a.campus_scope?.toLowerCase() === campus?.toLowerCase())
-  );
-  
-  if (!match && assignments.length > 0) {
-    match = assignments[0];
-  }
+const FEST_STATUS = Object.freeze({
+  DRAFT: "draft",
+  PENDING_HOD: "pending_hod",
+  HOD_APPROVED: "hod_approved",
+  PENDING_DEAN: "pending_dean",
+  DEAN_APPROVED: "dean_approved",
+  PENDING_CFO: "pending_cfo",
+  CFO_APPROVED: "cfo_approved",
+  PENDING_ACCOUNTS: "pending_accounts",
+  FULLY_APPROVED: "fully_approved",
+  LIVE: "live",
+  REJECTED: "rejected",
+  FINAL_REJECTED: "final_rejected",
+});
 
-  if (match && match.user_id) {
-    const user = await queryOne('users', { where: { id: match.user_id } });
-    return user?.email;
-  }
-  
-  return null;
-}
+const REVIEWABLE_ACTIONS = new Set(["approved", "rejected", "returned_for_revision"]);
+const REJECTION_ACTIONS = new Set(["rejected", "returned_for_revision"]);
+const MIN_REVIEW_NOTE_LENGTH = 20;
+const MAX_REVIEW_NOTE_LENGTH = 2000;
+const BUDGET_SETTINGS_KEY = "__budget_approval__";
+const API_APP_URL =
+  process.env.APP_URL ||
+  process.env.NEXT_PUBLIC_APP_URL ||
+  process.env.FRONTEND_URL ||
+  "https://sociodev.vercel.app";
 
-/**
- * Helper to log to immutable approval_chain_log table
- */
-async function logApprovalAction(entityType, entityId, step, action, userEmail, userRole, notes, version) {
+const normalizeText = (value) => String(value || "").trim();
+const normalizeToken = (value) => normalizeText(value).toLowerCase();
+const normalizeEmail = (value) => normalizeText(value).toLowerCase();
+const asBoolean = (value) =>
+  value === true ||
+  value === 1 ||
+  value === "1" ||
+  normalizeToken(value) === "true" ||
+  normalizeToken(value) === "yes" ||
+  normalizeToken(value) === "on";
+
+const parseNumber = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return parsed;
+};
+
+const parseJsonArray = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+
   try {
-    await insert('approval_chain_log', [{
-      entity_type: entityType,
-      entity_id: entityId,
-      step: step,
-      action: action,
-      actor_email: userEmail,
-      actor_role: userRole,
-      notes: notes || null,
-      version: version || 1
-    }]);
-  } catch (err) {
-    console.error("Failed to insert approval log:", err);
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
-}
+};
 
-// Check exactly 1 resubmission per step 
-async function checkResubmissionLimit(entityType, entityId, step, version) {
-  const logs = await queryAll('approval_chain_log', {
-    where: { entity_type: entityType, entity_id: entityId, step: step, action: 'rejected', version: version }
+const getBudgetAmountFromCustomFields = (customFieldsValue) => {
+  const parsedFields = parseJsonArray(customFieldsValue);
+  const budgetField = parsedFields.find(
+    (field) =>
+      field &&
+      typeof field === "object" &&
+      !Array.isArray(field) &&
+      normalizeText(field.key) === BUDGET_SETTINGS_KEY
+  );
+
+  if (!budgetField || typeof budgetField !== "object") {
+    return { amount: 0, requiresBudgetApproval: false };
+  }
+
+  const settings = budgetField.value;
+  if (!settings || typeof settings !== "object") {
+    return { amount: 0, requiresBudgetApproval: false };
+  }
+
+  const requiresBudgetApproval = asBoolean(settings.requiresBudgetApproval);
+  const items = Array.isArray(settings.items) ? settings.items : [];
+
+  const amount = items.reduce((sum, item) => {
+    const price = parseNumber(item?.price);
+    const quantity = parseNumber(item?.quantity || 1);
+    const gstPercent = parseNumber(item?.gst);
+    const subtotal = Math.max(0, price) * Math.max(0, quantity || 1);
+    const gstAmount = subtotal * (Math.max(0, gstPercent) / 100);
+    return sum + subtotal + gstAmount;
+  }, 0);
+
+  return {
+    amount,
+    requiresBudgetApproval,
+  };
+};
+
+const getFestBudgetAmount = (festRecord) => {
+  const explicitAmount =
+    parseNumber(festRecord?.total_estimated_expense) ||
+    parseNumber(festRecord?.estimated_budget_amount) ||
+    parseNumber(festRecord?.budget_amount);
+
+  if (explicitAmount > 0) {
+    return explicitAmount;
+  }
+
+  const fromCustomFields = getBudgetAmountFromCustomFields(festRecord?.custom_fields);
+  if (fromCustomFields.amount > 0) {
+    return fromCustomFields.amount;
+  }
+
+  return asBoolean(festRecord?.is_budget_related) || fromCustomFields.requiresBudgetApproval
+    ? 1
+    : 0;
+};
+
+const userHasRole = (userInfo, roleCode) => {
+  if (!userInfo) return false;
+
+  const roleCodes = Array.isArray(userInfo.role_codes) ? userInfo.role_codes : [];
+  if (hasAnyRoleCode(roleCodes, [roleCode])) {
+    return true;
+  }
+
+  if (roleCode === ROLE_CODES.HOD) {
+    return asBoolean(userInfo.is_hod) || normalizeToken(userInfo.university_role) === "hod";
+  }
+  if (roleCode === ROLE_CODES.DEAN) {
+    return asBoolean(userInfo.is_dean) || normalizeToken(userInfo.university_role) === "dean";
+  }
+  if (roleCode === ROLE_CODES.CFO) {
+    return asBoolean(userInfo.is_cfo) || normalizeToken(userInfo.university_role) === "cfo";
+  }
+
+  if (roleCode === ROLE_CODES.ACCOUNTS || roleCode === ROLE_CODES.FINANCE_OFFICER) {
+    return (
+      asBoolean(userInfo.is_finance_office) ||
+      asBoolean(userInfo.is_finance_officer) ||
+      ["finance_officer", "accounts"].includes(normalizeToken(userInfo.university_role))
+    );
+  }
+
+  return false;
+};
+
+const isMasterAdmin = (userInfo) => {
+  if (!userInfo) return false;
+  return asBoolean(userInfo.is_masteradmin) || userHasRole(userInfo, ROLE_CODES.MASTER_ADMIN);
+};
+
+const matchesScope = (candidate, requiredScope) => {
+  if (!normalizeText(requiredScope)) return true;
+  return normalizeToken(candidate) === normalizeToken(requiredScope);
+};
+
+const findApprover = async ({ roleCode, department, school, campus, excludeEmail }) => {
+  const users = await queryAll("users");
+  const normalizedExclude = normalizeEmail(excludeEmail);
+
+  const roleFiltered = (users || []).filter((user) => {
+    if (!normalizeEmail(user?.email)) return false;
+
+    if (roleCode === ROLE_CODES.HOD) {
+      return userHasRole(user, ROLE_CODES.HOD);
+    }
+    if (roleCode === ROLE_CODES.DEAN) {
+      return userHasRole(user, ROLE_CODES.DEAN);
+    }
+    if (roleCode === ROLE_CODES.CFO) {
+      return userHasRole(user, ROLE_CODES.CFO);
+    }
+    if (roleCode === ROLE_CODES.ACCOUNTS || roleCode === ROLE_CODES.FINANCE_OFFICER) {
+      return userHasRole(user, ROLE_CODES.ACCOUNTS) || userHasRole(user, ROLE_CODES.FINANCE_OFFICER);
+    }
+    return false;
   });
-  return logs && logs.length > 0;
-}
 
-// Fire-and-forget email helper
-function fireEmail(fn) {
-  Promise.resolve().then(fn).catch(err => console.error("[FestEmail]", err));
-}
+  const scoped = roleFiltered.filter((user) => {
+    if (normalizedExclude && normalizeEmail(user.email) === normalizedExclude) {
+      return false;
+    }
 
-// POST /api/fests/:festId/submit
+    if (!matchesScope(user.department, department)) return false;
+    if (!matchesScope(user.school, school)) return false;
+    if (!matchesScope(user.campus, campus)) return false;
+
+    return true;
+  });
+
+  if (scoped.length > 0) {
+    return scoped[0];
+  }
+
+  const relaxed = roleFiltered.filter((user) => {
+    if (normalizedExclude && normalizeEmail(user.email) === normalizedExclude) {
+      return false;
+    }
+
+    if (department && !matchesScope(user.department, department)) {
+      return false;
+    }
+
+    if (school && !matchesScope(user.school, school)) {
+      return false;
+    }
+
+    return true;
+  });
+
+  return relaxed[0] || null;
+};
+
+const resolveSchoolForFest = async (fest) => {
+  const directSchool = normalizeText(fest?.organizing_school || fest?.school);
+  if (directSchool) return directSchool;
+
+  if (!normalizeText(fest?.organizing_dept)) {
+    return null;
+  }
+
+  const hod = await findApprover({
+    roleCode: ROLE_CODES.HOD,
+    department: fest.organizing_dept,
+    campus: fest.campus_hosted_at,
+  });
+
+  return normalizeText(hod?.school) || null;
+};
+
+const buildFestApprovalLink = (festId) => {
+  const appOrigin = API_APP_URL.replace(/\/$/, "");
+  return `${appOrigin}/approvals/fest/${encodeURIComponent(String(festId || ""))}`;
+};
+
+const validateReviewActionPayload = ({ action, notes }) => {
+  const normalizedAction = normalizeToken(action);
+  if (!REVIEWABLE_ACTIONS.has(normalizedAction)) {
+    return "Invalid action. Use approved, rejected, or returned_for_revision.";
+  }
+
+  if (REJECTION_ACTIONS.has(normalizedAction)) {
+    const normalizedNotes = normalizeText(notes);
+    if (normalizedNotes.length < MIN_REVIEW_NOTE_LENGTH) {
+      return `Notes must be at least ${MIN_REVIEW_NOTE_LENGTH} characters for rejection/revision.`;
+    }
+
+    if (normalizedNotes.length > MAX_REVIEW_NOTE_LENGTH) {
+      return `Notes must be ${MAX_REVIEW_NOTE_LENGTH} characters or fewer.`;
+    }
+  }
+
+  return null;
+};
+
+const logApprovalAction = async ({
+  entityType,
+  entityId,
+  step,
+  action,
+  actorEmail,
+  actorRole,
+  notes,
+  version,
+}) => {
+  try {
+    await insert("approval_chain_log", [
+      {
+        entity_type: entityType,
+        entity_id: entityId,
+        step,
+        action,
+        actor_email: normalizeEmail(actorEmail),
+        actor_role: normalizeToken(actorRole),
+        notes: normalizeText(notes) || null,
+        version: Number.isFinite(Number(version)) ? Number(version) : 1,
+      },
+    ]);
+  } catch (error) {
+    console.warn("[FestApproval] Unable to insert approval chain log:", error?.message || error);
+  }
+};
+
+const countStepRejections = async ({ entityId, step, version }) => {
+  try {
+    const rows = await queryAll("approval_chain_log", {
+      where: {
+        entity_type: "fest",
+        entity_id: entityId,
+        step,
+        version,
+      },
+    });
+
+    return (rows || []).filter((row) => REJECTION_ACTIONS.has(normalizeToken(row?.action))).length;
+  } catch {
+    return 0;
+  }
+};
+
+const canUserManageFest = (fest, userInfo, userId) => {
+  if (!fest || !userInfo) return false;
+  if (isMasterAdmin(userInfo)) return true;
+
+  const requesterEmail = normalizeEmail(userInfo.email);
+  return (
+    normalizeText(fest.auth_uuid) === normalizeText(userId) ||
+    normalizeEmail(fest.created_by) === requesterEmail ||
+    normalizeEmail(fest.contact_email) === requesterEmail
+  );
+};
+
+const updateFestWorkflow = async (festId, workflowStatus, extraUpdates = {}) => {
+  const updates = {
+    workflow_status: workflowStatus,
+    ...extraUpdates,
+  };
+
+  const updatedRows = await update("fests", updates, { fest_id: festId });
+  if (Array.isArray(updatedRows) && updatedRows.length > 0) {
+    return updatedRows[0];
+  }
+
+  return queryOne("fests", { where: { fest_id: festId } });
+};
+
+const submitToHod = async ({ fest, requester }) => {
+  const hod = await findApprover({
+    roleCode: ROLE_CODES.HOD,
+    department: fest.organizing_dept,
+    campus: fest.campus_hosted_at,
+    excludeEmail: fest.contact_email,
+  });
+
+  if (!hod?.email) {
+    return { error: "Unable to route approval. No HOD assigned for this department/campus." };
+  }
+
+  if (normalizeEmail(hod.email) === normalizeEmail(requester.email)) {
+    return { error: "You cannot submit a fest to yourself for approval." };
+  }
+
+  const currentVersion = Number(fest.workflow_version) || 1;
+  const nextVersion = normalizeToken(fest.workflow_status) === FEST_STATUS.REJECTED
+    ? currentVersion + 1
+    : currentVersion;
+
+  const updatedFest = await updateFestWorkflow(fest.fest_id, FEST_STATUS.PENDING_HOD, {
+    workflow_version: nextVersion,
+    rejected_at: null,
+    rejected_by: null,
+    rejection_reason: null,
+  });
+
+  await logApprovalAction({
+    entityType: "fest",
+    entityId: fest.fest_id,
+    step: "hod_review",
+    action: "submitted",
+    actorEmail: requester.email,
+    actorRole: "organizer",
+    notes: null,
+    version: nextVersion,
+  });
+
+  await sendFestSubmittedToHodEmail({
+    to: hod.email,
+    festName: fest.fest_title || fest.fest_id,
+    requesterName: requester.name,
+    requesterEmail: requester.email,
+    submittedAt: new Date().toISOString(),
+    link: buildFestApprovalLink(fest.fest_id),
+  });
+
+  return { updatedFest, hod };
+};
+
+const ensureScopedApproverForFest = ({ fest, requester, roleCode }) => {
+  if (isMasterAdmin(requester)) return null;
+
+  if (roleCode === ROLE_CODES.HOD && !matchesScope(requester.department, fest.organizing_dept)) {
+    return "Only the HOD of the fest department can take this action.";
+  }
+
+  if (roleCode === ROLE_CODES.CFO && !matchesScope(requester.campus, fest.campus_hosted_at)) {
+    return "Only the campus CFO can take this action.";
+  }
+
+  return null;
+};
+
+const ensureDeanScope = async ({ fest, requester }) => {
+  if (isMasterAdmin(requester)) return null;
+
+  const festSchool = await resolveSchoolForFest(fest);
+  if (!festSchool) {
+    return "School mapping for this fest is missing. Unable to validate Dean scope.";
+  }
+
+  if (!matchesScope(requester.school, festSchool)) {
+    return "Only the Dean of this school can take this action.";
+  }
+
+  return null;
+};
+
+const notifyFestRejection = async ({ fest, step, notes, requester }) => {
+  const organizerEmail = normalizeEmail(fest.contact_email || fest.created_by || requester?.email);
+  if (!organizerEmail) return;
+
+  await sendFestRejectedEmail({
+    to: organizerEmail,
+    festName: fest.fest_title || fest.fest_id,
+    requesterName: normalizeText(fest.created_by),
+    requesterEmail: organizerEmail,
+    submittedAt: fest.created_at,
+    step,
+    notes,
+    link: `${API_APP_URL.replace(/\/$/, "")}/edit/fest/${encodeURIComponent(fest.fest_id)}`,
+  });
+};
+
 router.post("/:festId/submit", async (req, res) => {
   try {
-    const festId = req.params.festId;
-    const fest = await queryOne('fests', { where: { fest_id: festId } });
-
-    if (!fest) return res.status(404).json({ error: "Fest not found" });
-    if (fest.auth_uuid !== req.userId) return res.status(403).json({ error: "Only the organizer can submit the fest" });
-    if (!['draft', 'rejected'].includes(fest.workflow_status)) {
-      return res.status(400).json({ error: "Fest is not in a submittable state." });
+    const festId = normalizeText(req.params.festId);
+    if (!festId) {
+      return res.status(400).json({ error: "Fest ID is required." });
     }
 
-    const hodEmail = await findApproverEmail('hod', fest.organizing_dept, fest.campus_hosted_at) || 'hod@christuniversity.in';
+    const fest = await queryOne("fests", { where: { fest_id: festId } });
+    if (!fest) {
+      return res.status(404).json({ error: "Fest not found." });
+    }
 
-    await update('fests', { workflow_status: 'pending_hod' }, { fest_id: festId });
-    await logApprovalAction('fest', festId, 'organizer_submit', 'submitted', req.userInfo.email, 'organizer', 'Fest submitted for approval', fest.workflow_version);
+    if (!canUserManageFest(fest, req.userInfo, req.userId)) {
+      return res.status(403).json({ error: "Only the fest organizer can submit this fest." });
+    }
 
-    fireEmail(() => sendSubmittedToHodEmail({
-      hodEmail,
-      entityType: 'fest',
-      entityTitle: fest.fest_title || festId,
-      organizerEmail: req.userInfo.email,
-    }));
+    const currentStatus = normalizeToken(fest.workflow_status || FEST_STATUS.DRAFT);
+    if (![FEST_STATUS.DRAFT, FEST_STATUS.REJECTED].includes(currentStatus)) {
+      return res.status(400).json({
+        error: `Fest cannot be submitted from status '${currentStatus}'.`,
+      });
+    }
 
-    return res.json({ success: true, message: "Fest submitted to HOD successfully." });
+    if (currentStatus === FEST_STATUS.FINAL_REJECTED) {
+      return res.status(400).json({
+        error: "Fest is final rejected. Master admin intervention is required.",
+      });
+    }
+
+    const submission = await submitToHod({
+      fest,
+      requester: req.userInfo,
+    });
+
+    if (submission.error) {
+      return res.status(400).json({ error: submission.error });
+    }
+
+    return res.status(200).json({
+      success: true,
+      status: FEST_STATUS.PENDING_HOD,
+      routed_to: {
+        role: "hod",
+        name: submission.hod?.name || null,
+        email: submission.hod?.email || null,
+      },
+      fest: submission.updatedFest,
+    });
   } catch (error) {
-    console.error(error);
+    console.error("[FestApproval] submit error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// POST /api/fests/:festId/hod-action
 router.post("/:festId/hod-action", async (req, res) => {
   try {
-    const festId = req.params.festId;
-    const { action, notes } = req.body;
-    
-    if (!req.userInfo.role_codes?.includes(ROLE_CODES.HOD) && !req.userInfo.is_masteradmin) {
-      return res.status(403).json({ error: "Not authorized. Must be HOD." });
+    if (!userHasRole(req.userInfo, ROLE_CODES.HOD) && !isMasterAdmin(req.userInfo)) {
+      return res.status(403).json({ error: "Only HOD can perform this action." });
     }
 
-    const fest = await queryOne('fests', { where: { fest_id: festId } });
-    if (!fest || fest.workflow_status !== 'pending_hod') {
-      return res.status(400).json({ error: "Fest not available for HOD review." });
+    const festId = normalizeText(req.params.festId);
+    const action = normalizeToken(req.body?.action);
+    const notes = normalizeText(req.body?.notes);
+
+    const payloadError = validateReviewActionPayload({ action, notes });
+    if (payloadError) {
+      return res.status(400).json({ error: payloadError });
     }
 
-    if (action === 'approved') {
-      await update('fests', { workflow_status: 'pending_dean' }, { fest_id: festId });
-      await logApprovalAction('fest', festId, 'hod_review', 'approved', req.userInfo.email, 'hod', notes, fest.workflow_version);
-      
-      const deanEmail = await findApproverEmail('dean', fest.organizing_dept, fest.campus_hosted_at) || 'dean@christuniversity.in';
-      fireEmail(() => sendSubmittedToDeanEmail({
-        deanEmail,
-        entityType: 'fest',
-        entityTitle: fest.fest_title || festId,
-        hodEmail: req.userInfo.email,
-      }));
-      return res.json({ success: true, status: 'pending_dean' });
-      
-    } else if (action === 'rejected' || action === 'returned_for_revision') {
-      if (!notes || notes.length < 20) return res.status(400).json({ error: "Notes must be at least 20 chars." });
-      
-      const isFinal = await checkResubmissionLimit('fest', festId, 'hod_review', fest.workflow_version);
-      const newStatus = isFinal ? 'final_rejected' : 'rejected';
-      
-      await update('fests', { workflow_status: newStatus }, { fest_id: festId });
-      await logApprovalAction('fest', festId, 'hod_review', action, req.userInfo.email, 'hod', notes, fest.workflow_version);
-      
-      const organizerEmail = fest.contact_email || fest.created_by;
-      if (organizerEmail) {
-        fireEmail(() => isFinal
-          ? sendFinalRejectionEmail({ organizerEmail, entityType: 'fest', entityTitle: fest.fest_title || festId, reviewerRole: 'HOD', rejectionReason: notes })
-          : sendReturnedForRevisionEmail({ organizerEmail, entityType: 'fest', entityTitle: fest.fest_title || festId, reviewerRole: 'HOD', revisionNote: notes })
-        );
+    const fest = await queryOne("fests", { where: { fest_id: festId } });
+    if (!fest) {
+      return res.status(404).json({ error: "Fest not found." });
+    }
+
+    if (normalizeToken(fest.workflow_status) !== FEST_STATUS.PENDING_HOD) {
+      return res.status(400).json({ error: "Fest is not pending HOD approval." });
+    }
+
+    const scopeError = ensureScopedApproverForFest({ fest, requester: req.userInfo, roleCode: ROLE_CODES.HOD });
+    if (scopeError) {
+      return res.status(403).json({ error: scopeError });
+    }
+
+    if (normalizeEmail(fest.contact_email) === normalizeEmail(req.userInfo.email)) {
+      return res.status(400).json({ error: "Approver cannot approve their own submission." });
+    }
+
+    const version = Number(fest.workflow_version) || 1;
+
+    if (action === "approved") {
+      const school = await resolveSchoolForFest(fest);
+      const dean = await findApprover({
+        roleCode: ROLE_CODES.DEAN,
+        school,
+        campus: fest.campus_hosted_at,
+        excludeEmail: fest.contact_email,
+      });
+
+      await logApprovalAction({
+        entityType: "fest",
+        entityId: festId,
+        step: "hod_review",
+        action,
+        actorEmail: req.userInfo.email,
+        actorRole: "hod",
+        notes,
+        version,
+      });
+
+      if (dean?.email && normalizeEmail(dean.email) !== normalizeEmail(req.userInfo.email)) {
+        const updatedFest = await updateFestWorkflow(festId, FEST_STATUS.PENDING_DEAN, {
+          rejected_at: null,
+          rejected_by: null,
+          rejection_reason: null,
+        });
+
+        await sendFestApprovedByHodToDeanEmail({
+          to: dean.email,
+          festName: fest.fest_title || festId,
+          requesterName: req.userInfo.name,
+          requesterEmail: req.userInfo.email,
+          submittedAt: new Date().toISOString(),
+          hodNotes: notes,
+          link: buildFestApprovalLink(festId),
+        });
+
+        return res.status(200).json({
+          success: true,
+          status: FEST_STATUS.PENDING_DEAN,
+          routed_to: {
+            role: "dean",
+            name: dean.name || null,
+            email: dean.email,
+          },
+          fest: updatedFest,
+        });
       }
-      return res.json({ success: true, status: newStatus });
+
+      await logApprovalAction({
+        entityType: "fest",
+        entityId: festId,
+        step: "dean_review",
+        action: "hod_dean_combined",
+        actorEmail: req.userInfo.email,
+        actorRole: "hod_dean",
+        notes,
+        version,
+      });
+
+      const budgetAmount = getFestBudgetAmount(fest);
+      if (budgetAmount > 0) {
+        const cfo = await findApprover({
+          roleCode: ROLE_CODES.CFO,
+          campus: fest.campus_hosted_at,
+          excludeEmail: fest.contact_email,
+        });
+
+        if (!cfo?.email) {
+          return res.status(400).json({
+            error: "No campus CFO configured for this fest. Cannot continue budget approval flow.",
+          });
+        }
+
+        const updatedFest = await updateFestWorkflow(festId, FEST_STATUS.PENDING_CFO, {
+          rejected_at: null,
+          rejected_by: null,
+          rejection_reason: null,
+        });
+
+        await sendFestApprovedToCfoEmail({
+          to: cfo.email,
+          festName: fest.fest_title || festId,
+          requesterName: req.userInfo.name,
+          requesterEmail: req.userInfo.email,
+          submittedAt: new Date().toISOString(),
+          amount: budgetAmount,
+          link: buildFestApprovalLink(festId),
+        });
+
+        return res.status(200).json({
+          success: true,
+          status: FEST_STATUS.PENDING_CFO,
+          routed_to: {
+            role: "cfo",
+            name: cfo.name || null,
+            email: cfo.email,
+          },
+          fest: updatedFest,
+        });
+      }
+
+      const updatedFest = await updateFestWorkflow(festId, FEST_STATUS.FULLY_APPROVED, {
+        approved_at: new Date().toISOString(),
+        approved_by: normalizeEmail(req.userInfo.email),
+        rejected_at: null,
+        rejected_by: null,
+        rejection_reason: null,
+      });
+
+      await sendFestFullyApprovedEmail({
+        to: normalizeEmail(fest.contact_email || fest.created_by),
+        festName: fest.fest_title || festId,
+        requesterName: req.userInfo.name,
+        requesterEmail: req.userInfo.email,
+        submittedAt: fest.created_at,
+        link: `${API_APP_URL.replace(/\/$/, "")}/fest/${encodeURIComponent(festId)}`,
+      });
+
+      return res.status(200).json({ success: true, status: FEST_STATUS.FULLY_APPROVED, fest: updatedFest });
     }
 
-    return res.status(400).json({ error: "Invalid action" });
+    const rejectionCount = await countStepRejections({ entityId: festId, step: "hod_review", version });
+    const isFinal = rejectionCount >= 1;
+    const status = isFinal ? FEST_STATUS.FINAL_REJECTED : FEST_STATUS.REJECTED;
+
+    const updatedFest = await updateFestWorkflow(festId, status, {
+      rejected_at: new Date().toISOString(),
+      rejected_by: normalizeEmail(req.userInfo.email),
+      rejection_reason: notes,
+    });
+
+    await logApprovalAction({
+      entityType: "fest",
+      entityId: festId,
+      step: "hod_review",
+      action,
+      actorEmail: req.userInfo.email,
+      actorRole: "hod",
+      notes,
+      version,
+    });
+
+    await notifyFestRejection({ fest, step: "HOD", notes, requester: req.userInfo });
+
+    return res.status(200).json({ success: true, status, fest: updatedFest });
   } catch (error) {
-    console.error(error);
+    console.error("[FestApproval] hod-action error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// POST /api/fests/:festId/dean-action
 router.post("/:festId/dean-action", async (req, res) => {
   try {
-    const festId = req.params.festId;
-    const { action, notes } = req.body;
-    
-    if (!req.userInfo.role_codes?.includes(ROLE_CODES.DEAN) && !req.userInfo.is_masteradmin) {
-      return res.status(403).json({ error: "Not authorized. Must be Dean." });
+    if (!userHasRole(req.userInfo, ROLE_CODES.DEAN) && !isMasterAdmin(req.userInfo)) {
+      return res.status(403).json({ error: "Only Dean can perform this action." });
     }
 
-    const fest = await queryOne('fests', { where: { fest_id: festId } });
-    if (!fest || fest.workflow_status !== 'pending_dean') {
-      return res.status(400).json({ error: "Fest not available for Dean review." });
+    const festId = normalizeText(req.params.festId);
+    const action = normalizeToken(req.body?.action);
+    const notes = normalizeText(req.body?.notes);
+
+    const payloadError = validateReviewActionPayload({ action, notes });
+    if (payloadError) {
+      return res.status(400).json({ error: payloadError });
     }
 
-    if (action === 'approved') {
-      const isBudgeted = Number(fest.total_estimated_expense) > 0;
-      const nextStatus = isBudgeted ? 'pending_cfo' : 'fully_approved';
-      
-      await update('fests', { workflow_status: nextStatus }, { fest_id: festId });
-      await logApprovalAction('fest', festId, 'dean_review', 'approved', req.userInfo.email, 'dean', notes, fest.workflow_version);
-      
-      const organizerEmail = fest.contact_email || fest.created_by;
+    const fest = await queryOne("fests", { where: { fest_id: festId } });
+    if (!fest) return res.status(404).json({ error: "Fest not found." });
 
-      if (isBudgeted) {
-        const cfoEmail = await findApproverEmail('cfo', null, fest.campus_hosted_at) || 'cfo@christuniversity.in';
-        fireEmail(() => sendSubmittedToCfoEmail({
-          cfoEmail,
-          entityType: 'fest',
-          entityTitle: fest.fest_title || festId,
-          estimatedBudget: fest.total_estimated_expense,
-        }));
-      } else if (organizerEmail) {
-        fireEmail(() => sendFullyApprovedEmail({
-          organizerEmail,
-          entityType: 'fest',
-          entityTitle: fest.fest_title || festId,
-        }));
+    if (normalizeToken(fest.workflow_status) !== FEST_STATUS.PENDING_DEAN) {
+      return res.status(400).json({ error: "Fest is not pending Dean approval." });
+    }
+
+    const deanScopeError = await ensureDeanScope({ fest, requester: req.userInfo });
+    if (deanScopeError) {
+      return res.status(403).json({ error: deanScopeError });
+    }
+
+    if (normalizeEmail(fest.contact_email) === normalizeEmail(req.userInfo.email)) {
+      return res.status(400).json({ error: "Approver cannot approve their own submission." });
+    }
+
+    const version = Number(fest.workflow_version) || 1;
+
+    if (action === "approved") {
+      await logApprovalAction({
+        entityType: "fest",
+        entityId: festId,
+        step: "dean_review",
+        action,
+        actorEmail: req.userInfo.email,
+        actorRole: "dean",
+        notes,
+        version,
+      });
+
+      const budgetAmount = getFestBudgetAmount(fest);
+      if (budgetAmount > 0) {
+        const cfo = await findApprover({
+          roleCode: ROLE_CODES.CFO,
+          campus: fest.campus_hosted_at,
+          excludeEmail: fest.contact_email,
+        });
+
+        if (!cfo?.email) {
+          return res.status(400).json({
+            error: "No campus CFO configured for this fest. Cannot continue budget approval flow.",
+          });
+        }
+
+        const updatedFest = await updateFestWorkflow(festId, FEST_STATUS.PENDING_CFO, {
+          rejected_at: null,
+          rejected_by: null,
+          rejection_reason: null,
+        });
+
+        await sendFestApprovedToCfoEmail({
+          to: cfo.email,
+          festName: fest.fest_title || festId,
+          requesterName: req.userInfo.name,
+          requesterEmail: req.userInfo.email,
+          submittedAt: new Date().toISOString(),
+          amount: budgetAmount,
+          link: buildFestApprovalLink(festId),
+        });
+
+        return res.status(200).json({
+          success: true,
+          status: FEST_STATUS.PENDING_CFO,
+          routed_to: {
+            role: "cfo",
+            name: cfo.name || null,
+            email: cfo.email,
+          },
+          fest: updatedFest,
+        });
       }
-      return res.json({ success: true, status: nextStatus });
-      
-    } else if (action === 'rejected' || action === 'returned_for_revision') {
-      if (!notes || notes.length < 20) return res.status(400).json({ error: "Notes must be at least 20 chars." });
-      
-      const isFinal = await checkResubmissionLimit('fest', festId, 'dean_review', fest.workflow_version);
-      const newStatus = isFinal ? 'final_rejected' : 'rejected';
-      
-      await update('fests', { workflow_status: newStatus }, { fest_id: festId });
-      await logApprovalAction('fest', festId, 'dean_review', action, req.userInfo.email, 'dean', notes, fest.workflow_version);
 
-      const organizerEmail = fest.contact_email || fest.created_by;
-      if (organizerEmail) {
-        fireEmail(() => isFinal
-          ? sendFinalRejectionEmail({ organizerEmail, entityType: 'fest', entityTitle: fest.fest_title || festId, reviewerRole: 'Dean', rejectionReason: notes })
-          : sendReturnedForRevisionEmail({ organizerEmail, entityType: 'fest', entityTitle: fest.fest_title || festId, reviewerRole: 'Dean', revisionNote: notes })
-        );
-      }
-      return res.json({ success: true, status: newStatus });
+      const updatedFest = await updateFestWorkflow(festId, FEST_STATUS.FULLY_APPROVED, {
+        approved_at: new Date().toISOString(),
+        approved_by: normalizeEmail(req.userInfo.email),
+        rejected_at: null,
+        rejected_by: null,
+        rejection_reason: null,
+      });
+
+      await sendFestFullyApprovedEmail({
+        to: normalizeEmail(fest.contact_email || fest.created_by),
+        festName: fest.fest_title || festId,
+        requesterName: req.userInfo.name,
+        requesterEmail: req.userInfo.email,
+        submittedAt: fest.created_at,
+        link: `${API_APP_URL.replace(/\/$/, "")}/fest/${encodeURIComponent(festId)}`,
+      });
+
+      return res.status(200).json({ success: true, status: FEST_STATUS.FULLY_APPROVED, fest: updatedFest });
     }
 
-    return res.status(400).json({ error: "Invalid action" });
+    const rejectionCount = await countStepRejections({ entityId: festId, step: "dean_review", version });
+    const isFinal = rejectionCount >= 1;
+    const status = isFinal ? FEST_STATUS.FINAL_REJECTED : FEST_STATUS.REJECTED;
+
+    const updatedFest = await updateFestWorkflow(festId, status, {
+      rejected_at: new Date().toISOString(),
+      rejected_by: normalizeEmail(req.userInfo.email),
+      rejection_reason: notes,
+    });
+
+    await logApprovalAction({
+      entityType: "fest",
+      entityId: festId,
+      step: "dean_review",
+      action,
+      actorEmail: req.userInfo.email,
+      actorRole: "dean",
+      notes,
+      version,
+    });
+
+    await notifyFestRejection({ fest, step: "Dean", notes, requester: req.userInfo });
+
+    return res.status(200).json({ success: true, status, fest: updatedFest });
   } catch (error) {
-    console.error(error);
+    console.error("[FestApproval] dean-action error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// POST /api/fests/:festId/cfo-action
 router.post("/:festId/cfo-action", async (req, res) => {
   try {
-    const festId = req.params.festId;
-    const { action, notes } = req.body;
-    
-    if (!req.userInfo.role_codes?.includes(ROLE_CODES.CFO) && !req.userInfo.is_masteradmin) {
-      return res.status(403).json({ error: "Not authorized. Must be CFO." });
+    if (!userHasRole(req.userInfo, ROLE_CODES.CFO) && !isMasterAdmin(req.userInfo)) {
+      return res.status(403).json({ error: "Only CFO can perform this action." });
     }
 
-    const fest = await queryOne('fests', { where: { fest_id: festId } });
-    if (!fest || fest.workflow_status !== 'pending_cfo') return res.status(400).json({ error: "Fest not waiting for CFO." });
+    const festId = normalizeText(req.params.festId);
+    const action = normalizeToken(req.body?.action);
+    const notes = normalizeText(req.body?.notes);
 
-    if (action === 'approved') {
-      await update('fests', { workflow_status: 'pending_accounts' }, { fest_id: festId });
-      await logApprovalAction('fest', festId, 'cfo_review', 'approved', req.userInfo.email, 'cfo', notes, fest.workflow_version);
-      return res.json({ success: true, status: 'pending_accounts' });
+    const payloadError = validateReviewActionPayload({ action, notes });
+    if (payloadError) {
+      return res.status(400).json({ error: payloadError });
+    }
 
-    } else if (action === 'rejected' || action === 'returned_for_revision') {
-      if (!notes || notes.length < 20) return res.status(400).json({ error: "Notes min 20 chars." });
-      const isFinal = await checkResubmissionLimit('fest', festId, 'cfo_review', fest.workflow_version);
-      const newStatus = isFinal ? 'final_rejected' : 'rejected';
-      await update('fests', { workflow_status: newStatus }, { fest_id: festId });
-      await logApprovalAction('fest', festId, 'cfo_review', action, req.userInfo.email, 'cfo', notes, fest.workflow_version);
+    const fest = await queryOne("fests", { where: { fest_id: festId } });
+    if (!fest) return res.status(404).json({ error: "Fest not found." });
 
-      const organizerEmail = fest.contact_email || fest.created_by;
-      if (organizerEmail) {
-        fireEmail(() => isFinal
-          ? sendFinalRejectionEmail({ organizerEmail, entityType: 'fest', entityTitle: fest.fest_title || festId, reviewerRole: 'CFO', rejectionReason: notes })
-          : sendReturnedForRevisionEmail({ organizerEmail, entityType: 'fest', entityTitle: fest.fest_title || festId, reviewerRole: 'CFO', revisionNote: notes })
-        );
+    if (normalizeToken(fest.workflow_status) !== FEST_STATUS.PENDING_CFO) {
+      return res.status(400).json({ error: "Fest is not pending CFO approval." });
+    }
+
+    const cfoScopeError = ensureScopedApproverForFest({ fest, requester: req.userInfo, roleCode: ROLE_CODES.CFO });
+    if (cfoScopeError) {
+      return res.status(403).json({ error: cfoScopeError });
+    }
+
+    const version = Number(fest.workflow_version) || 1;
+
+    if (action === "approved") {
+      await logApprovalAction({
+        entityType: "fest",
+        entityId: festId,
+        step: "cfo_review",
+        action,
+        actorEmail: req.userInfo.email,
+        actorRole: "cfo",
+        notes,
+        version,
+      });
+
+      const accounts = await findApprover({
+        roleCode: ROLE_CODES.ACCOUNTS,
+        campus: fest.campus_hosted_at,
+        excludeEmail: fest.contact_email,
+      });
+
+      if (!accounts?.email) {
+        return res.status(400).json({ error: "No finance officer configured for this campus." });
       }
-      return res.json({ success: true, status: newStatus });
+
+      const updatedFest = await updateFestWorkflow(festId, FEST_STATUS.PENDING_ACCOUNTS, {
+        rejected_at: null,
+        rejected_by: null,
+        rejection_reason: null,
+      });
+
+      await sendFestApprovedToAccountsEmail({
+        to: accounts.email,
+        festName: fest.fest_title || festId,
+        requesterName: req.userInfo.name,
+        requesterEmail: req.userInfo.email,
+        submittedAt: new Date().toISOString(),
+        link: buildFestApprovalLink(festId),
+      });
+
+      return res.status(200).json({
+        success: true,
+        status: FEST_STATUS.PENDING_ACCOUNTS,
+        routed_to: {
+          role: "finance_officer",
+          name: accounts.name || null,
+          email: accounts.email,
+        },
+        fest: updatedFest,
+      });
     }
+
+    const rejectionCount = await countStepRejections({ entityId: festId, step: "cfo_review", version });
+    const isFinal = rejectionCount >= 1;
+    const status = isFinal ? FEST_STATUS.FINAL_REJECTED : FEST_STATUS.REJECTED;
+
+    const updatedFest = await updateFestWorkflow(festId, status, {
+      rejected_at: new Date().toISOString(),
+      rejected_by: normalizeEmail(req.userInfo.email),
+      rejection_reason: notes,
+    });
+
+    await logApprovalAction({
+      entityType: "fest",
+      entityId: festId,
+      step: "cfo_review",
+      action,
+      actorEmail: req.userInfo.email,
+      actorRole: "cfo",
+      notes,
+      version,
+    });
+
+    await notifyFestRejection({ fest, step: "CFO", notes, requester: req.userInfo });
+
+    return res.status(200).json({ success: true, status, fest: updatedFest });
   } catch (error) {
-    return res.status(500).json({ error: "Server error" });
+    console.error("[FestApproval] cfo-action error:", error);
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// POST /api/fests/:festId/accounts-action
 router.post("/:festId/accounts-action", async (req, res) => {
   try {
-    const festId = req.params.festId;
-    const { action, notes } = req.body;
-    
-    if (!req.userInfo.role_codes?.includes(ROLE_CODES.ACCOUNTS) && !req.userInfo.is_masteradmin) {
-      return res.status(403).json({ error: "Not authorized. Must be Accounts." });
+    const canReview =
+      userHasRole(req.userInfo, ROLE_CODES.ACCOUNTS) ||
+      userHasRole(req.userInfo, ROLE_CODES.FINANCE_OFFICER) ||
+      isMasterAdmin(req.userInfo);
+
+    if (!canReview) {
+      return res.status(403).json({ error: "Only Finance Officer can perform this action." });
     }
 
-    const fest = await queryOne('fests', { where: { fest_id: festId } });
-    if (!fest || fest.workflow_status !== 'pending_accounts') return res.status(400).json({ error: "Fest not waiting for accounts." });
+    const festId = normalizeText(req.params.festId);
+    const action = normalizeToken(req.body?.action);
+    const notes = normalizeText(req.body?.notes);
 
-    if (action === 'approved') {
-      await update('fests', { workflow_status: 'fully_approved' }, { fest_id: festId });
-      await logApprovalAction('fest', festId, 'accounts_review', 'approved', req.userInfo.email, 'accounts', notes, fest.workflow_version);
-
-      const organizerEmail = fest.contact_email || fest.created_by;
-      if (organizerEmail) {
-        fireEmail(() => sendFullyApprovedEmail({
-          organizerEmail,
-          entityType: 'fest',
-          entityTitle: fest.fest_title || festId,
-        }));
-      }
-      return res.json({ success: true, status: 'fully_approved' });
-
-    } else if (action === 'rejected' || action === 'returned_for_revision') {
-      if (!notes || notes.length < 20) return res.status(400).json({ error: "Notes min 20 chars." });
-      const isFinal = await checkResubmissionLimit('fest', festId, 'accounts_review', fest.workflow_version);
-      const newStatus = isFinal ? 'final_rejected' : 'rejected';
-      await update('fests', { workflow_status: newStatus }, { fest_id: festId });
-      await logApprovalAction('fest', festId, 'accounts_review', action, req.userInfo.email, 'accounts', notes, fest.workflow_version);
-
-      const organizerEmail = fest.contact_email || fest.created_by;
-      if (organizerEmail) {
-        fireEmail(() => isFinal
-          ? sendFinalRejectionEmail({ organizerEmail, entityType: 'fest', entityTitle: fest.fest_title || festId, reviewerRole: 'Accounts', rejectionReason: notes })
-          : sendReturnedForRevisionEmail({ organizerEmail, entityType: 'fest', entityTitle: fest.fest_title || festId, reviewerRole: 'Accounts', revisionNote: notes })
-        );
-      }
-      return res.json({ success: true, status: newStatus });
+    const payloadError = validateReviewActionPayload({ action, notes });
+    if (payloadError) {
+      return res.status(400).json({ error: payloadError });
     }
+
+    const fest = await queryOne("fests", { where: { fest_id: festId } });
+    if (!fest) return res.status(404).json({ error: "Fest not found." });
+
+    if (normalizeToken(fest.workflow_status) !== FEST_STATUS.PENDING_ACCOUNTS) {
+      return res.status(400).json({ error: "Fest is not pending Accounts approval." });
+    }
+
+    const version = Number(fest.workflow_version) || 1;
+
+    if (action === "approved") {
+      const updatedFest = await updateFestWorkflow(festId, FEST_STATUS.FULLY_APPROVED, {
+        approved_at: new Date().toISOString(),
+        approved_by: normalizeEmail(req.userInfo.email),
+        rejected_at: null,
+        rejected_by: null,
+        rejection_reason: null,
+      });
+
+      await logApprovalAction({
+        entityType: "fest",
+        entityId: festId,
+        step: "accounts_review",
+        action,
+        actorEmail: req.userInfo.email,
+        actorRole: "finance_officer",
+        notes,
+        version,
+      });
+
+      await sendFestFullyApprovedEmail({
+        to: normalizeEmail(fest.contact_email || fest.created_by),
+        festName: fest.fest_title || festId,
+        requesterName: req.userInfo.name,
+        requesterEmail: req.userInfo.email,
+        submittedAt: fest.created_at,
+        link: `${API_APP_URL.replace(/\/$/, "")}/fest/${encodeURIComponent(festId)}`,
+      });
+
+      return res.status(200).json({ success: true, status: FEST_STATUS.FULLY_APPROVED, fest: updatedFest });
+    }
+
+    const rejectionCount = await countStepRejections({ entityId: festId, step: "accounts_review", version });
+    const isFinal = rejectionCount >= 1;
+    const status = isFinal ? FEST_STATUS.FINAL_REJECTED : FEST_STATUS.REJECTED;
+
+    const updatedFest = await updateFestWorkflow(festId, status, {
+      rejected_at: new Date().toISOString(),
+      rejected_by: normalizeEmail(req.userInfo.email),
+      rejection_reason: notes,
+    });
+
+    await logApprovalAction({
+      entityType: "fest",
+      entityId: festId,
+      step: "accounts_review",
+      action,
+      actorEmail: req.userInfo.email,
+      actorRole: "finance_officer",
+      notes,
+      version,
+    });
+
+    await notifyFestRejection({ fest, step: "Accounts", notes, requester: req.userInfo });
+
+    return res.status(200).json({ success: true, status, fest: updatedFest });
   } catch (error) {
-    return res.status(500).json({ error: "Server error" });
+    console.error("[FestApproval] accounts-action error:", error);
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// POST /api/fests/:festId/activate
 router.post("/:festId/activate", async (req, res) => {
   try {
-    const festId = req.params.festId;
-    const fest = await queryOne('fests', { where: { fest_id: festId } });
-    if (!fest) return res.status(404).json({ error: "Fest not found" });
-    if (fest.auth_uuid !== req.userId && !req.userInfo.is_masteradmin) return res.status(403).json({ error: "Only organizer can activate." });
-    
-    if (fest.workflow_status !== 'fully_approved') {
-      return res.status(400).json({ error: "Fest must be fully approved to activate." });
+    const festId = normalizeText(req.params.festId);
+    if (!festId) {
+      return res.status(400).json({ error: "Fest ID is required." });
     }
 
-    await update('fests', { 
-      workflow_status: 'live',
-      activated_at: new Date().toISOString(),
-      activated_by: req.userInfo.email
-    }, { fest_id: festId });
+    const fest = await queryOne("fests", { where: { fest_id: festId } });
+    if (!fest) {
+      return res.status(404).json({ error: "Fest not found." });
+    }
 
-    return res.json({ success: true, status: 'live' });
+    if (!canUserManageFest(fest, req.userInfo, req.userId)) {
+      return res.status(403).json({ error: "Only the fest organizer can activate this fest." });
+    }
+
+    if (normalizeToken(fest.workflow_status) !== FEST_STATUS.FULLY_APPROVED) {
+      return res.status(400).json({
+        error: "Fest must be fully approved before activation.",
+      });
+    }
+
+    await updateFestWorkflow(festId, FEST_STATUS.LIVE, {
+      activated_at: new Date().toISOString(),
+      activated_by: normalizeEmail(req.userInfo.email),
+    });
+
+    return res.status(200).json({ success: true, status: FEST_STATUS.LIVE });
   } catch (error) {
-    return res.status(500).json({ error: "Server error" });
+    console.error("[FestApproval] activate error:", error);
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// GET /api/fests/approval-queue
 router.get("/approval-queue", async (req, res) => {
   try {
-    const roles = req.userInfo.role_codes || [];
-    let pendingFestsRow = [];
-    
-    if (req.userInfo.is_masteradmin) {
-      pendingFestsRow = await queryAll('fests', { where: { status: 'published' }});
-    } else {
-      if (roles.includes(ROLE_CODES.HOD)) {
-        const fests = await queryAll('fests', { where: { workflow_status: 'pending_hod' } });
-        pendingFestsRow.push(...fests);
-      }
-      if (roles.includes(ROLE_CODES.DEAN)) {
-        const fests = await queryAll('fests', { where: { workflow_status: 'pending_dean' } });
-        pendingFestsRow.push(...fests); 
-      }
-      if (roles.includes(ROLE_CODES.CFO)) {
-        const fests = await queryAll('fests', { where: { workflow_status: 'pending_cfo' } });
-        pendingFestsRow.push(...fests);
-      }
-      if (roles.includes(ROLE_CODES.ACCOUNTS)) {
-        const fests = await queryAll('fests', { where: { workflow_status: 'pending_accounts' } });
-        pendingFestsRow.push(...fests);
-      }
-    }
+    const roleCodes = Array.isArray(req.userInfo?.role_codes) ? req.userInfo.role_codes : [];
+    const canViewAll = isMasterAdmin(req.userInfo);
 
-    return res.json(pendingFestsRow);
+    const fests = await queryAll("fests", {
+      order: { column: "created_at", ascending: false },
+    });
+
+    const filtered = (fests || []).filter((fest) => {
+      const status = normalizeToken(fest.workflow_status);
+      const deptMatches = matchesScope(req.userInfo?.department, fest.organizing_dept);
+      const campusMatches = matchesScope(req.userInfo?.campus, fest.campus_hosted_at);
+      const schoolMatches = matchesScope(req.userInfo?.school, fest.organizing_school || fest.school);
+
+      if (canViewAll) {
+        return [
+          FEST_STATUS.PENDING_HOD,
+          FEST_STATUS.PENDING_DEAN,
+          FEST_STATUS.PENDING_CFO,
+          FEST_STATUS.PENDING_ACCOUNTS,
+        ].includes(status);
+      }
+
+      if (hasAnyRoleCode(roleCodes, [ROLE_CODES.HOD]) || asBoolean(req.userInfo?.is_hod)) {
+        if (status === FEST_STATUS.PENDING_HOD && deptMatches && campusMatches) {
+          return true;
+        }
+      }
+
+      if (hasAnyRoleCode(roleCodes, [ROLE_CODES.DEAN]) || asBoolean(req.userInfo?.is_dean)) {
+        if (status === FEST_STATUS.PENDING_DEAN && schoolMatches && campusMatches) {
+          return true;
+        }
+      }
+
+      if (hasAnyRoleCode(roleCodes, [ROLE_CODES.CFO]) || asBoolean(req.userInfo?.is_cfo)) {
+        if (status === FEST_STATUS.PENDING_CFO && campusMatches) {
+          return true;
+        }
+      }
+
+      if (
+        hasAnyRoleCode(roleCodes, [ROLE_CODES.ACCOUNTS, ROLE_CODES.FINANCE_OFFICER]) ||
+        asBoolean(req.userInfo?.is_finance_office) ||
+        asBoolean(req.userInfo?.is_finance_officer)
+      ) {
+        if (status === FEST_STATUS.PENDING_ACCOUNTS && campusMatches) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+
+    return res.status(200).json({ fests: filtered });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: "Server error" });
+    console.error("[FestApproval] approval-queue error:", error);
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 

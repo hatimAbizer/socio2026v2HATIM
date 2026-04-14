@@ -291,7 +291,7 @@ const parseBooleanPreference = (value) => {
 
 const resolveStandaloneApprovalPreferences = (
   payload = {},
-  fallback = { requiresHodApproval: true, requiresDeanApproval: true }
+  fallback = { requiresHodApproval: false, requiresDeanApproval: false }
 ) => {
   const hodPreference = parseBooleanPreference(
     payload?.requires_hod_approval ?? payload?.standaloneRequiresHodApproval
@@ -305,6 +305,91 @@ const resolveStandaloneApprovalPreferences = (
       hodPreference === null ? Boolean(fallback?.requiresHodApproval) : hodPreference,
     requiresDeanApproval:
       deanPreference === null ? Boolean(fallback?.requiresDeanApproval) : deanPreference,
+  };
+};
+
+const DEFAULT_CAMPUS_L3_THRESHOLD = 25000;
+
+const getCampusBudgetThreshold = (campusValue) => {
+  const rawMap =
+    process.env.MODULE11_CAMPUS_L3_THRESHOLDS_JSON ||
+    process.env.CAMPUS_L3_THRESHOLDS_JSON ||
+    "";
+
+  const normalizedCampus = normalizeSingleStringField(campusValue || "").toLowerCase();
+  if (!rawMap || !normalizedCampus) {
+    return DEFAULT_CAMPUS_L3_THRESHOLD;
+  }
+
+  try {
+    const parsed = JSON.parse(rawMap);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return DEFAULT_CAMPUS_L3_THRESHOLD;
+    }
+
+    const matchedValue = Number(parsed[normalizedCampus] ?? parsed[campusValue]);
+    if (!Number.isFinite(matchedValue) || matchedValue <= 0) {
+      return DEFAULT_CAMPUS_L3_THRESHOLD;
+    }
+
+    return matchedValue;
+  } catch {
+    return DEFAULT_CAMPUS_L3_THRESHOLD;
+  }
+};
+
+const getStandaloneBudgetAmount = ({ payload = {}, parsedRegistrationFee = null }) => {
+  const directAmount = Number(
+    payload?.budget_amount ||
+      payload?.budgetAmount ||
+      payload?.estimated_budget_amount ||
+      payload?.estimatedBudgetAmount ||
+      payload?.total_estimated_expense ||
+      payload?.totalEstimatedExpense ||
+      payload?.budget ||
+      0
+  );
+
+  if (Number.isFinite(directAmount) && directAmount > 0) {
+    return directAmount;
+  }
+
+  const registrationFeeAmount = Number(parsedRegistrationFee || 0);
+  if (Number.isFinite(registrationFeeAmount) && registrationFeeAmount > 0) {
+    return registrationFeeAmount;
+  }
+
+  return 0;
+};
+
+const getStandaloneBudgetApprovalPlan = ({
+  campusHostedAt,
+  isBudgetRelated,
+  budgetAmount,
+}) => {
+  if (!Boolean(isBudgetRelated)) {
+    return {
+      requiresCfo: false,
+      requiresAccounts: false,
+      workflowStatus: null,
+    };
+  }
+
+  const normalizedAmount = Number(budgetAmount || 0);
+  if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+    return {
+      requiresCfo: false,
+      requiresAccounts: false,
+      workflowStatus: null,
+    };
+  }
+
+  const threshold = getCampusBudgetThreshold(campusHostedAt);
+  const requiresCfo = normalizedAmount > threshold;
+  return {
+    requiresCfo,
+    requiresAccounts: true,
+    workflowStatus: requiresCfo ? "pending_cfo" : "pending_accounts",
   };
 };
 
@@ -493,8 +578,10 @@ const createStandaloneApprovalRequestForEvent = async ({
   eventRecord,
   userInfo,
   isBudgetRelated,
-  requiresHodApproval = true,
-  requiresDeanApproval = true,
+  requiresHodApproval = false,
+  requiresDeanApproval = false,
+  requiresCfoApproval = false,
+  requiresAccountsApproval = false,
 }) => {
   const eventId = String(eventRecord?.event_id || "").trim();
   if (!eventId) {
@@ -526,11 +613,7 @@ const createStandaloneApprovalRequestForEvent = async ({
     stepSequence += 1;
   }
 
-  if (approvalSteps.length === 0) {
-    return null;
-  }
-
-  if (Boolean(isBudgetRelated)) {
+  if (Boolean(isBudgetRelated) && Boolean(requiresCfoApproval)) {
     approvalSteps.push({
       stepCode: "CFO",
       roleCode: ROLE_CODES.CFO,
@@ -539,7 +622,9 @@ const createStandaloneApprovalRequestForEvent = async ({
       requiredCount: 1,
     });
     stepSequence += 1;
+  }
 
+  if (Boolean(isBudgetRelated) && Boolean(requiresAccountsApproval)) {
     approvalSteps.push({
       stepCode: "ACCOUNTS",
       roleCode: ROLE_CODES.ACCOUNTS,
@@ -547,6 +632,10 @@ const createStandaloneApprovalRequestForEvent = async ({
       sequenceOrder: stepSequence,
       requiredCount: 1,
     });
+  }
+
+  if (approvalSteps.length === 0) {
+    return null;
   }
 
   const approvalRequest = await createApprovalRequestWithSteps({
@@ -2048,9 +2137,18 @@ router.post(
         registrationFee: parsedRegistrationFee,
         noFinancialRequirements: noFinancialRequirementsRequested,
       });
+      const standaloneBudgetAmount = getStandaloneBudgetAmount({
+        payload: req.body,
+        parsedRegistrationFee,
+      });
+      const standaloneBudgetPlan = getStandaloneBudgetApprovalPlan({
+        campusHostedAt: req.body.campus_hosted_at || req.body.campusHostedAt || "",
+        isBudgetRelated: isStandaloneBudgetRelated,
+        budgetAmount: standaloneBudgetAmount,
+      });
       const standaloneApprovalPreferences = resolveStandaloneApprovalPreferences(req.body, {
-        requiresHodApproval: true,
-        requiresDeanApproval: true,
+        requiresHodApproval: false,
+        requiresDeanApproval: false,
       });
 
       let parentFest = null;
@@ -2074,10 +2172,34 @@ router.post(
         });
       }
 
+      if (normalizedFestId && !childFestApproved) {
+        return res.status(403).json({
+          error:
+            "Parent fest is not yet approved. Events can only be created once the fest is fully approved.",
+        });
+      }
+
       if (userIsOrganizerStudentOnly && !childFestApproved) {
         return res.status(403).json({
           error: "Organizer Student can only create events under an approved fest.",
         });
+      }
+
+      if (userIsOrganizerStudentOnly && normalizedFestId) {
+        const subheadMembership = await queryOne("fest_subheads", {
+          where: {
+            fest_id: normalizedFestId,
+            user_email: normalizeEmailAddress(req.userInfo?.email || ""),
+            is_active: true,
+          },
+        });
+
+        if (!subheadMembership) {
+          return res.status(403).json({
+            error:
+              "You are not assigned as a subhead for this fest. Only listed subheads can create events under this fest.",
+          });
+        }
       }
 
       if (!shouldSaveAsDraft && normalizedFestId && !childFestApproved) {
@@ -2305,6 +2427,32 @@ router.post(
         organizing_school: organizingSchool,
         organizing_dept: organizing_dept || null,
         fest_id: normalizedFestReference,
+        parent_fest_id: normalizedFestReference,
+        event_context: normalizedFestReference ? "under_fest" : "standalone",
+        created_by_subhead: userIsOrganizerStudentOnly && Boolean(normalizedFestReference),
+        needs_hod_dean_approval:
+          !normalizedFestReference &&
+          (Boolean(standaloneApprovalPreferences.requiresHodApproval) ||
+            Boolean(standaloneApprovalPreferences.requiresDeanApproval)),
+        needs_budget_approval:
+          !normalizedFestReference &&
+          Boolean(
+            standaloneBudgetPlan.requiresCfo || standaloneBudgetPlan.requiresAccounts
+          ),
+        workflow_status:
+          normalizedFestReference && userIsOrganizerStudentOnly
+            ? "pending_organiser"
+            : !normalizedFestReference && !shouldSaveAsDraft && !shouldArchiveOnCreate
+            ? !standaloneApprovalPreferences.requiresHodApproval &&
+              !standaloneApprovalPreferences.requiresDeanApproval &&
+              !(standaloneBudgetPlan.requiresCfo || standaloneBudgetPlan.requiresAccounts)
+              ? "auto_approved"
+              : standaloneApprovalPreferences.requiresHodApproval
+              ? "pending_hod"
+              : standaloneApprovalPreferences.requiresDeanApproval
+              ? "pending_dean"
+              : standaloneBudgetPlan.workflowStatus || "draft"
+            : "draft",
         created_by: req.userInfo?.email,
         auth_uuid: req.userId,
         registration_deadline: req.body.registration_deadline || null,
@@ -2335,7 +2483,23 @@ router.post(
         created = await insert("events", [eventInsertPayload]);
       } catch (insertError) {
         const hasMissingLifecycleStatusColumn = isMissingColumnError(insertError, "status");
-        if (!isMissingAdditionalRequestsColumnError(insertError) && !hasMissingLifecycleStatusColumn) {
+        const missingWorkflowStatusColumn = isMissingColumnError(insertError, "workflow_status");
+        const missingEventContextColumn = isMissingColumnError(insertError, "event_context");
+        const missingNeedsHodDeanColumn = isMissingColumnError(insertError, "needs_hod_dean_approval");
+        const missingNeedsBudgetColumn = isMissingColumnError(insertError, "needs_budget_approval");
+        const missingParentFestColumn = isMissingColumnError(insertError, "parent_fest_id");
+        const missingCreatedBySubheadColumn = isMissingColumnError(insertError, "created_by_subhead");
+
+        if (
+          !isMissingAdditionalRequestsColumnError(insertError) &&
+          !hasMissingLifecycleStatusColumn &&
+          !missingWorkflowStatusColumn &&
+          !missingEventContextColumn &&
+          !missingNeedsHodDeanColumn &&
+          !missingNeedsBudgetColumn &&
+          !missingParentFestColumn &&
+          !missingCreatedBySubheadColumn
+        ) {
           throw insertError;
         }
 
@@ -2348,6 +2512,24 @@ router.post(
         delete fallbackInsertPayload.additional_requests;
         if (hasMissingLifecycleStatusColumn) {
           delete fallbackInsertPayload.status;
+        }
+        if (missingWorkflowStatusColumn) {
+          delete fallbackInsertPayload.workflow_status;
+        }
+        if (missingEventContextColumn) {
+          delete fallbackInsertPayload.event_context;
+        }
+        if (missingNeedsHodDeanColumn) {
+          delete fallbackInsertPayload.needs_hod_dean_approval;
+        }
+        if (missingNeedsBudgetColumn) {
+          delete fallbackInsertPayload.needs_budget_approval;
+        }
+        if (missingParentFestColumn) {
+          delete fallbackInsertPayload.parent_fest_id;
+        }
+        if (missingCreatedBySubheadColumn) {
+          delete fallbackInsertPayload.created_by_subhead;
         }
         created = await insert("events", [fallbackInsertPayload]);
       }
@@ -2373,16 +2555,6 @@ router.post(
         !shouldArchiveOnCreate &&
         !Boolean(normalizedFestReference);
 
-      if (
-        queueStandaloneApproval &&
-        !standaloneApprovalPreferences.requiresHodApproval &&
-        !standaloneApprovalPreferences.requiresDeanApproval
-      ) {
-        return res.status(400).json({
-          error: "Select at least one standalone approval stage (HOD or Dean).",
-        });
-      }
-
       if (queueTeacherApproval) {
         primaryApprovalRequest = await createTeacherApprovalRequestForChildEvent({
           eventRecord: createdEventRecord,
@@ -2399,6 +2571,8 @@ router.post(
           isBudgetRelated: isStandaloneBudgetRelated,
           requiresHodApproval: standaloneApprovalPreferences.requiresHodApproval,
           requiresDeanApproval: standaloneApprovalPreferences.requiresDeanApproval,
+          requiresCfoApproval: standaloneBudgetPlan.requiresCfo,
+          requiresAccountsApproval: standaloneBudgetPlan.requiresAccounts,
         });
 
         if (primaryApprovalRequest) {
@@ -2409,7 +2583,7 @@ router.post(
           );
           pendingDeanApproval = primaryRoleCode === ROLE_CODES.DEAN;
           pendingHodApproval = primaryRoleCode === ROLE_CODES.HOD;
-          pendingCfoApproval = Boolean(isStandaloneBudgetRelated);
+          pendingCfoApproval = Boolean(standaloneBudgetPlan.requiresCfo);
         }
       }
 
@@ -2511,7 +2685,15 @@ router.post(
           ? `Event submitted successfully and routed to ${primaryApproverLabel} and CFO approvals`
           : `Event submitted successfully and routed to ${primaryApproverLabel} approval`;
       } else if (isStandaloneEvent && !shouldSaveAsDraft) {
-        responseMessage = "Event saved as draft and pending approval";
+        const isAutoApprovedStandalone =
+          !standaloneApprovalPreferences.requiresHodApproval &&
+          !standaloneApprovalPreferences.requiresDeanApproval &&
+          !standaloneBudgetPlan.requiresCfo &&
+          !standaloneBudgetPlan.requiresAccounts;
+
+        responseMessage = isAutoApprovedStandalone
+          ? "Event auto-approved. You can proceed with service requests."
+          : "Event saved and routed for approvals";
       } else if (!canGoLiveNow && (serviceWorkflow.createdCount || 0) > 0) {
         responseMessage = "Event submitted successfully and routed for service approvals";
       }
@@ -2846,9 +3028,18 @@ router.put(
         registrationFee: parsedRegistrationFee,
         noFinancialRequirements: noFinancialRequirementsRequested,
       });
+      const standaloneBudgetAmount = getStandaloneBudgetAmount({
+        payload: req.body,
+        parsedRegistrationFee,
+      });
+      const standaloneBudgetPlan = getStandaloneBudgetApprovalPlan({
+        campusHostedAt: req.body.campus_hosted_at || req.body.campusHostedAt || event?.campus_hosted_at || "",
+        isBudgetRelated: isStandaloneBudgetRelated,
+        budgetAmount: standaloneBudgetAmount,
+      });
       const standaloneApprovalPreferences = resolveStandaloneApprovalPreferences(req.body, {
-        requiresHodApproval: true,
-        requiresDeanApproval: true,
+        requiresHodApproval: false,
+        requiresDeanApproval: false,
       });
       const organizerEmailInput = normalizeSingleStringField(req.body.organizer_email || "");
       const resolvedOrganizerEmail = normalizeEmailAddress(
@@ -3019,10 +3210,34 @@ router.put(
         });
       }
 
+      if (normalizedFestReference && !childFestApproved) {
+        return res.status(403).json({
+          error:
+            "Parent fest is not yet approved. Events can only be created once the fest is fully approved.",
+        });
+      }
+
       if (userIsOrganizerStudentOnly && !childFestApproved) {
         return res.status(403).json({
           error: "Organizer Student can only update events under an approved fest.",
         });
+      }
+
+      if (userIsOrganizerStudentOnly && normalizedFestReference) {
+        const subheadMembership = await queryOne("fest_subheads", {
+          where: {
+            fest_id: normalizedFestReference,
+            user_email: normalizeEmailAddress(req.userInfo?.email || ""),
+            is_active: true,
+          },
+        });
+
+        if (!subheadMembership) {
+          return res.status(403).json({
+            error:
+              "You are not assigned as a subhead for this fest. Only listed subheads can update events under this fest.",
+          });
+        }
       }
 
       if (wantsPublishIntent && normalizedFestReference && !childFestApproved) {
@@ -3126,6 +3341,34 @@ router.put(
         organizing_school: organizingSchool,
         organizing_dept: organizing_dept || null,
         fest_id: normalizedFestReference,
+        parent_fest_id: normalizedFestReference,
+        event_context: normalizedFestReference ? "under_fest" : "standalone",
+        created_by_subhead: userIsOrganizerStudentOnly && Boolean(normalizedFestReference),
+        needs_hod_dean_approval:
+          !normalizedFestReference &&
+          (Boolean(standaloneApprovalPreferences.requiresHodApproval) ||
+            Boolean(standaloneApprovalPreferences.requiresDeanApproval)),
+        needs_budget_approval:
+          !normalizedFestReference &&
+          Boolean(
+            standaloneBudgetPlan.requiresCfo || standaloneBudgetPlan.requiresAccounts
+          ),
+        workflow_status:
+          normalizedFestReference && userIsOrganizerStudentOnly
+            ? "pending_organiser"
+            : !normalizedFestReference && wantsPublishIntent
+            ? !standaloneApprovalPreferences.requiresHodApproval &&
+              !standaloneApprovalPreferences.requiresDeanApproval &&
+              !(standaloneBudgetPlan.requiresCfo || standaloneBudgetPlan.requiresAccounts)
+              ? "auto_approved"
+              : standaloneApprovalPreferences.requiresHodApproval
+              ? "pending_hod"
+              : standaloneApprovalPreferences.requiresDeanApproval
+              ? "pending_dean"
+              : standaloneBudgetPlan.workflowStatus || "draft"
+            : draftOverridePayload?.is_draft
+            ? "draft"
+            : undefined,
         registration_deadline: req.body.registration_deadline || null,
         // Preserve existing total_participants unless there is a specific admin action to modify it.
         // Include outsider-related settings so toggles persist from the client.
@@ -3190,6 +3433,12 @@ router.put(
 
         [
           "status",
+          "workflow_status",
+          "event_context",
+          "parent_fest_id",
+          "created_by_subhead",
+          "needs_hod_dean_approval",
+          "needs_budget_approval",
           "approval_state",
           "activation_state",
           "approval_request_id",
