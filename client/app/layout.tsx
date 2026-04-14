@@ -210,6 +210,46 @@ const transformToCarouselImage = (
 let serverSupabase: SupabaseClient | null = null;
 let missingSupabaseConfigWarned = false;
 
+type EventQueryVariant = {
+  applyFilters: (query: any) => any;
+};
+
+const EVENT_QUERY_VARIANTS: EventQueryVariant[] = [
+  {
+    applyFilters: (query) =>
+      query.eq("lifecycle_status", "published").eq("approval_state", "APPROVED"),
+  },
+  {
+    applyFilters: (query) =>
+      query.eq("status", "published").eq("approval_state", "APPROVED"),
+  },
+  {
+    applyFilters: (query) =>
+      query.eq("is_draft", false).eq("approval_state", "APPROVED"),
+  },
+  {
+    applyFilters: (query) => query.eq("is_draft", false),
+  },
+  {
+    applyFilters: (query) => query,
+  },
+];
+
+const isMissingEventFilterColumnError = (error: any): boolean => {
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || "").toLowerCase();
+
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    code === "PGRST205" ||
+    message.includes("column") ||
+    message.includes("does not exist") ||
+    message.includes("schema cache") ||
+    message.includes("could not find")
+  );
+};
+
 function getServerSupabase(): SupabaseClient | null {
   if (serverSupabase) return serverSupabase;
   
@@ -233,20 +273,38 @@ async function fetchEventsFromSupabase() {
   if (!supabase) {
     return [] as FetchedEvent[];
   }
-  
-  const { data, error: supabaseError } = await supabase
-    .from("events")
-    .select("*")
-    .eq("status", "published")
-    .eq("approval_state", "APPROVED")
-    .is("fest_id", null)
-    .order("created_at", { ascending: false });
 
-  if (supabaseError) {
+  let lastError: any = null;
+
+  for (const variant of EVENT_QUERY_VARIANTS) {
+    let query = supabase
+      .from("events")
+      .select("*")
+      .is("fest_id", null);
+
+    query = variant.applyFilters(query);
+    query = query.order("created_at", { ascending: false });
+
+    const { data, error: supabaseError } = await query;
+
+    if (!supabaseError) {
+      return (data as FetchedEvent[]) || [];
+    }
+
+    lastError = supabaseError;
+
+    if (isMissingEventFilterColumnError(supabaseError)) {
+      continue;
+    }
+
     throw new Error(supabaseError.message);
   }
 
-  return data as FetchedEvent[];
+  if (lastError) {
+    throw new Error(lastError.message);
+  }
+
+  return [] as FetchedEvent[];
 }
 
 async function fetchUpcomingEventsFromSupabase() {
@@ -254,23 +312,43 @@ async function fetchUpcomingEventsFromSupabase() {
   if (!supabase) {
     return [] as FetchedEvent[];
   }
+
   const todayIso = new Date().toISOString().slice(0, 10);
 
-  const { data, error: supabaseError } = await supabase
-    .from("events")
-    .select("*")
-    .eq("status", "published")
-    .eq("approval_state", "APPROVED")
-    .is("fest_id", null)
-    .gte("event_date", todayIso)
-    .order("event_date", { ascending: true })
-    .limit(12);
+  let lastError: any = null;
 
-  if (supabaseError) {
+  for (const variant of EVENT_QUERY_VARIANTS) {
+    let query = supabase
+      .from("events")
+      .select("*")
+      .is("fest_id", null);
+
+    query = variant.applyFilters(query);
+    query = query
+      .gte("event_date", todayIso)
+      .order("event_date", { ascending: true })
+      .limit(12);
+
+    const { data, error: supabaseError } = await query;
+
+    if (!supabaseError) {
+      return (data as FetchedEvent[]) || [];
+    }
+
+    lastError = supabaseError;
+
+    if (isMissingEventFilterColumnError(supabaseError)) {
+      continue;
+    }
+
     throw new Error(supabaseError.message);
   }
 
-  return (data as FetchedEvent[]) || [];
+  if (lastError) {
+    throw new Error(lastError.message);
+  }
+
+  return [] as FetchedEvent[];
 }
 
 // OPTIMIZATION: Cache the Supabase query with unstable_cache

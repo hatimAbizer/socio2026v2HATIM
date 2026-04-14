@@ -5,33 +5,77 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL!.replace(/\/api\/?$/, "")
 
 // ============ EVENTS ============
 
+type EventQueryAttempt = {
+  applyFilters: (query: any) => any;
+};
+
+const EVENT_QUERY_ATTEMPTS: EventQueryAttempt[] = [
+  {
+    applyFilters: (query) =>
+      query.eq('lifecycle_status', 'published').eq('approval_state', 'APPROVED'),
+  },
+  {
+    applyFilters: (query) =>
+      query.eq('status', 'published').eq('approval_state', 'APPROVED'),
+  },
+  {
+    applyFilters: (query) =>
+      query.eq('is_draft', false).eq('approval_state', 'APPROVED'),
+  },
+  {
+    applyFilters: (query) => query.eq('is_draft', false),
+  },
+  {
+    applyFilters: (query) => query,
+  },
+];
+
+async function queryVisibleEvents(options?: { upcomingLimit?: number }) {
+  let lastError: any = null;
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  for (const attempt of EVENT_QUERY_ATTEMPTS) {
+    let query = supabase
+      .from('events')
+      .select('*')
+      .is('fest_id', null);
+
+    query = attempt.applyFilters(query);
+
+    if (typeof options?.upcomingLimit === 'number') {
+      query = query
+        .gte('event_date', todayIso)
+        .order('event_date', { ascending: true })
+        .limit(options.upcomingLimit);
+    } else {
+      query = query.order('created_at', { ascending: false });
+    }
+
+    const { data, error } = await query;
+
+    if (!error) {
+      return data || [];
+    }
+
+    lastError = error;
+
+    if (isMissingRelationOrColumn(error)) {
+      continue;
+    }
+
+    throw error;
+  }
+
+  if (lastError) throw lastError;
+  return [];
+}
+
 export async function getEvents() {
-  const { data, error } = await supabase
-    .from('events')
-    .select('*')
-    .eq('status', 'published')
-    .eq('approval_state', 'APPROVED')
-    .is('fest_id', null)
-    .order('created_at', { ascending: false });
-  
-  if (error) throw error;
-  return data || [];
+  return queryVisibleEvents();
 }
 
 export async function getUpcomingEvents(limit = 50) {
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const { data, error } = await supabase
-    .from('events')
-    .select('*')
-    .eq('status', 'published')
-    .eq('approval_state', 'APPROVED')
-    .is('fest_id', null)
-    .gte('event_date', todayIso)
-    .order('event_date', { ascending: true })
-    .limit(limit);
-  
-  if (error) throw error;
-  return data || [];
+  return queryVisibleEvents({ upcomingLimit: limit });
 }
 
 export async function getEventById(eventId: string) {
@@ -88,13 +132,17 @@ const FEST_TABLE_CANDIDATES = ['fests', 'fest'] as const;
 const FEST_ID_COLUMN_CANDIDATES = ['fest_id', 'id'] as const;
 
 function isMissingRelationOrColumn(error: any): boolean {
-  const code = typeof error?.code === 'string' ? error.code : '';
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : '';
   const message = typeof error?.message === 'string' ? error.message.toLowerCase() : '';
   return (
     code === '42P01' ||
     code === '42703' ||
+    code === 'PGRST204' ||
+    code === 'PGRST205' ||
     (message.includes('relation') && message.includes('does not exist')) ||
-    (message.includes('column') && message.includes('does not exist'))
+    (message.includes('column') && message.includes('does not exist')) ||
+    message.includes('schema cache') ||
+    message.includes('could not find')
   );
 }
 
