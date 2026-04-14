@@ -92,6 +92,95 @@ CREATE TABLE IF NOT EXISTS public.service_requests (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Backward compatibility: align legacy service_requests schema (if table already existed)
+-- with Module 11 columns so index creation and new APIs work safely.
+ALTER TABLE public.service_requests
+  ADD COLUMN IF NOT EXISTS entity_type TEXT,
+  ADD COLUMN IF NOT EXISTS entity_id TEXT,
+  ADD COLUMN IF NOT EXISTS service_type TEXT,
+  ADD COLUMN IF NOT EXISTS assigned_incharge_email TEXT,
+  ADD COLUMN IF NOT EXISTS requester_email TEXT,
+  ADD COLUMN IF NOT EXISTS approval_notes TEXT,
+  ADD COLUMN IF NOT EXISTS resubmission_count INTEGER NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'service_requests'
+      AND column_name = 'event_id'
+  ) THEN
+    UPDATE public.service_requests
+    SET entity_type = COALESCE(entity_type, 'event'),
+        entity_id = COALESCE(entity_id, event_id)
+    WHERE entity_id IS NULL;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'service_requests'
+      AND column_name = 'service_role_code'
+  ) THEN
+    UPDATE public.service_requests
+    SET service_type = COALESCE(
+      service_type,
+      CASE
+        WHEN upper(service_role_code) LIKE '%IT%' THEN 'it'
+        WHEN upper(service_role_code) LIKE '%VENUE%' THEN 'venue'
+        WHEN upper(service_role_code) LIKE '%CATER%' THEN 'catering'
+        WHEN upper(service_role_code) LIKE '%STALL%' THEN 'stalls'
+        ELSE 'other'
+      END
+    )
+    WHERE service_type IS NULL;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'service_requests'
+      AND column_name = 'requested_by_email'
+  ) THEN
+    UPDATE public.service_requests
+    SET requester_email = COALESCE(requester_email, requested_by_email)
+    WHERE requester_email IS NULL;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'service_requests'
+      AND column_name = 'service_request_id'
+  ) THEN
+    UPDATE public.service_requests
+    SET entity_id = COALESCE(entity_id, service_request_id)
+    WHERE entity_id IS NULL;
+  END IF;
+END $$;
+
+UPDATE public.service_requests
+SET entity_type = COALESCE(entity_type, 'event'),
+    entity_id = COALESCE(entity_id, id::text),
+    service_type = COALESCE(NULLIF(service_type, ''), 'other'),
+    requester_email = COALESCE(requester_email, 'unknown@christuniversity.in')
+WHERE entity_type IS NULL
+   OR entity_id IS NULL
+   OR service_type IS NULL
+   OR requester_email IS NULL;
+
+ALTER TABLE public.service_requests
+  ALTER COLUMN entity_type SET NOT NULL,
+  ALTER COLUMN entity_id SET NOT NULL,
+  ALTER COLUMN service_type SET NOT NULL,
+  ALTER COLUMN requester_email SET NOT NULL,
+  ALTER COLUMN resubmission_count SET DEFAULT 0;
+
 -- 6. Create service_incharge_config table
 -- Admin configures who handles which service per campus
 CREATE TABLE IF NOT EXISTS public.service_incharge_config (

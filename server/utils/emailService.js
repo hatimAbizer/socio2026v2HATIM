@@ -472,6 +472,432 @@ export async function sendFinalRejectionEmail({ organizerEmail, entityType, enti
   return sendApprovalEmail(organizerEmail, subject, body);
 }
 
+const formatSubmittedDate = (value) => {
+  if (!value) return "date/time not available";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "date/time not available";
+  return parsed.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const sanitizeNotesForEmail = (value) => String(value || "").trim() || "No notes provided.";
+
+const entityDetailsBlock = ({
+  entityType,
+  entityTitle,
+  requesterName,
+  requesterEmail,
+  submittedAt,
+  actionTaken,
+  notes,
+}) => {
+  return `
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin:16px 0 20px 0;">
+      <p style="margin:0 0 8px 0;font-size:14px;">${entityChip(entityType, entityTitle)}</p>
+      <p style="margin:0 0 6px 0;font-size:13px;color:#475569;">Requester: <strong>${requesterName || requesterEmail || "Unknown"}</strong></p>
+      <p style="margin:0 0 6px 0;font-size:13px;color:#475569;">Submitted: <strong>${formatSubmittedDate(submittedAt)}</strong></p>
+      ${actionTaken ? `<p style="margin:0 0 6px 0;font-size:13px;color:#475569;">Action: <strong>${actionTaken}</strong></p>` : ""}
+      ${notes ? `<p style="margin:0;font-size:13px;color:#475569;">Notes: <strong>${sanitizeNotesForEmail(notes)}</strong></p>` : ""}
+    </div>
+  `;
+};
+
+const sendModule11Email = async ({
+  to,
+  subject,
+  heading,
+  intro,
+  entity,
+  ctaLabel,
+  ctaHref,
+}) => {
+  const body = `
+    <h2 style="color:#1e293b;font-size:20px;margin:0 0 8px 0;">${heading}</h2>
+    <p style="color:#64748b;font-size:14px;margin:0 0 12px 0;line-height:1.6;">${intro}</p>
+    ${entityDetailsBlock(entity)}
+    ${ctaButton(ctaLabel, ctaHref)}
+    ${divider}
+    <p style="color:#94a3b8;font-size:12px;margin:0;">SOCIO approval workflow notification.</p>
+  `;
+
+  return sendApprovalEmail(to, subject, body);
+};
+
+export const sendFestSubmittedToHodEmail = async ({
+  to,
+  festName,
+  requesterName,
+  requesterEmail,
+  submittedAt,
+  link,
+}) =>
+  sendModule11Email({
+    to,
+    subject: `Action required: ${festName} needs your approval`,
+    heading: "Fest approval required",
+    intro: "A fest has been submitted and is waiting for your HOD review.",
+    entity: {
+      entityType: "fest",
+      entityTitle: festName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Submitted to HOD",
+    },
+    ctaLabel: "Open fest approval",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendFestApprovedByHodToDeanEmail = async ({
+  to,
+  festName,
+  requesterName,
+  requesterEmail,
+  submittedAt,
+  hodNotes,
+  link,
+}) =>
+  sendModule11Email({
+    to,
+    subject: `Action required: ${festName} - HOD approved, needs your review`,
+    heading: "Dean review required",
+    intro: "HOD has approved this fest. Please review as Dean.",
+    entity: {
+      entityType: "fest",
+      entityTitle: festName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Approved by HOD",
+      notes: hodNotes,
+    },
+    ctaLabel: "Open dean review",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendFestApprovedToCfoEmail = async ({
+  to,
+  festName,
+  requesterName,
+  requesterEmail,
+  submittedAt,
+  amount,
+  link,
+}) =>
+  sendModule11Email({
+    to,
+    subject: `Action required: ${festName} - budget approval needed (Rs ${Number(amount || 0).toLocaleString("en-IN")})`,
+    heading: "CFO budget approval required",
+    intro: "Dean has approved this fest. Budget approval is now required.",
+    entity: {
+      entityType: "fest",
+      entityTitle: festName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Pending CFO",
+      notes: `Estimated budget: Rs ${Number(amount || 0).toLocaleString("en-IN")}`,
+    },
+    ctaLabel: "Open CFO review",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendFestApprovedToAccountsEmail = async ({
+  to,
+  festName,
+  requesterName,
+  requesterEmail,
+  submittedAt,
+  link,
+}) =>
+  sendModule11Email({
+    to,
+    subject: `Action required: ${festName} - L4 finance approval needed`,
+    heading: "Accounts approval required",
+    intro: "CFO has approved this fest. Accounts review is now pending.",
+    entity: {
+      entityType: "fest",
+      entityTitle: festName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Pending Accounts",
+    },
+    ctaLabel: "Open accounts review",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendFestFullyApprovedEmail = async ({
+  to,
+  festName,
+  requesterName,
+  requesterEmail,
+  submittedAt,
+  link,
+}) =>
+  sendModule11Email({
+    to,
+    subject: `✓ ${festName} is fully approved - you can now activate it`,
+    heading: "Fest fully approved",
+    intro: "All required approvals are complete. You can now activate this fest.",
+    entity: {
+      entityType: "fest",
+      entityTitle: festName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Fully approved",
+    },
+    ctaLabel: "Open fest details",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendFestRejectedEmail = async ({
+  to,
+  festName,
+  requesterName,
+  requesterEmail,
+  submittedAt,
+  step,
+  notes,
+  link,
+}) =>
+  sendModule11Email({
+    to,
+    subject: `${festName} - ${step || "approval"} rejected`,
+    heading: "Fest requires changes",
+    intro: "The fest was rejected in the approval workflow. Please review notes and resubmit.",
+    entity: {
+      entityType: "fest",
+      entityTitle: festName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: `${step || "Approval step"} rejected`,
+      notes,
+    },
+    ctaLabel: "Edit and resubmit",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendStandaloneEventToHodEmail = async ({ to, eventName, requesterName, requesterEmail, submittedAt, link }) =>
+  sendModule11Email({
+    to,
+    subject: `Action required: ${eventName} needs your approval`,
+    heading: "Standalone event submitted to HOD",
+    intro: "A standalone event requires your HOD approval.",
+    entity: {
+      entityType: "event",
+      entityTitle: eventName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Pending HOD",
+    },
+    ctaLabel: "Review event",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendStandaloneEventToDeanEmail = async ({ to, eventName, requesterName, requesterEmail, submittedAt, hodNotes, link }) =>
+  sendModule11Email({
+    to,
+    subject: `Action required: ${eventName} - HOD approved, needs your review`,
+    heading: "Standalone event pending Dean review",
+    intro: "HOD approval is complete. Dean review is now required.",
+    entity: {
+      entityType: "event",
+      entityTitle: eventName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Pending Dean",
+      notes: hodNotes,
+    },
+    ctaLabel: "Review event",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendStandaloneEventToCfoEmail = async ({ to, eventName, requesterName, requesterEmail, submittedAt, amount, link }) =>
+  sendModule11Email({
+    to,
+    subject: `Action required: ${eventName} - budget approval needed (Rs ${Number(amount || 0).toLocaleString("en-IN")})`,
+    heading: "Standalone event pending CFO review",
+    intro: "Budget approval is required for this standalone event.",
+    entity: {
+      entityType: "event",
+      entityTitle: eventName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Pending CFO",
+      notes: `Budget amount: Rs ${Number(amount || 0).toLocaleString("en-IN")}`,
+    },
+    ctaLabel: "Review budget",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendStandaloneEventToAccountsEmail = async ({ to, eventName, requesterName, requesterEmail, submittedAt, link }) =>
+  sendModule11Email({
+    to,
+    subject: `Action required: ${eventName} - L4 finance approval needed`,
+    heading: "Standalone event pending Accounts review",
+    intro: "Accounts approval is required for this standalone event.",
+    entity: {
+      entityType: "event",
+      entityTitle: eventName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Pending Accounts",
+    },
+    ctaLabel: "Review finance step",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendStandaloneEventAutoApprovedEmail = async ({ to, eventName, requesterName, requesterEmail, submittedAt, link }) =>
+  sendModule11Email({
+    to,
+    subject: `✓ ${eventName} auto-approved - proceed to services`,
+    heading: "Event auto-approved",
+    intro: "No HOD/Dean or budget approval was required. You can proceed to service requests.",
+    entity: {
+      entityType: "event",
+      entityTitle: eventName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Auto approved",
+    },
+    ctaLabel: "Open event",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendUnderFestEventToOrganiserEmail = async ({ to, eventName, subOrganiserName, requesterEmail, submittedAt, link }) =>
+  sendModule11Email({
+    to,
+    subject: `Action required: ${subOrganiserName || "Sub-organiser"} submitted ${eventName}`,
+    heading: "Under-fest event awaiting organiser review",
+    intro: "A sub-organiser submitted an event under your fest.",
+    entity: {
+      entityType: "event",
+      entityTitle: eventName,
+      requesterName: subOrganiserName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Pending organiser",
+    },
+    ctaLabel: "Review submission",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendUnderFestEventApprovedEmail = async ({ to, eventName, requesterName, requesterEmail, submittedAt, link }) =>
+  sendModule11Email({
+    to,
+    subject: `✓ ${eventName} approved by organiser - proceed to services`,
+    heading: "Organiser approved your event",
+    intro: "Your event is approved by the fest organiser. You can now request services.",
+    entity: {
+      entityType: "event",
+      entityTitle: eventName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: "Organiser approved",
+    },
+    ctaLabel: "Open event",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendServiceRequestToInchargeEmail = async ({
+  to,
+  serviceType,
+  entityType,
+  entityName,
+  requesterName,
+  requesterEmail,
+  submittedAt,
+  notes,
+  link,
+}) =>
+  sendModule11Email({
+    to,
+    subject: `Service request: ${serviceType} for ${entityName}`,
+    heading: "Service request pending your action",
+    intro: "A service request has been assigned to you for approval.",
+    entity: {
+      entityType,
+      entityTitle: entityName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: `Service requested: ${serviceType}`,
+      notes,
+    },
+    ctaLabel: "Open service request",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendServiceRequestApprovedEmail = async ({
+  to,
+  serviceType,
+  entityType,
+  entityName,
+  requesterName,
+  requesterEmail,
+  submittedAt,
+  link,
+}) =>
+  sendModule11Email({
+    to,
+    subject: `✓ ${serviceType} approved for ${entityName}`,
+    heading: "Service request approved",
+    intro: "Your service request was approved.",
+    entity: {
+      entityType,
+      entityTitle: entityName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: `${serviceType} approved`,
+    },
+    ctaLabel: "View details",
+    ctaHref: link || appLink("/manage"),
+  });
+
+export const sendServiceRequestRejectedEmail = async ({
+  to,
+  serviceType,
+  entityType,
+  entityName,
+  requesterName,
+  requesterEmail,
+  submittedAt,
+  notes,
+  link,
+}) =>
+  sendModule11Email({
+    to,
+    subject: `${serviceType} rejected - ${sanitizeNotesForEmail(notes).slice(0, 80)}`,
+    heading: "Service request rejected",
+    intro: "Your service request was rejected. Review notes and resubmit if allowed.",
+    entity: {
+      entityType,
+      entityTitle: entityName,
+      requesterName,
+      requesterEmail,
+      submittedAt,
+      actionTaken: `${serviceType} rejected`,
+      notes,
+    },
+    ctaLabel: "View request",
+    ctaHref: link || appLink("/manage"),
+  });
+
 export default {
   sendWelcomeEmail,
   sendRegistrationEmail,
@@ -481,4 +907,20 @@ export default {
   sendFullyApprovedEmail,
   sendReturnedForRevisionEmail,
   sendFinalRejectionEmail,
+  sendFestSubmittedToHodEmail,
+  sendFestApprovedByHodToDeanEmail,
+  sendFestApprovedToCfoEmail,
+  sendFestApprovedToAccountsEmail,
+  sendFestFullyApprovedEmail,
+  sendFestRejectedEmail,
+  sendStandaloneEventToHodEmail,
+  sendStandaloneEventToDeanEmail,
+  sendStandaloneEventToCfoEmail,
+  sendStandaloneEventToAccountsEmail,
+  sendStandaloneEventAutoApprovedEmail,
+  sendUnderFestEventToOrganiserEmail,
+  sendUnderFestEventApprovedEmail,
+  sendServiceRequestToInchargeEmail,
+  sendServiceRequestApprovedEmail,
+  sendServiceRequestRejectedEmail,
 };
