@@ -1,5 +1,4 @@
 import { createBrowserClient } from '@supabase/ssr';
-import type { Database } from '../../types/supabase';
 
 /**
  * Supabase client for authentication and database operations.
@@ -16,6 +15,6 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 // Create Supabase client for browser
-export const supabase = createBrowserClient<Database>(supabaseUrl, supabaseAnonKey);
+export const supabase = createBrowserClient(supabaseUrl, supabaseAnonKey);
 
 export default supabase;

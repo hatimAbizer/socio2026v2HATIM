@@ -1075,7 +1075,7 @@ function buildTimeline(
 
   decisionsAscending.forEach((decision) => {
     const step = stepById.get(normalizeText(decision.approval_step_id));
-    const roleCode = normalizeText(decision.role_code) || inferStepRole(step);
+    const roleCode = normalizeText(decision.role_code) || inferStepRole(step || null);
     const roleLabel = resolveRoleLabel(roleCode);
 
     const decisionToken = normalizeUpper(decision.decision);

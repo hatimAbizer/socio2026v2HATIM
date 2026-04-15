@@ -50,6 +50,9 @@ const RUNSHEET_RESPONSIBLE_FIELDS = [
 const RESOURCE_ID_FIELDS = ["id", "resource_id", "item_id"] as const;
 const RESOURCE_STATUS_FIELDS = ["status", "resource_status", "state", "lifecycle_status"] as const;
 
+// Some volunteer execution tables are environment-specific and absent from generated schema types.
+const supabaseUntyped = supabase as any;
+
 function normalizeText(value: unknown): string {
   return String(value || "").trim();
 }
@@ -363,7 +366,7 @@ export default function VolunteerExecutionDashboardClient({
       return;
     }
 
-    const { data, error } = await supabase.from("runsheet_items").select("*").eq("event_id", eventId);
+    const { data, error } = await supabaseUntyped.from("runsheet_items").select("*").eq("event_id", eventId);
 
     if (error) {
       return;
@@ -386,7 +389,7 @@ export default function VolunteerExecutionDashboardClient({
       return;
     }
 
-    const { data, error } = await supabase.from("event_resources").select("*").eq("event_id", eventId);
+    const { data, error } = await supabaseUntyped.from("event_resources").select("*").eq("event_id", eventId);
 
     if (error) {
       return;
@@ -459,7 +462,7 @@ export default function VolunteerExecutionDashboardClient({
     let updateErrorMessage = "";
 
     for (const candidate of statusCandidates) {
-      const { error } = await supabase
+      const { error } = await supabaseUntyped
         .from("runsheet_items")
         .update({ [task.statusField]: candidate })
         .eq(task.idField, task.id)
@@ -505,7 +508,7 @@ export default function VolunteerExecutionDashboardClient({
     let updateErrorMessage = "";
 
     for (const candidate of statusCandidates) {
-      const { error } = await supabase
+      const { error } = await supabaseUntyped
         .from("event_resources")
         .update({ [resource.statusField]: candidate })
         .eq(resource.idField, resource.id)
@@ -577,7 +580,7 @@ export default function VolunteerExecutionDashboardClient({
     let errorMessage = "";
 
     for (const payload of insertCandidates) {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseUntyped
         .from("incident_logs")
         .insert(payload)
         .select("*")
@@ -699,7 +702,7 @@ export default function VolunteerExecutionDashboardClient({
       let insertSucceeded = false;
 
       for (const payload of insertCandidates) {
-        const { error } = await supabase.from("expense_documents").insert(payload);
+        const { error } = await supabaseUntyped.from("expense_documents").insert(payload);
         if (!error) {
           insertSucceeded = true;
           break;
