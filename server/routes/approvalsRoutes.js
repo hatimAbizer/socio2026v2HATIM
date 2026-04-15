@@ -736,6 +736,121 @@ const normalizeSchoolScopeValue = (value) =>
     .toLowerCase()
     .replace(/\s+/g, " ");
 
+const normalizeDepartmentScopeForMatching = (value) =>
+  normalizeDepartmentScopeValue(value)
+    .replace(/[_-]+/g, " ")
+    .replace(/^department of\s+/, "")
+    .replace(/^department\s+/, "")
+    .replace(/^dept(?:\.)?\s+of\s+/, "")
+    .replace(/^dept(?:\.)?\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const buildDepartmentScopeCandidates = (value) => {
+  const candidates = new Set();
+  const raw = normalizeDepartmentScopeValue(value);
+  const canonical = normalizeDepartmentScopeForMatching(value);
+
+  if (raw) {
+    candidates.add(raw);
+  }
+
+  if (canonical) {
+    candidates.add(canonical);
+    candidates.add(canonical.replace(/\s+/g, "_"));
+    candidates.add(`dept_${canonical.replace(/\s+/g, "_")}`);
+    candidates.add(`department_${canonical.replace(/\s+/g, "_")}`);
+    candidates.add(`department of ${canonical}`);
+  }
+
+  return Array.from(candidates).filter((candidate) => candidate.length > 0);
+};
+
+const resolveSchoolScopeFromDepartmentValue = async (departmentValue) => {
+  const candidateSet = new Set(buildDepartmentScopeCandidates(departmentValue));
+  if (candidateSet.size === 0) {
+    return "";
+  }
+
+  const departmentIdCandidates = Array.from(candidateSet).filter((candidate) =>
+    UUID_REGEX.test(candidate)
+  );
+
+  for (const departmentId of departmentIdCandidates) {
+    try {
+      const departmentRow = await queryOne("departments_courses", {
+        where: { id: departmentId },
+        select: "id,department_name,school",
+      });
+
+      if (departmentRow?.department_name) {
+        const rowCandidates = buildDepartmentScopeCandidates(
+          departmentRow.department_name
+        );
+        rowCandidates.forEach((candidate) => candidateSet.add(candidate));
+      }
+
+      const schoolValue = normalizeSchoolScopeValue(departmentRow?.school);
+      if (schoolValue) {
+        return schoolValue;
+      }
+    } catch (error) {
+      if (
+        isMissingRelationError(error) ||
+        isMissingColumnError(error, "id") ||
+        isMissingColumnError(error, "department_name") ||
+        isMissingColumnError(error, "school")
+      ) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  const findSchoolMatch = (rows) => {
+    for (const row of rows || []) {
+      const rowCandidates = buildDepartmentScopeCandidates(row?.department_name);
+      const hasMatch = rowCandidates.some((candidate) => candidateSet.has(candidate));
+      if (!hasMatch) {
+        continue;
+      }
+
+      const schoolValue = normalizeSchoolScopeValue(row?.school);
+      if (schoolValue) {
+        return schoolValue;
+      }
+    }
+
+    return "";
+  };
+
+  for (const tableName of ["departments_courses", "department_school"]) {
+    try {
+      const rows = await queryAll(tableName, {
+        select: "department_name,school",
+      });
+
+      const schoolValue = findSchoolMatch(rows);
+      if (schoolValue) {
+        return schoolValue;
+      }
+    } catch (error) {
+      if (
+        isMissingRelationError(error) ||
+        isMissingColumnError(error, "department_name") ||
+        isMissingColumnError(error, "school")
+      ) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  return "";
+};
+
 const isRoleAssignmentActive = (assignment) => {
   if (!assignment || assignment.is_active === false) {
     return false;
@@ -998,10 +1113,32 @@ const resolveApprovalRequestDepartmentScopeValue = async (approvalRequest) => {
 };
 
 const resolveApprovalRequestSchoolScopeValue = async (approvalRequest) => {
-  return resolveApprovalRequestScopeValue({
+  const directSchoolScope = await resolveApprovalRequestScopeValue({
     approvalRequest,
     scopeColumn: "organizing_school",
     normalizeScopeValue: normalizeSchoolScopeValue,
+  });
+
+  if (directSchoolScope) {
+    return directSchoolScope;
+  }
+
+  const departmentScope = await resolveApprovalRequestDepartmentScopeValue(
+    approvalRequest
+  );
+
+  if (!departmentScope) {
+    return "";
+  }
+
+  return resolveSchoolScopeFromDepartmentValue(departmentScope);
+};
+
+const resolveApprovalRequestCampusScopeValue = async (approvalRequest) => {
+  return resolveApprovalRequestScopeValue({
+    approvalRequest,
+    scopeColumn: "campus_hosted_at",
+    normalizeScopeValue: (value) => String(value || "").trim(),
   });
 };
 
@@ -1281,6 +1418,156 @@ const ensureQueueAccess = async (req, res, roleCode, approvalRequest = null) => 
   }
 
   return true;
+};
+
+const persistApprovalRequestScopeForRouting = async (approvalRequest) => {
+  if (!approvalRequest?.id) {
+    return approvalRequest;
+  }
+
+  const currentDepartment = String(approvalRequest?.organizing_dept || "").trim();
+  const currentSchool = String(approvalRequest?.organizing_school || "").trim();
+  const currentCampus = String(approvalRequest?.campus_hosted_at || "").trim();
+
+  const updates = {};
+
+  if (!currentDepartment) {
+    const resolvedDepartment = await resolveApprovalRequestDepartmentScopeValue(
+      approvalRequest
+    );
+    if (resolvedDepartment) {
+      updates.organizing_dept = resolvedDepartment;
+    }
+  }
+
+  if (!currentSchool) {
+    const resolvedSchool = await resolveApprovalRequestSchoolScopeValue({
+      ...approvalRequest,
+      organizing_dept: currentDepartment || updates.organizing_dept || null,
+    });
+
+    if (resolvedSchool) {
+      updates.organizing_school = resolvedSchool;
+    }
+  }
+
+  if (!currentCampus) {
+    const resolvedCampus = await resolveApprovalRequestCampusScopeValue(approvalRequest);
+    if (resolvedCampus) {
+      updates.campus_hosted_at = resolvedCampus;
+    }
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return approvalRequest;
+  }
+
+  const nowIso = new Date().toISOString();
+  const persisted = await updateWithMissingColumnFallback({
+    tableName: "approval_requests",
+    updates: {
+      ...updates,
+      updated_at: nowIso,
+    },
+    where: { id: approvalRequest.id },
+    removableColumns: ["organizing_dept", "organizing_school", "campus_hosted_at"],
+  });
+
+  if (!persisted) {
+    return approvalRequest;
+  }
+
+  return {
+    ...approvalRequest,
+    ...updates,
+    updated_at: nowIso,
+  };
+};
+
+const ensureDeanStepAfterHodTransition = async ({ approvalRequest, approvalStep, nowIso }) => {
+  const requestDbId = String(approvalRequest?.id || "").trim();
+  if (!requestDbId) {
+    return;
+  }
+
+  const stepRoleCode = normalizeRoleCode(approvalStep?.role_code || approvalStep?.step_code);
+  if (stepRoleCode !== ROLE_CODES.HOD) {
+    return;
+  }
+
+  const existingDeanSteps = await queryAll("approval_steps", {
+    where: {
+      approval_request_id: requestDbId,
+      role_code: ROLE_CODES.DEAN,
+    },
+    order: { column: "sequence_order", ascending: true },
+    limit: 1,
+  });
+
+  if ((existingDeanSteps || []).length > 0) {
+    return;
+  }
+
+  const hodSequenceOrder = Number(approvalStep?.sequence_order || 0) || 1;
+  const hodStepGroup = Number(approvalStep?.step_group || hodSequenceOrder) || hodSequenceOrder;
+
+  const allSteps = await queryAll("approval_steps", {
+    where: { approval_request_id: requestDbId },
+    order: { column: "sequence_order", ascending: false },
+  });
+
+  for (const stepRow of allSteps || []) {
+    const stepId = String(stepRow?.id || "").trim();
+    if (!stepId || stepId === String(approvalStep?.id || "").trim()) {
+      continue;
+    }
+
+    const sequenceOrder = Number(stepRow?.sequence_order || 0);
+    if (!Number.isFinite(sequenceOrder) || sequenceOrder <= hodSequenceOrder) {
+      continue;
+    }
+
+    const stepGroupValue = Number(stepRow?.step_group || sequenceOrder);
+    const shiftedStepGroup = Number.isFinite(stepGroupValue) && stepGroupValue > 0
+      ? stepGroupValue + 1
+      : sequenceOrder + 1;
+
+    await update(
+      "approval_steps",
+      {
+        sequence_order: sequenceOrder + 1,
+        step_group: shiftedStepGroup,
+        updated_at: nowIso,
+      },
+      { id: stepId }
+    );
+  }
+
+  await update(
+    "approval_steps",
+    {
+      status: "WAITING",
+      updated_at: nowIso,
+    },
+    {
+      approval_request_id: requestDbId,
+      status: "PENDING",
+    }
+  );
+
+  await insert("approval_steps", [
+    {
+      approval_request_id: requestDbId,
+      step_code: "DEAN",
+      role_code: ROLE_CODES.DEAN,
+      step_group: hodStepGroup + 1,
+      sequence_order: hodSequenceOrder + 1,
+      required_count: 1,
+      status: "WAITING",
+      created_at: nowIso,
+      updated_at: nowIso,
+    },
+  ]);
 };
 
 const recomputeApprovalRequestStatus = async (approvalRequestId) => {
@@ -1979,7 +2266,7 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
       return res.status(400).json({ error: "decision must be APPROVED or REJECTED" });
     }
 
-    const approvalRequest = await queryOne("approval_requests", {
+    let approvalRequest = await queryOne("approval_requests", {
       where: { request_id: requestId },
     });
 
@@ -2031,7 +2318,9 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
 
     const nowIso = new Date().toISOString();
 
-    await update(
+    approvalRequest = await persistApprovalRequestScopeForRouting(approvalRequest);
+
+    const updatedStepRows = await update(
       "approval_steps",
       {
         status: decision,
@@ -2041,7 +2330,11 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
       { id: approvalStep.id }
     );
 
-    await insert("approval_decisions", [{
+    if (!Array.isArray(updatedStepRows) || updatedStepRows.length === 0) {
+      throw new Error("Failed to persist approval step decision.");
+    }
+
+    const insertedDecisionRows = await insert("approval_decisions", [{
       approval_request_id: approvalRequest.id,
       approval_step_id: approvalStep.id,
       decided_by_user_id: req.userInfo?.id || null,
@@ -2051,7 +2344,17 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
       comment,
     }]);
 
+    if (!Array.isArray(insertedDecisionRows) || insertedDecisionRows.length === 0) {
+      throw new Error("Failed to persist approval decision record.");
+    }
+
     if (decision === "APPROVED") {
+      await ensureDeanStepAfterHodTransition({
+        approvalRequest,
+        approvalStep,
+        nowIso,
+      });
+
       const waitingSteps = await queryAll("approval_steps", {
         where: {
           approval_request_id: approvalRequest.id,
