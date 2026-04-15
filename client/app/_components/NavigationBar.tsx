@@ -162,37 +162,27 @@ function NavigationBar() {
     Boolean((userData as any)?.is_masteradmin) ||
     hasAnyRoleCode(userRecord, ["MASTER_ADMIN"]) ||
     hasRoleAlias(universityRole, ["masteradmin", "master admin"]);
-  const isOrganiser =
-    Boolean(userData?.is_organiser) || hasAnyRoleCode(userRecord, ["ORGANIZER_TEACHER"]);
-  const isSupport =
-    Boolean(userData?.is_support) || hasAnyRoleCode(userRecord, ["SUPPORT"]);
-  const isHod =
-    Boolean((userData as any)?.is_hod) || hasAnyRoleCode(userRecord, ["HOD"]);
-  const isDean =
-    Boolean((userData as any)?.is_dean) || hasAnyRoleCode(userRecord, ["DEAN"]);
-  const isCfo =
-    Boolean((userData as any)?.is_cfo) || hasAnyRoleCode(userRecord, ["CFO"]);
-  const isStudentOrganiser =
-    Boolean((userData as any)?.is_organiser_student) ||
-    hasAnyRoleCode(userRecord, ["ORGANIZER_STUDENT"]);
-  const isVolunteer =
-    Boolean((userData as any)?.is_volunteer) ||
-    hasAnyRoleCode(userRecord, ["ORGANIZER_VOLUNTEER"]);
-  const isFinanceOfficer =
-    Boolean((userData as any)?.is_finance_officer) ||
-    hasAnyRoleCode(userRecord, ["ACCOUNTS"]);
+  const isOrganiser = Boolean(userData?.is_organiser);
+  const isSupport = Boolean(userData?.is_support);
+  const isHod = Boolean((userData as any)?.is_hod);
+  const isDean = Boolean((userData as any)?.is_dean);
+  const isCfo = Boolean((userData as any)?.is_cfo);
+  const isStudentOrganiser = Boolean((userData as any)?.is_organiser_student);
+  const isVolunteer = Boolean((userData as any)?.is_volunteer);
+  const isFinanceOfficer = Boolean((userData as any)?.is_finance_officer);
   const accessibleServiceRoleDashboards = getAccessibleServiceRoleDashboards(
     userRecord,
     isMasterAdmin
   );
-  const canOpenManageDashboard = isOrganiser || isMasterAdmin;
-  const canOpenHodDashboard = isHod || isMasterAdmin;
-  const canOpenDeanDashboard = isDean || isMasterAdmin;
-  const canOpenCfoDashboard = isCfo || isMasterAdmin;
-  const canOpenStudentOrganiserDashboard = isStudentOrganiser || isMasterAdmin;
-  const canOpenFinanceDashboard = isFinanceOfficer || isMasterAdmin;
-  const canOpenVolunteerDashboard = isVolunteer || isMasterAdmin;
-  const canOpenSupportDashboard = isSupport || isMasterAdmin;
+  // Only allow dashboard if user has that role, or admin (admin handled separately)
+  const canOpenManageDashboard = isOrganiser;
+  const canOpenHodDashboard = isHod;
+  const canOpenDeanDashboard = isDean;
+  const canOpenCfoDashboard = isCfo;
+  const canOpenStudentOrganiserDashboard = isStudentOrganiser;
+  const canOpenFinanceDashboard = isFinanceOfficer;
+  const canOpenVolunteerDashboard = isVolunteer;
+  const canOpenSupportDashboard = isSupport;
   const isManagementUser =
     isMasterAdmin ||
     isOrganiser ||
@@ -206,102 +196,56 @@ function NavigationBar() {
     accessibleServiceRoleDashboards.length > 0;
   const roleDashboardLinks = useMemo(
     () => {
-      const unsortedRoleDashboardLinks = dedupeRoleDashboardLinks(
-        [
-          isMasterAdmin
-            ? { name: "Admin", href: "/masteradmin", variant: "danger" }
-            : null,
-          canOpenManageDashboard
-            ? {
-                name: isOrganiser ? "Organiser" : "Manage Dashboard",
-                href: "/manage",
-                variant: "brand",
-              }
-            : null,
-          canOpenStudentOrganiserDashboard
-            ? {
-                name: "Student Organiser Dashboard",
-                href: "/manage/student-organiser",
-                variant: "brand",
-              }
-            : null,
-          canOpenVolunteerDashboard
-            ? {
-                name: "Volunteer Dashboard",
-                href: "/execution/volunteer",
-                variant: "neutral",
-              }
-            : null,
-          canOpenHodDashboard
-            ? { name: "HOD Dashboard", href: "/manage/hod", variant: "neutral" }
-            : null,
-          canOpenDeanDashboard
-            ? { name: "Dean Dashboard", href: "/manage/dean", variant: "neutral" }
-            : null,
-          ...accessibleServiceRoleDashboards.map((roleConfig) => ({
+      let links: RoleDashboardLink[] = [];
+      if (isMasterAdmin) {
+        // Admin sees all dashboards
+        links.push({ name: "Admin", href: "/masteradmin", variant: "danger" });
+        links.push({ name: "CFO Dashboard", href: "/manage/cfo", variant: "amber" });
+        links.push({ name: "Finance Dashboard", href: "/manage/finance", variant: "emerald" });
+        links.push({ name: "Dean Dashboard", href: "/manage/dean", variant: "neutral" });
+        links.push({ name: "HOD Dashboard", href: "/manage/hod", variant: "neutral" });
+        links.push({ name: "Organiser", href: "/manage", variant: "brand" });
+        links.push({ name: "Student Organiser Dashboard", href: "/manage/student-organiser", variant: "brand" });
+        links.push({ name: "Volunteer Dashboard", href: "/execution/volunteer", variant: "neutral" });
+        links = links.concat([
+          { name: "Stalls/Misc Dashboard", href: "/manage/stalls-misc", variant: "neutral" },
+          { name: "IT Dashboard", href: "/manage/it", variant: "neutral" },
+          { name: "Venue Dashboard", href: "/manage/venue", variant: "neutral" },
+          { name: "Catering Vendors Dashboard", href: "/manage/catering-vendors", variant: "neutral" },
+        ]);
+        links.push({ name: "Support Dashboard", href: "/support/inbox", variant: "neutral" });
+      } else {
+        if (isOrganiser) links.push({ name: "Organiser", href: "/manage", variant: "brand" });
+        if (isStudentOrganiser) links.push({ name: "Student Organiser Dashboard", href: "/manage/student-organiser", variant: "brand" });
+        if (isVolunteer) links.push({ name: "Volunteer Dashboard", href: "/execution/volunteer", variant: "neutral" });
+        if (isHod) links.push({ name: "HOD Dashboard", href: "/manage/hod", variant: "neutral" });
+        if (isDean) links.push({ name: "Dean Dashboard", href: "/manage/dean", variant: "neutral" });
+        if (isCfo) links.push({ name: "CFO Dashboard", href: "/manage/cfo", variant: "amber" });
+        if (isFinanceOfficer) links.push({ name: "Finance Dashboard", href: "/manage/finance", variant: "emerald" });
+        if (isSupport) links.push({ name: "Support Dashboard", href: "/support/inbox", variant: "neutral" });
+        // Service dashboards (IT, Venue, etc.)
+        links = links.concat(
+          accessibleServiceRoleDashboards.map((roleConfig) => ({
             name: `${roleConfig.label} Dashboard`,
             href: `/manage/${roleConfig.slug}`,
             variant: "neutral" as const,
-          })),
-          canOpenCfoDashboard
-            ? { name: "CFO Dashboard", href: "/manage/cfo", variant: "amber" }
-            : null,
-          canOpenFinanceDashboard
-            ? {
-                name: "Finance Dashboard",
-                href: "/manage/finance",
-                variant: "emerald",
-              }
-            : null,
-          canOpenSupportDashboard
-            ? { name: "Support Dashboard", href: "/support/inbox", variant: "neutral" }
-            : null,
-        ].filter((item): item is RoleDashboardLink => item !== null)
-      );
-
-  const roleDashboardDisplayPriorityOrder = [
-    "/masteradmin",
-    "/manage/cfo",
-    "/manage/finance",
-    "/manage/dean",
-    "/manage/hod",
-    "/manage",
-    "/manage/student-organiser",
-    "/execution/volunteer",
-    "/manage/stalls-misc",
-    "/manage/it",
-    "/manage/venue",
-    "/manage/catering-vendors",
-    "/support/inbox",
-  ];
-
-      const roleDashboardDisplayPriority = new Map(
-        roleDashboardDisplayPriorityOrder.map((href, index) => [href, index])
-      );
-
-      return [...unsortedRoleDashboardLinks].sort((left, right) => {
-        const leftPriority = roleDashboardDisplayPriority.get(left.href) ?? Number.MAX_SAFE_INTEGER;
-        const rightPriority = roleDashboardDisplayPriority.get(right.href) ?? Number.MAX_SAFE_INTEGER;
-
-        if (leftPriority === rightPriority) {
-          return 0;
-        }
-
-        return leftPriority - rightPriority;
-      });
+          }))
+        );
+      }
+      // Remove duplicates by href
+      return dedupeRoleDashboardLinks(links);
     },
     [
       isMasterAdmin,
-      canOpenManageDashboard,
       isOrganiser,
-      canOpenStudentOrganiserDashboard,
-      canOpenVolunteerDashboard,
-      canOpenHodDashboard,
-      canOpenDeanDashboard,
+      isStudentOrganiser,
+      isVolunteer,
+      isHod,
+      isDean,
+      isCfo,
+      isFinanceOfficer,
+      isSupport,
       accessibleServiceRoleDashboards,
-      canOpenCfoDashboard,
-      canOpenFinanceDashboard,
-      canOpenSupportDashboard,
     ]
   );
   const shouldGroupRoleDashboards = roleDashboardLinks.length > 2;
