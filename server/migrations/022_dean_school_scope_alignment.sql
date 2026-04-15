@@ -12,7 +12,7 @@ from (
   select
     u.id as user_id,
     coalesce(
-      nullif(trim(u.school_id), ''),
+      nullif(trim(to_jsonb(u) ->> 'school_id'), ''),
       nullif(trim(u.school), ''),
       nullif(trim(ura2.school_scope), ''),
       nullif(trim(ura2.department_scope), '')
