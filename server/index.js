@@ -151,6 +151,10 @@ app.get('/', (req, res) => {
 });
 
 app.use("/api/users", userRoutes);
+// Mount approval routers before generic entity routers so queue/context paths
+// are not swallowed by `/:id` handlers in base event/fest routes.
+app.use("/api/events", eventsApprovalRoutes);
+app.use("/api/fests", festsApprovalRoutes);
 app.use("/api/events", eventRoutes);
 app.use("/api/fests", festRoutes);
 app.use("/api", registrationRoutes);
@@ -162,8 +166,6 @@ app.use("/api/chat", chatRoutes);
 app.use("/api", reportRoutes);
 app.use("/api/statuscheck", statuscheckRoutes);
 app.use("/api/approvals", approvalsRoutes);
-app.use("/api/fests", festsApprovalRoutes);
-app.use("/api/events", eventsApprovalRoutes);
 app.use("/api/service-requests", serviceRequestsRoutes);
 // Global error handler - ensures CORS headers are always sent
 app.use((err, req, res, next) => {

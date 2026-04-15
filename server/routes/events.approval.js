@@ -458,7 +458,7 @@ const notifyEventRejection = async ({ event, stepLabel, notes, reviewer }) => {
 const canAccessStandaloneApprovalContext = async ({ eventRecord, userInfo }) => {
   if (userHasRole(userInfo, ROLE_CODES.HOD)) {
     if (
-      matchesScope(userInfo?.department, eventRecord?.organizing_dept) &&
+      matchesScope(userInfo?.department || userInfo?.department_id, eventRecord?.organizing_dept) &&
       matchesScope(userInfo?.campus, eventRecord?.campus_hosted_at)
     ) {
       return true;
@@ -468,7 +468,7 @@ const canAccessStandaloneApprovalContext = async ({ eventRecord, userInfo }) => 
   if (userHasRole(userInfo, ROLE_CODES.DEAN)) {
     const school = await resolveSchoolForEvent(eventRecord);
     if (
-      matchesScope(userInfo?.school, school) &&
+      matchesScope(userInfo?.school || userInfo?.school_id, school) &&
       matchesScope(userInfo?.campus, eventRecord?.campus_hosted_at)
     ) {
       return true;

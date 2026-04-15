@@ -345,7 +345,10 @@ const submitToHod = async ({ fest, requester }) => {
 const ensureScopedApproverForFest = ({ fest, requester, roleCode }) => {
   if (isMasterAdmin(requester)) return null;
 
-  if (roleCode === ROLE_CODES.HOD && !matchesScope(requester.department, fest.organizing_dept)) {
+  if (
+    roleCode === ROLE_CODES.HOD &&
+    !matchesScope(requester.department || requester.department_id, fest.organizing_dept)
+  ) {
     return "Only the HOD of the fest department can take this action.";
   }
 
@@ -364,7 +367,7 @@ const ensureDeanScope = async ({ fest, requester }) => {
     return "School mapping for this fest is missing. Unable to validate Dean scope.";
   }
 
-  if (!matchesScope(requester.school, festSchool)) {
+  if (!matchesScope(requester.school || requester.school_id, festSchool)) {
     return "Only the Dean of this school can take this action.";
   }
 
@@ -397,7 +400,7 @@ const canAccessFestApprovalContext = async ({ fest, requester, userId }) => {
 
   if (userHasRole(requester, ROLE_CODES.HOD)) {
     if (
-      matchesScope(requester?.department, fest?.organizing_dept) &&
+      matchesScope(requester?.department || requester?.department_id, fest?.organizing_dept) &&
       matchesScope(requester?.campus, fest?.campus_hosted_at)
     ) {
       return true;
@@ -407,7 +410,7 @@ const canAccessFestApprovalContext = async ({ fest, requester, userId }) => {
   if (userHasRole(requester, ROLE_CODES.DEAN)) {
     const school = await resolveSchoolForFest(fest);
     if (
-      matchesScope(requester?.school, school) &&
+      matchesScope(requester?.school || requester?.school_id, school) &&
       matchesScope(requester?.campus, fest?.campus_hosted_at)
     ) {
       return true;

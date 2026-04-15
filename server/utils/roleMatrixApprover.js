@@ -5,8 +5,6 @@ const ASSIGNMENT_SELECT_WITH_SCHOOL =
   "user_id,role_code,department_scope,school_scope,campus_scope,is_active,valid_from,valid_until";
 const ASSIGNMENT_SELECT_LEGACY =
   "user_id,role_code,department_scope,campus_scope,is_active,valid_from,valid_until";
-const APPROVER_USER_SELECT =
-  "id,name,email,department,department_id,school,school_id,campus,university_role,is_hod,is_dean,is_cfo,is_finance_officer,is_finance_office";
 
 const normalizeText = (value) => String(value || "").trim();
 const normalizeScope = (value) => normalizeText(value).toLowerCase();
@@ -126,9 +124,7 @@ const resolveDepartmentSchool = async (departmentValue) => {
   }
 
   try {
-    const departmentRows = await queryAll("departments_courses", {
-      select: "id,department_name,school",
-    });
+    const departmentRows = await queryAll("departments_courses");
 
     const matchedRow = (departmentRows || []).find((row) => {
       return (
@@ -235,13 +231,18 @@ const findUsersByCandidateIds = async (candidateUserIds) => {
   const approvers = [];
 
   for (const candidateUserId of candidateUserIds) {
-    const user = await queryOne("users", {
-      where: { id: candidateUserId },
-      select: APPROVER_USER_SELECT,
-    });
+    try {
+      const user = await queryOne("users", {
+        where: { id: candidateUserId },
+      });
 
-    if (user) {
-      approvers.push(user);
+      if (user) {
+        approvers.push(user);
+      }
+    } catch (error) {
+      if (!isMissingRelationError(error)) {
+        throw error;
+      }
     }
   }
 
@@ -254,9 +255,7 @@ const resolveLegacyApprover = async ({ roleCode, department, school, campus, exc
 
   let users;
   try {
-    users = await queryAll("users", {
-      select: APPROVER_USER_SELECT,
-    });
+    users = await queryAll("users");
   } catch (error) {
     if (isMissingRelationError(error)) {
       return null;
