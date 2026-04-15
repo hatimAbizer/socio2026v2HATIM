@@ -83,6 +83,33 @@ function normalizeText(value: unknown): string {
   return String(value || "").trim();
 }
 
+function toFestSlugCandidate(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^\w-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function festReferenceMatches(reference: unknown, candidate: unknown): boolean {
+  const referenceKey = normalizeText(reference).toLowerCase();
+  const candidateKey = normalizeText(candidate).toLowerCase();
+
+  if (!referenceKey || !candidateKey) {
+    return false;
+  }
+
+  if (referenceKey === candidateKey) {
+    return true;
+  }
+
+  const referenceSlug = toFestSlugCandidate(reference);
+  const candidateSlug = toFestSlugCandidate(candidate);
+  return Boolean(referenceSlug && candidateSlug && referenceSlug === candidateSlug);
+}
+
 function normalizeEntityType(value: unknown): string {
   return normalizeText(value).toUpperCase();
 }
@@ -178,8 +205,14 @@ async function fetchFestRowsWithFallback(
     .select(selectClause)
     .in("fest_id", festIds);
 
+  const mergedByFestId = new Map<string, FestDetailRow>();
   if (!primaryError && Array.isArray(primaryData)) {
-    return primaryData as FestDetailRow[];
+    (primaryData as FestDetailRow[]).forEach((row) => {
+      const key = normalizeText(row?.fest_id);
+      if (key) {
+        mergedByFestId.set(key, row);
+      }
+    });
   }
 
   const { data: fallbackData, error: fallbackError } = await supabase
@@ -188,7 +221,57 @@ async function fetchFestRowsWithFallback(
     .in("fest_id", festIds);
 
   if (!fallbackError && Array.isArray(fallbackData)) {
-    return fallbackData as FestDetailRow[];
+    (fallbackData as FestDetailRow[]).forEach((row) => {
+      const key = normalizeText(row?.fest_id);
+      if (key && !mergedByFestId.has(key)) {
+        mergedByFestId.set(key, row);
+      }
+    });
+  }
+
+  const unresolvedRefs = festIds.filter((reference) => {
+    const normalizedReference = normalizeText(reference);
+    if (!normalizedReference) {
+      return false;
+    }
+
+    return !Array.from(mergedByFestId.values()).some((row) =>
+      festReferenceMatches(normalizedReference, row?.fest_id)
+    );
+  });
+
+  if (unresolvedRefs.length > 0) {
+    const tableNames = ["fests", "fest"];
+    for (const tableName of tableNames) {
+      const { data: allRowsData, error: allRowsError } = await supabase
+        .from(tableName)
+        .select(selectClause);
+
+      if (allRowsError || !Array.isArray(allRowsData)) {
+        continue;
+      }
+
+      (allRowsData as FestDetailRow[]).forEach((row) => {
+        const rowFestId = normalizeText(row?.fest_id);
+        if (!rowFestId || mergedByFestId.has(rowFestId)) {
+          return;
+        }
+
+        const matchesAnyUnresolvedReference = unresolvedRefs.some(
+          (reference) =>
+            festReferenceMatches(reference, row?.fest_id) ||
+            festReferenceMatches(reference, row?.fest_title)
+        );
+
+        if (matchesAnyUnresolvedReference) {
+          mergedByFestId.set(rowFestId, row);
+        }
+      });
+    }
+  }
+
+  if (mergedByFestId.size > 0) {
+    return Array.from(mergedByFestId.values());
   }
 
   if (primaryError && fallbackError) {
@@ -440,6 +523,10 @@ export async function fetchHodDashboardData({
         ? normalizeText(festRow?.opening_date) || null
         : normalizeText(eventRow?.event_date) || null;
 
+      const resolvedEntityId = isFestEntity
+        ? normalizeText(festRow?.fest_id) || entityRef
+        : entityRef;
+
       const departmentName =
         normalizeText(requestRow.organizing_dept) ||
         normalizeText(isFestEntity ? festRow?.organizing_dept : eventRow?.organizing_dept) ||
@@ -447,7 +534,7 @@ export async function fetchHodDashboardData({
 
       return {
         id: normalizeText(requestRow.id),
-        eventId: entityRef,
+        eventId: resolvedEntityId,
         eventName: displayName,
         entityType: isFestEntity ? "fest" : "event",
         totalBudget: toNumber(eventBudget?.total_estimated_expense),

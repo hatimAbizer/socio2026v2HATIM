@@ -117,11 +117,17 @@ const toFestSlugCandidate = (value) =>
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-const resolveFestByReference = async (festReference) => {
+const resolveFestByReference = async (festReference, visited = new Set()) => {
   const normalizedReference = normalizeText(festReference);
   if (!normalizedReference) {
     return null;
   }
+
+  const visitedKey = normalizeToken(normalizedReference);
+  if (visited.has(visitedKey)) {
+    return null;
+  }
+  visited.add(visitedKey);
 
   const normalizedKey = normalizeToken(normalizedReference);
   const normalizedSlug = toFestSlugCandidate(normalizedReference);
@@ -162,6 +168,47 @@ const resolveFestByReference = async (festReference) => {
 
         if (resolvedFest) {
           return resolvedFest;
+        }
+      }
+    } catch (error) {
+      if (isMissingRelationError(error) || isMissingColumnError(error)) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  // Legacy bridge: approval/entity refs may map through events.fest / events.fest_id.
+  const eventSelectCandidates = [
+    "event_id,fest_id,fest",
+    "event_id,fest_id",
+  ];
+
+  for (const selectClause of eventSelectCandidates) {
+    try {
+      const eventRows = await queryAll("events", { select: selectClause });
+
+      const matchedEvent = (eventRows || []).find((eventRow) => {
+        return (
+          normalizedKey === normalizeToken(eventRow?.fest_id) ||
+          normalizedKey === normalizeToken(eventRow?.fest) ||
+          normalizedSlug === toFestSlugCandidate(eventRow?.fest_id) ||
+          normalizedSlug === toFestSlugCandidate(eventRow?.fest)
+        );
+      });
+
+      const linkedFestReference = normalizeText(
+        matchedEvent?.fest_id || matchedEvent?.fest
+      );
+
+      if (
+        linkedFestReference &&
+        normalizeToken(linkedFestReference) !== visitedKey
+      ) {
+        const bridgedFest = await resolveFestByReference(linkedFestReference, visited);
+        if (bridgedFest) {
+          return bridgedFest;
         }
       }
     } catch (error) {
