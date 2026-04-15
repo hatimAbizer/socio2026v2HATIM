@@ -118,6 +118,14 @@ const EVENT_STATUS_FILTER_OPTIONS: Array<{ value: StatusFilter; label: string }>
 const API_URL = process.env.NEXT_PUBLIC_API_URL!.replace(/\/api\/?$/, "");
 const MANUAL_UNARCHIVE_OVERRIDE = "system:manual_unarchive_override";
 const PENDING_WORKFLOW_STATUS_REGEX = /^pending_level_([1-4])$/;
+const PENDING_LIFECYCLE_STATUSES = new Set(["pending_approval", "pending_approvals"]);
+const PENDING_WORKFLOW_LABELS: Record<string, string> = {
+  pending_hod: "Sent for approval. Pending HOD review",
+  pending_dean: "Sent for approval. Pending Dean review",
+  pending_cfo: "Sent for approval. Pending CFO review",
+  pending_accounts: "Sent for approval. Pending Accounts review",
+  pending_organiser: "Sent for approval. Pending Organiser review",
+};
 
 const APPROVAL_LEVEL_LABEL_BY_NUMBER: Record<number, string> = {
   1: "Level 1 (HOD)",
@@ -343,18 +351,53 @@ const isBooleanLikeTrue = (value: unknown) =>
   value === "1" ||
   (typeof value === "string" && ["true", "yes", "on", "t"].includes(value.trim().toLowerCase()));
 
-const getPendingApprovalLabel = (workflowStatus?: string | null) => {
-  const normalized = normalizeWorkflowStatus(workflowStatus);
-  const match = PENDING_WORKFLOW_STATUS_REGEX.exec(normalized);
-  if (!match) return null;
+const toTitleCase = (value: string) =>
+  value
+    .split(" ")
+    .filter((token) => token.length > 0)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
 
-  const level = Number(match[1]);
-  const levelLabel = APPROVAL_LEVEL_LABEL_BY_NUMBER[level] || `Level ${level}`;
-  return `Awaiting ${levelLabel} approval`;
+const getPendingApprovalLabel = (
+  workflowStatus?: string | null,
+  lifecycleStatus?: string | null
+) => {
+  const normalized = normalizeWorkflowStatus(workflowStatus);
+
+  const mappedLabel = PENDING_WORKFLOW_LABELS[normalized];
+  if (mappedLabel) {
+    return mappedLabel;
+  }
+
+  const match = PENDING_WORKFLOW_STATUS_REGEX.exec(normalized);
+  if (match) {
+    const level = Number(match[1]);
+    const levelLabel = APPROVAL_LEVEL_LABEL_BY_NUMBER[level] || `Level ${level}`;
+    return `Sent for approval. Awaiting ${levelLabel}`;
+  }
+
+  if (normalized.startsWith("pending_")) {
+    const roleToken = normalized.replace(/^pending_/, "").replace(/_/g, " ").trim();
+    if (!roleToken) {
+      return "Sent for approval. Approval pending";
+    }
+
+    return `Sent for approval. Pending ${toTitleCase(roleToken)} review`;
+  }
+
+  const normalizedLifecycleStatus = normalizeLifecycleStatusToken(lifecycleStatus);
+  if (PENDING_LIFECYCLE_STATUSES.has(normalizedLifecycleStatus)) {
+    return "Sent for approval. Approval pending";
+  }
+
+  return null;
 };
 
-const isPendingWorkflowStatus = (workflowStatus?: string | null) => {
-  return getPendingApprovalLabel(workflowStatus) !== null;
+const isPendingWorkflowStatus = (
+  workflowStatus?: string | null,
+  lifecycleStatus?: string | null
+) => {
+  return getPendingApprovalLabel(workflowStatus, lifecycleStatus) !== null;
 };
 
 const CAMPUSES = [
@@ -445,9 +488,13 @@ const MappedFestCard = ({
   const isDraft =
     isBooleanLikeTrue(fest.is_draft) ||
     isDraftLifecycleStatus(lifecycleStatus);
-  const pendingApprovalLabel = getPendingApprovalLabel(fest.workflow_status);
+  const pendingApprovalLabel = getPendingApprovalLabel(
+    fest.workflow_status,
+    fest.lifecycle_status || fest.status
+  );
   const isApprovalPending = Boolean(pendingApprovalLabel);
-  const isEditLocked = isApprovalPending && !isDraft;
+  const isEditLocked = isApprovalPending;
+  const showDraftState = isDraft && !isApprovalPending;
   const approvalRows = getApprovalRows(approvalTimeline || null, fest.workflow_status);
   const approvalSubmittedLabel = formatApprovalDateTime(
     approvalTimeline?.submitted_at || approvalTimeline?.created_at || null
@@ -457,10 +504,10 @@ const MappedFestCard = ({
     <div className={`bg-white rounded-xl shadow-sm border border-slate-200 overflow-visible flex flex-col hover:shadow-md transition-all duration-300 ${
       isArchived
         ? "opacity-60 grayscale"
-        : isDraft
+        : isEditLocked
+          ? "opacity-70 grayscale-[0.35]"
+          : showDraftState
           ? "opacity-80 saturate-0"
-          : isEditLocked
-            ? "opacity-70 grayscale-[0.35]"
             : ""
     }`}>
       <div className="h-48 relative bg-slate-100 overflow-hidden rounded-t-xl">
@@ -469,7 +516,7 @@ const MappedFestCard = ({
           alt={fest.fest_title}
           className="w-full h-full object-cover"
         />
-        {isDraft && (
+        {showDraftState && (
           <div className="absolute inset-0 bg-white/65 flex items-center justify-center pointer-events-none">
             <span className="text-4xl sm:text-5xl font-black tracking-[0.25em] text-slate-800/70">DRAFT</span>
           </div>
@@ -477,10 +524,10 @@ const MappedFestCard = ({
         <div className="absolute top-3 right-3">
           <span
             className={`px-3 py-1.5 text-[10px] font-bold rounded-full tracking-wider shadow-sm flex items-center ${
-              isDraft
-                ? "bg-slate-200 text-slate-800"
-                : isEditLocked
+              isEditLocked
                 ? "bg-amber-100 text-amber-800"
+                : showDraftState
+                  ? "bg-slate-200 text-slate-800"
                 : isArchived
                   ? "bg-purple-600 text-white"
                   : isPast
@@ -488,7 +535,7 @@ const MappedFestCard = ({
                     : "bg-white text-emerald-600"
             }`}
           >
-            {isDraft ? "DRAFT" : isEditLocked ? "APPROVAL PENDING" : isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING"}
+            {isEditLocked ? "APPROVAL PENDING" : showDraftState ? "DRAFT" : isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING"}
           </span>
         </div>
       </div>
@@ -513,18 +560,7 @@ const MappedFestCard = ({
           <Calendar className="w-4 h-4 text-slate-400" />
           {formatDateFull(fest.opening_date, "TBD")}
         </div>
-        {isDraft ? (
-          <div className="flex items-center gap-2">
-            <ApprovalStatusPopover
-              rows={approvalRows}
-              submittedLabel={approvalSubmittedLabel}
-              loading={isApprovalTimelineLoading}
-            />
-            <Link href={`/${baseUrl}/${fest.fest_id}`} className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline">
-              Edit <ArrowRight className="w-4 h-4" />
-            </Link>
-          </div>
-        ) : isEditLocked ? (
+        {isEditLocked ? (
           <div className="flex items-center gap-2">
             <ApprovalStatusPopover
               rows={approvalRows}
@@ -534,6 +570,17 @@ const MappedFestCard = ({
             <span className="text-sm font-semibold text-slate-400" title="Fest is locked while approval is pending.">
               Editing locked
             </span>
+          </div>
+        ) : isDraft ? (
+          <div className="flex items-center gap-2">
+            <ApprovalStatusPopover
+              rows={approvalRows}
+              submittedLabel={approvalSubmittedLabel}
+              loading={isApprovalTimelineLoading}
+            />
+            <Link href={`/${baseUrl}/${fest.fest_id}`} className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline">
+              Edit <ArrowRight className="w-4 h-4" />
+            </Link>
           </div>
         ) : isArchived ? (
           <div className="flex items-center gap-2">
@@ -610,14 +657,18 @@ const MappedEventCard = ({
   const isDraft =
     isBooleanLikeTrue((event as any).is_draft) ||
     isDraftLifecycleStatus(lifecycleStatus);
-  const pendingApprovalLabel = getPendingApprovalLabel(event.workflow_status);
+  const pendingApprovalLabel = getPendingApprovalLabel(
+    event.workflow_status,
+    (event as any).lifecycle_status || (event as any).status
+  );
   const isApprovalPending = Boolean(pendingApprovalLabel);
-  const isEditLocked = isApprovalPending && !isDraft;
-  const statusLabel = isDraft ? "DRAFT" : isEditLocked ? "APPROVAL PENDING" : isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING";
-  const statusClassName = isDraft
-    ? "bg-slate-200 text-slate-800"
-    : isEditLocked
+  const isEditLocked = isApprovalPending;
+  const showDraftState = isDraft && !isApprovalPending;
+  const statusLabel = isEditLocked ? "APPROVAL PENDING" : showDraftState ? "DRAFT" : isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING";
+  const statusClassName = isEditLocked
     ? "bg-amber-100 text-amber-800"
+    : showDraftState
+      ? "bg-slate-200 text-slate-800"
     : isArchived
       ? "bg-amber-100 text-amber-800"
       : isPast
@@ -632,10 +683,10 @@ const MappedEventCard = ({
     <div className={`bg-white rounded-xl shadow-sm border border-slate-200 overflow-visible flex flex-col hover:shadow-md transition-all duration-300 ${
       isArchived
         ? "opacity-60 grayscale"
-        : isDraft
+        : isEditLocked
+          ? "opacity-70 grayscale-[0.35]"
+          : showDraftState
           ? "opacity-80 saturate-0"
-          : isEditLocked
-            ? "opacity-70 grayscale-[0.35]"
             : ""
     }`}>
       <div className="h-48 relative bg-slate-100 overflow-hidden rounded-t-xl">
@@ -644,7 +695,7 @@ const MappedEventCard = ({
           alt={event.title}
           className="w-full h-full object-cover"
         />
-        {isDraft && (
+        {showDraftState && (
           <div className="absolute inset-0 bg-white/65 flex items-center justify-center pointer-events-none">
             <span className="text-4xl sm:text-5xl font-black tracking-[0.25em] text-slate-800/70">DRAFT</span>
           </div>
@@ -898,6 +949,42 @@ export default function ManageDashboard() {
     return normalizedOwners.includes(currentUserEmail);
   };
 
+  const isCreatedByCurrentUser = (
+    createdBy: string | null | undefined,
+    ...fallbackOwnerCandidates: Array<string | null | undefined>
+  ) => {
+    if (!currentUserEmail) {
+      return false;
+    }
+
+    const normalizedCreator = normalizeEmail(createdBy);
+    const normalizedFallbackCreator = fallbackOwnerCandidates
+      .map((candidate) => normalizeEmail(candidate))
+      .find((candidate) => candidate.length > 0);
+    const effectiveCreator = normalizedCreator || normalizedFallbackCreator || "";
+
+    return effectiveCreator.length > 0 && effectiveCreator === currentUserEmail;
+  };
+
+  const canViewPendingApprovalCard = ({
+    workflowStatus,
+    lifecycleStatus,
+    createdBy,
+    fallbackOwnerCandidates = [],
+  }: {
+    workflowStatus?: string | null;
+    lifecycleStatus?: string | null;
+    createdBy?: string | null;
+    fallbackOwnerCandidates?: Array<string | null | undefined>;
+  }) => {
+    const pendingApproval = isPendingWorkflowStatus(workflowStatus, lifecycleStatus);
+    if (!pendingApproval) {
+      return true;
+    }
+
+    return isCreatedByCurrentUser(createdBy, ...fallbackOwnerCandidates);
+  };
+
   const festsCacheKey = currentUserEmail ? `manage:fests:${currentUserEmail}` : null;
 
   useEffect(() => {
@@ -986,9 +1073,22 @@ export default function ManageDashboard() {
       }));
 
       const userSpecificFests = mappedFests.filter(
-        (fest) =>
-          isOwnedByCurrentUser(fest.created_by, fest.contact_email) ||
-          isCurrentUserFestHead(fest)
+        (fest) => {
+          const canSeePendingFestCard = canViewPendingApprovalCard({
+            workflowStatus: fest.workflow_status,
+            lifecycleStatus: fest.lifecycle_status || fest.status,
+            createdBy: fest.created_by,
+          });
+
+          if (!canSeePendingFestCard) {
+            return false;
+          }
+
+          return (
+            isOwnedByCurrentUser(fest.created_by, fest.contact_email) ||
+            isCurrentUserFestHead(fest)
+          );
+        }
       );
 
       setFests(userSpecificFests);
@@ -1180,6 +1280,11 @@ export default function ManageDashboard() {
   };
 
   const userSpecificContextEvents = (liveEvents.length > 0 ? liveEvents : contextAllEvents as ContextEvent[]).filter((e) => {
+    const canSeePendingEventCard = canViewPendingApprovalCard({
+      workflowStatus: e.workflow_status,
+      lifecycleStatus: (e as any).lifecycle_status || (e as any).status,
+      createdBy: e.created_by,
+    });
     const isOwnerOrMaster = isOwnedByCurrentUser(
       e.created_by,
       (e as any).organizer_email,
@@ -1188,7 +1293,12 @@ export default function ManageDashboard() {
     const matchesCampus = campusFilter === "all" || (e as any).campus_hosted_at === campusFilter;
     const eventIsPast = isPastDate(e.event_date);
     const archiveState = getEffectiveArchiveState(e);
-    return isOwnerOrMaster && matchesCampus && matchesEventStatus(eventIsPast, archiveState.isArchived);
+    return (
+      canSeePendingEventCard &&
+      isOwnerOrMaster &&
+      matchesCampus &&
+      matchesEventStatus(eventIsPast, archiveState.isArchived)
+    );
   });
 
   // Filter Grids
@@ -1619,7 +1729,13 @@ export default function ManageDashboard() {
 
     const sourceEvents = (liveEvents.length > 0 ? liveEvents : (contextAllEvents as ContextEvent[])) || [];
     const selectedEvent = sourceEvents.find((entry) => entry.event_id === eventId);
-    if (!isMasterAdmin && isPendingWorkflowStatus(selectedEvent?.workflow_status)) {
+    if (
+      !isMasterAdmin &&
+      isPendingWorkflowStatus(
+        selectedEvent?.workflow_status,
+        (selectedEvent as any)?.lifecycle_status || (selectedEvent as any)?.status
+      )
+    ) {
       toast.error("This event is awaiting approval and cannot be modified right now.");
       return;
     }
@@ -1715,7 +1831,13 @@ export default function ManageDashboard() {
     }
 
     const selectedFest = fests.find((entry) => entry.fest_id === festId);
-    if (!isMasterAdmin && isPendingWorkflowStatus(selectedFest?.workflow_status)) {
+    if (
+      !isMasterAdmin &&
+      isPendingWorkflowStatus(
+        selectedFest?.workflow_status,
+        selectedFest?.lifecycle_status || selectedFest?.status
+      )
+    ) {
       toast.error("This fest is awaiting approval and cannot be modified right now.");
       return;
     }
