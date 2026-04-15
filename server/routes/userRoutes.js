@@ -16,6 +16,7 @@ import {
   deriveLegacyFlagsFromRoleCodes,
   deriveRoleCodesFromUserRecord,
 } from "../utils/roleAccessService.js";
+import { resolveRoleMatrixApprover } from "../utils/roleMatrixApprover.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -255,54 +256,34 @@ router.get(
         });
       }
 
-      const users = await queryAll("users");
-      const normalizedDept = dept.toLowerCase();
-      const normalizedCampus = campus.toLowerCase();
-
-      const hodCandidates = (users || []).filter((user) => {
-        const isHodRole =
-          user?.is_hod === true ||
-          String(user?.university_role || "").trim().toLowerCase() === "hod";
-        if (!isHodRole) return false;
-
-        const userDept = String(user?.department || "").trim().toLowerCase();
-        const userCampus = String(user?.campus || "").trim().toLowerCase();
-        return userDept === normalizedDept && userCampus === normalizedCampus;
+      const hod = await resolveRoleMatrixApprover({
+        roleCode: "HOD",
+        department: dept,
+        campus,
       });
 
-      const hod = hodCandidates[0] || null;
-      const school = String(hod?.school || "").trim();
-
-      const deanCandidates = (users || []).filter((user) => {
-        const isDeanRole =
-          user?.is_dean === true ||
-          String(user?.university_role || "").trim().toLowerCase() === "dean";
-        if (!isDeanRole) return false;
-
-        const userCampus = String(user?.campus || "").trim().toLowerCase();
-        if (userCampus !== normalizedCampus) return false;
-
-        if (!school) return true;
-        return String(user?.school || "").trim().toLowerCase() === school.toLowerCase();
+      const dean = await resolveRoleMatrixApprover({
+        roleCode: "DEAN",
+        department: dept,
+        school: hod?.school || null,
+        campus,
       });
-
-      const dean = deanCandidates[0] || null;
 
       return res.status(200).json({
         hod: hod
           ? {
               name: hod.name || null,
               email: hod.email || null,
-              department: hod.department || null,
+              department: hod.department || hod.department_id || null,
               campus: hod.campus || null,
-              school: hod.school || null,
+              school: hod.school || hod.school_id || null,
             }
           : null,
         dean: dean
           ? {
               name: dean.name || null,
               email: dean.email || null,
-              school: dean.school || null,
+              school: dean.school || dean.school_id || null,
               campus: dean.campus || null,
             }
           : null,

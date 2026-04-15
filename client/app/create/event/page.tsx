@@ -179,9 +179,7 @@ export default function CreateEventPage() {
       appendIfExists("parent_fest_id", dataFromHookForm.festEvent);
     }
 
-    const needsHodDeanApproval =
-      !isUnderFest &&
-      Boolean(dataFromHookForm.standaloneRequiresHodApproval || dataFromHookForm.standaloneRequiresDeanApproval);
+    const needsHodDeanApproval = !isUnderFest;
     const needsBudgetApproval =
       !isUnderFest && Boolean(dataFromHookForm.provideClaims);
 

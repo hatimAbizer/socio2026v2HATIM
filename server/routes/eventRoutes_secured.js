@@ -296,8 +296,16 @@ const parseBooleanPreference = (value) => {
 
 const resolveStandaloneApprovalPreferences = (
   payload = {},
-  fallback = { requiresHodApproval: false, requiresDeanApproval: false }
+  fallback = { requiresHodApproval: false, requiresDeanApproval: false },
+  isStandaloneEvent = false
 ) => {
+  if (isStandaloneEvent) {
+    return {
+      requiresHodApproval: true,
+      requiresDeanApproval: true,
+    };
+  }
+
   const combinedPreference = parseBooleanPreference(
     payload?.needs_hod_dean_approval ?? payload?.needsHodDeanApproval
   );
@@ -2167,7 +2175,8 @@ router.post(
       const standaloneApprovalPreferences = resolveStandaloneApprovalPreferences(req.body, {
         requiresHodApproval: false,
         requiresDeanApproval: false,
-      });
+      },
+      isStandaloneEvent);
 
       let parentFest = null;
       let childFestApproved = false;
@@ -3060,7 +3069,8 @@ router.put(
       const standaloneApprovalPreferences = resolveStandaloneApprovalPreferences(req.body, {
         requiresHodApproval: false,
         requiresDeanApproval: false,
-      });
+      },
+      isStandalonePublish);
       const organizerEmailInput = normalizeSingleStringField(req.body.organizer_email || "");
       const resolvedOrganizerEmail = normalizeEmailAddress(
         organizerEmailInput || event?.organizer_email || req.userInfo?.email || ""

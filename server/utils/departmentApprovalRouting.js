@@ -1,5 +1,9 @@
 import { queryAll } from "../config/database.js";
-import { ROLE_CODES, isRoleAssignmentActive, normalizeRoleCode } from "./roleAccessService.js";
+import { ROLE_CODES, normalizeRoleCode } from "./roleAccessService.js";
+import {
+  hasScopedRoleAssignment,
+  resolveDepartmentSchoolForApprovals,
+} from "./roleMatrixApprover.js";
 
 const SUPPORTED_PRIMARY_APPROVER_ROLES = new Set([ROLE_CODES.HOD, ROLE_CODES.DEAN]);
 
@@ -37,18 +41,6 @@ export const normalizeDepartmentScope = (value) =>
   String(value || "")
     .trim()
     .toLowerCase();
-
-const normalizeRoleAssignmentRows = (assignmentRows, roleCode) => {
-  const normalizedRoleCode = normalizeRoleCode(roleCode);
-
-  return (Array.isArray(assignmentRows) ? assignmentRows : []).filter((assignment) => {
-    if (!assignment || normalizeRoleCode(assignment.role_code) !== normalizedRoleCode) {
-      return false;
-    }
-
-    return isRoleAssignmentActive(assignment);
-  });
-};
 
 export const resolveDepartmentApproverRole = async ({ organizingDept }) => {
   const normalizedDepartmentScope = normalizeDepartmentScope(organizingDept);
@@ -104,38 +96,33 @@ export const resolveDepartmentApproverRole = async ({ organizingDept }) => {
     };
   }
 
-  let roleAssignments;
-  try {
-    roleAssignments = await queryAll("user_role_assignments", {
-      where: {
-        role_code: approverRoleCode,
-        is_active: true,
-      },
-    });
-  } catch (error) {
-    if (isMissingRelationError(error) || isMissingColumnError(error, "department_scope")) {
-      return {
-        ok: false,
-        errorMessage:
-          "Role assignments table is not available. Run RBAC workflow migrations before routing approvals.",
-        reason: "assignment_table_missing",
-      };
-    }
+  const resolvedSchoolScope =
+    approverRoleCode === ROLE_CODES.DEAN
+      ? await resolveDepartmentSchoolForApprovals(normalizedDepartmentScope)
+      : null;
 
-    throw error;
+  if (approverRoleCode === ROLE_CODES.DEAN && !resolvedSchoolScope) {
+    return {
+      ok: false,
+      errorMessage:
+        `Unable to resolve the school for department '${organizingDept}'. Update the department-school mapping before routing Dean approvals.`,
+      reason: "school_missing",
+    };
   }
 
-  const activeAssignments = normalizeRoleAssignmentRows(roleAssignments, approverRoleCode);
-  const hasScopedAssignee = activeAssignments.some(
-    (assignment) =>
-      normalizeDepartmentScope(assignment?.department_scope) === normalizedDepartmentScope
-  );
+  const hasScopedAssignee = await hasScopedRoleAssignment({
+    roleCode: approverRoleCode,
+    department: normalizedDepartmentScope,
+    school: resolvedSchoolScope,
+  });
 
   if (!hasScopedAssignee) {
     return {
       ok: false,
       errorMessage:
-        `No active ${approverRoleCode} assignee is mapped to department '${organizingDept}'. Contact admin.`,
+        approverRoleCode === ROLE_CODES.DEAN
+          ? `No active Dean assignee is mapped to the school for department '${organizingDept}'. Contact admin.`
+          : `No active ${approverRoleCode} assignee is mapped to department '${organizingDept}'. Contact admin.`,
       reason: "assignee_missing",
     };
   }

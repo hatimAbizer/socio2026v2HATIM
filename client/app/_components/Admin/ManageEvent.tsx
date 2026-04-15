@@ -1354,8 +1354,8 @@ export default function EventForm({
       organizingSchool: "",
       organizingDept: "",
       festEvent: "",
-      standaloneRequiresHodApproval: false,
-      standaloneRequiresDeanApproval: false,
+      standaloneRequiresHodApproval: true,
+      standaloneRequiresDeanApproval: true,
       registrationDeadline: "",
       location: "",
       registrationFee: "",
@@ -1588,11 +1588,11 @@ export default function EventForm({
         standaloneRequiresHodApproval:
           typeof defaultValues.standaloneRequiresHodApproval === "boolean"
             ? defaultValues.standaloneRequiresHodApproval
-            : false,
+            : true,
         standaloneRequiresDeanApproval:
           typeof defaultValues.standaloneRequiresDeanApproval === "boolean"
             ? defaultValues.standaloneRequiresDeanApproval
-            : false,
+            : true,
         additionalRequests: mergeAdditionalRequests(defaultValues.additionalRequests),
       };
       reset(transformedDefaults);
@@ -1666,6 +1666,7 @@ export default function EventForm({
     typeof watchedFestEvent === "string" &&
     watchedFestEvent.trim() !== "" &&
     watchedFestEvent.trim().toLowerCase() !== "none";
+  const standaloneApprovalLocked = !hasFestSelected;
 
   useEffect(() => {
     const dept = String(watchedOrganizingDept || "").trim();
@@ -1760,6 +1761,7 @@ export default function EventForm({
     (!selectedFestActivationState || selectedFestActivationState === "ACTIVE");
 
   const hasStandaloneApproverSelected =
+    standaloneApprovalLocked ||
     Boolean(watchedStandaloneRequiresHodApproval) ||
     Boolean(watchedStandaloneRequiresDeanApproval);
   const showStandaloneFlowStepper = !hasFestSelected;
@@ -2886,9 +2888,11 @@ export default function EventForm({
                                 id="standaloneRequiresHodApproval"
                                 type="checkbox"
                                 checked={
+                                  standaloneApprovalLocked ||
                                   Boolean(field.value) ||
                                   Boolean(watchedStandaloneRequiresDeanApproval)
                                 }
+                                disabled={standaloneApprovalLocked}
                                 onChange={(event) => {
                                   const checked = event.target.checked;
                                   field.onChange(checked);

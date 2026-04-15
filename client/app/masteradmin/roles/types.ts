@@ -82,6 +82,7 @@ export type RoleMatrixAssignment = {
   user_id: string;
   role_code: string;
   department_scope: string | null;
+  school_scope: string | null;
   campus_scope: string | null;
   is_active: boolean;
   valid_from: string | null;

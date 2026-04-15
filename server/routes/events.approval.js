@@ -3,6 +3,10 @@ import { authenticateUser, getUserInfo } from "../middleware/authMiddleware.js";
 import { insert, queryAll, queryOne, update } from "../config/database.js";
 import { ROLE_CODES, hasAnyRoleCode } from "../utils/roleAccessService.js";
 import {
+  resolveDepartmentSchoolForApprovals,
+  resolveRoleMatrixApprover,
+} from "../utils/roleMatrixApprover.js";
+import {
   sendFinalRejectionEmail,
   sendReturnedForRevisionEmail,
   sendStandaloneEventAutoApprovedEmail,
@@ -175,70 +179,17 @@ const getEventBudgetAmount = (eventRecord) => {
     : 0;
 };
 
-const findApprover = async ({ roleCode, department, school, campus, excludeEmail }) => {
-  const users = await queryAll("users");
-  const normalizedExclude = normalizeEmail(excludeEmail);
-
-  const roleFiltered = (users || []).filter((user) => {
-    if (!normalizeEmail(user?.email)) return false;
-
-    if (roleCode === ROLE_CODES.HOD) {
-      return userHasRole(user, ROLE_CODES.HOD);
-    }
-
-    if (roleCode === ROLE_CODES.DEAN) {
-      return userHasRole(user, ROLE_CODES.DEAN);
-    }
-
-    if (roleCode === ROLE_CODES.CFO) {
-      return userHasRole(user, ROLE_CODES.CFO);
-    }
-
-    if (roleCode === ROLE_CODES.ACCOUNTS || roleCode === ROLE_CODES.FINANCE_OFFICER) {
-      return userHasRole(user, ROLE_CODES.ACCOUNTS) || userHasRole(user, ROLE_CODES.FINANCE_OFFICER);
-    }
-
-    return false;
-  });
-
-  const scoped = roleFiltered.filter((user) => {
-    if (normalizedExclude && normalizeEmail(user.email) === normalizedExclude) {
-      return false;
-    }
-
-    if (!matchesScope(user.department, department)) return false;
-    if (!matchesScope(user.school, school)) return false;
-    if (!matchesScope(user.campus, campus)) return false;
-
-    return true;
-  });
-
-  if (scoped.length > 0) {
-    return scoped[0];
-  }
-
-  return (
-    roleFiltered.find((user) => {
-      if (normalizedExclude && normalizeEmail(user.email) === normalizedExclude) {
-        return false;
-      }
-
-      if (department && !matchesScope(user.department, department)) {
-        return false;
-      }
-
-      if (school && !matchesScope(user.school, school)) {
-        return false;
-      }
-
-      return true;
-    }) || null
-  );
-};
+const findApprover = async ({ roleCode, department, school, campus, excludeEmail }) =>
+  resolveRoleMatrixApprover({ roleCode, department, school, campus, excludeEmail });
 
 const resolveSchoolForEvent = async (eventRecord) => {
-  const directSchool = normalizeText(eventRecord?.organizing_school || eventRecord?.school);
+  const directSchool = normalizeText(
+    eventRecord?.organizing_school || eventRecord?.school || eventRecord?.school_id
+  );
   if (directSchool) return directSchool;
+
+  const mappedSchool = await resolveDepartmentSchoolForApprovals(eventRecord?.organizing_dept);
+  if (mappedSchool) return mappedSchool;
 
   const hod = await findApprover({
     roleCode: ROLE_CODES.HOD,

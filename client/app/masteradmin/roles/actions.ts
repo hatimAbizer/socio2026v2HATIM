@@ -910,7 +910,10 @@ function buildAssignmentFallbackMap(
 
     if (roleCode === ROLE_CODE_DEAN) {
       entry.is_dean = true;
-      entry.school_id = normalizeNullableText(assignment.department_scope) || entry.school_id;
+      entry.school_id =
+        normalizeNullableText(assignment.school_scope) ||
+        normalizeNullableText(assignment.department_scope) ||
+        entry.school_id;
       entry.campus = normalizeNullableText(assignment.campus_scope) || entry.campus;
     }
 
@@ -968,7 +971,7 @@ async function fetchRoleAssignmentFallbacks(
 ): Promise<Map<string, AssignmentFallback>> {
   let query = adminClient
     .from("user_role_assignments")
-    .select("user_id,role_code,department_scope,campus_scope,is_active,valid_from,valid_until")
+    .select("user_id,role_code,department_scope,school_scope,campus_scope,is_active,valid_from,valid_until")
     .in("role_code", [
       ROLE_CODE_MASTER_ADMIN,
       ROLE_CODE_HOD,
@@ -1005,6 +1008,7 @@ async function fetchRoleAssignmentFallbacks(
     user_id: String(row?.user_id || ""),
     role_code: normalizeRoleCode(row?.role_code),
     department_scope: normalizeNullableText(row?.department_scope),
+    school_scope: normalizeNullableText(row?.school_scope),
     campus_scope: normalizeNullableText(row?.campus_scope),
     is_active: row?.is_active !== false,
     valid_from: normalizeNullableText(row?.valid_from),
@@ -1017,7 +1021,7 @@ async function fetchRoleAssignmentFallbacks(
 async function fetchRoleAssignments(adminClient: any): Promise<RoleMatrixAssignment[]> {
   const { data, error } = await adminClient
     .from("user_role_assignments")
-    .select("user_id,role_code,department_scope,campus_scope,is_active,valid_from,valid_until");
+    .select("user_id,role_code,department_scope,school_scope,campus_scope,is_active,valid_from,valid_until");
 
   if (error) {
     if (isMissingRelationError(error) || isMissingColumnError(error)) {
@@ -1030,6 +1034,7 @@ async function fetchRoleAssignments(adminClient: any): Promise<RoleMatrixAssignm
     user_id: String(row?.user_id || ""),
     role_code: normalizeRoleCode(row?.role_code),
     department_scope: normalizeNullableText(row?.department_scope),
+    school_scope: normalizeNullableText(row?.school_scope),
     campus_scope: normalizeNullableText(row?.campus_scope),
     is_active: row?.is_active !== false,
     valid_from: normalizeNullableText(row?.valid_from),
@@ -1112,6 +1117,7 @@ async function syncRoleAssignment(
     enabled: boolean;
     assignedBy: string;
     departmentScope?: string | null;
+    schoolScope?: string | null;
     campusScope?: string | null;
     assignedReason?: string;
   }
@@ -1144,6 +1150,7 @@ async function syncRoleAssignment(
     user_id: params.userId,
     role_code: params.roleCode,
     department_scope: normalizeNullableText(params.departmentScope),
+    school_scope: normalizeNullableText(params.schoolScope),
     campus_scope: normalizeNullableText(params.campusScope),
     is_active: true,
     valid_from: nowIso,
@@ -1701,6 +1708,7 @@ export async function updateUserAccess(
             enabled: payload.is_dean,
             assignedBy: actingUser.email,
             departmentScope: strictSchoolId,
+            schoolScope: strictSchoolId,
             campusScope: strictCampus,
           })
         );
