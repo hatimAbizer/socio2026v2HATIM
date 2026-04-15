@@ -1089,35 +1089,14 @@ const getServiceRequestDetails = (additionalRequests, roleCode) => {
   return {};
 };
 
-const resolveRequestedServiceRoleCodesForEvent = async ({ eventId, additionalRequests }) => {
-  const requestedRoleCodes = new Set(collectRequestedServiceRoleCodes(additionalRequests));
-
-  const tableRoleMappings = [
-    { tableName: "event_resources", roleCode: ROLE_CODES.SERVICE_IT },
-    { tableName: "venue_bookings", roleCode: ROLE_CODES.SERVICE_VENUE },
-    { tableName: "catering_plans", roleCode: ROLE_CODES.SERVICE_CATERING },
-  ];
-
-  for (const mapping of tableRoleMappings) {
-    try {
-      const rows = await queryAll(mapping.tableName, {
-        where: { event_id: eventId },
-        limit: 1,
-      });
-
-      if (Array.isArray(rows) && rows.length > 0) {
-        requestedRoleCodes.add(mapping.roleCode);
-      }
-    } catch (error) {
-      if (isMissingRelationError(error) || isMissingColumnError(error, "event_id")) {
-        continue;
-      }
-
-      throw error;
-    }
-  }
-
-  return Array.from(requestedRoleCodes);
+const resolveRequestedServiceRoleCodesForEvent = async ({ additionalRequests }) => {
+  return Array.from(
+    new Set(
+      collectRequestedServiceRoleCodes(additionalRequests)
+        .map((roleCode) => normalizeWorkflowStatus(roleCode))
+        .filter(Boolean)
+    )
+  );
 };
 
 const createServiceRequestsForEvent = async ({
@@ -1134,13 +1113,8 @@ const createServiceRequestsForEvent = async ({
 
     const additionalRequests = sanitizeAdditionalRequests(eventRecord?.additional_requests);
     const requestedRoleCodes = await resolveRequestedServiceRoleCodesForEvent({
-      eventId,
       additionalRequests,
     });
-
-    if (requestedRoleCodes.length === 0) {
-      return { createdCount: 0, requestedRoleCodes: [] };
-    }
 
     const normalizedInitialStatus = normalizeWorkflowStatus(initialStatus, "PENDING");
     const serviceRequestStatus = ["PENDING", "QUEUED"].includes(normalizedInitialStatus)
@@ -1149,7 +1123,7 @@ const createServiceRequestsForEvent = async ({
 
     const existingServiceRequests = await queryAll("service_requests", {
       where: { event_id: eventId },
-      select: "service_role_code,status",
+      select: "id,service_role_code,status",
     }).catch((error) => {
       if (isMissingRelationError(error)) {
         return [];
@@ -1158,11 +1132,47 @@ const createServiceRequestsForEvent = async ({
       throw error;
     });
 
+    const requestedRoleCodeSet = new Set(
+      (requestedRoleCodes || [])
+        .map((roleCode) => normalizeWorkflowStatus(roleCode))
+        .filter(Boolean)
+    );
+
+    const staleActiveServiceRequestIds = (existingServiceRequests || [])
+      .filter((row) => {
+        const status = normalizeWorkflowStatus(row?.status, "PENDING");
+        if (status !== "PENDING" && status !== "QUEUED") {
+          return false;
+        }
+
+        const roleCode = normalizeWorkflowStatus(row?.service_role_code);
+        if (!roleCode) {
+          return false;
+        }
+
+        return !requestedRoleCodeSet.has(roleCode);
+      })
+      .map((row) => String(row?.id || "").trim())
+      .filter(Boolean);
+
+    for (const requestId of staleActiveServiceRequestIds) {
+      await remove("service_requests", { id: requestId });
+    }
+
+    if (requestedRoleCodes.length === 0) {
+      return { createdCount: 0, requestedRoleCodes: [] };
+    }
+
     const existingActiveRoleCodes = new Set(
       (existingServiceRequests || [])
         .filter((row) => {
           const status = normalizeWorkflowStatus(row?.status, "PENDING");
-          return status === "PENDING" || status === "QUEUED";
+          if (status !== "PENDING" && status !== "QUEUED") {
+            return false;
+          }
+
+          const roleCode = normalizeWorkflowStatus(row?.service_role_code);
+          return Boolean(roleCode && requestedRoleCodeSet.has(roleCode));
         })
         .map((row) => normalizeWorkflowStatus(row?.service_role_code))
         .filter(Boolean)
