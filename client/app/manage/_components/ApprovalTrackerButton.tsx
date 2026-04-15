@@ -1,16 +1,19 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Sparkles, Workflow } from "lucide-react";
 
-import ApprovalMindmapModal from "@/app/manage/_components/ApprovalMindmapModal";
 import {
   ApprovalStatusIcon,
   ApprovalVisualStatus,
   getStatusLabel,
 } from "@/app/manage/_components/approvalWorkflowVisuals";
 import { supabase } from "@/lib/supabaseClient";
-import type { QuickApprovalSummaryItem } from "@/lib/hooks/useEventApprovalWorkflow";
+import type {
+  WorkflowQuickSummaryItem,
+  WorkflowType,
+} from "@/lib/hooks/useWorkflowState";
 
 const QUICK_SUMMARY_CACHE_TTL_MS = 45_000;
 
@@ -18,11 +21,11 @@ const quickSummaryCache = new Map<
   string,
   {
     fetchedAt: number;
-    summary: QuickApprovalSummaryItem[];
+    summary: WorkflowQuickSummaryItem[];
   }
 >();
 
-const inflightSummaryFetches = new Map<string, Promise<QuickApprovalSummaryItem[]>>();
+const inflightSummaryFetches = new Map<string, Promise<WorkflowQuickSummaryItem[]>>();
 
 type ApprovalStepRow = {
   id: string;
@@ -47,6 +50,22 @@ function normalizeToken(value: unknown): string {
 
 function normalizeLower(value: unknown): string {
   return String(value || "").trim().toLowerCase();
+}
+
+function isSchemaError(error: { code?: string | null; message?: string | null } | null | undefined): boolean {
+  const code = normalizeToken(error?.code);
+  const message = normalizeLower(error?.message);
+
+  return (
+    code === "42703" ||
+    code === "42P01" ||
+    code === "PGRST204" ||
+    code === "PGRST205" ||
+    message.includes("column") ||
+    message.includes("does not exist") ||
+    message.includes("schema cache") ||
+    message.includes("relation")
+  );
 }
 
 function normalizeTimestamp(value?: string | null): string | null {
@@ -83,7 +102,7 @@ function stripRevisionPrefix(value?: string | null): string | null {
   return text;
 }
 
-function getFallbackSummary(workflowStatus?: string | null): QuickApprovalSummaryItem[] {
+function getFallbackSummary(workflowStatus?: string | null): WorkflowQuickSummaryItem[] {
   const token = normalizeLower(workflowStatus);
 
   let hodStatus: ApprovalVisualStatus = "blocked";
@@ -166,12 +185,13 @@ function deriveStatusFromStepAndDecision(input: {
 }
 
 async function fetchQuickSummaryFromSupabase(input: {
-  eventId: string;
+  workflowType: WorkflowType;
+  workflowId: string;
   approvalRequestId?: string | null;
   workflowStatus?: string | null;
-}): Promise<QuickApprovalSummaryItem[]> {
-  const eventId = String(input.eventId || "").trim();
-  if (!eventId) {
+}): Promise<WorkflowQuickSummaryItem[]> {
+  const workflowId = String(input.workflowId || "").trim();
+  if (!workflowId) {
     return getFallbackSummary(input.workflowStatus);
   }
 
@@ -179,18 +199,50 @@ async function fetchQuickSummaryFromSupabase(input: {
   let workflowStatus = input.workflowStatus || null;
 
   if (!requestId || workflowStatus == null) {
-    const { data: eventRow } = await supabase
-      .from("events")
-      .select("approval_request_id,workflow_status")
-      .eq("event_id", eventId)
-      .maybeSingle();
+    if (input.workflowType === "event") {
+      const { data: eventRow } = await supabase
+        .from("events")
+        .select("approval_request_id,workflow_status")
+        .eq("event_id", workflowId)
+        .maybeSingle();
 
-    if (!requestId) {
-      requestId = String((eventRow as Record<string, unknown> | null)?.approval_request_id || "").trim();
-    }
+      if (!requestId) {
+        requestId = String((eventRow as Record<string, unknown> | null)?.approval_request_id || "").trim();
+      }
 
-    if (workflowStatus == null) {
-      workflowStatus = String((eventRow as Record<string, unknown> | null)?.workflow_status || "").trim() || null;
+      if (workflowStatus == null) {
+        workflowStatus = String((eventRow as Record<string, unknown> | null)?.workflow_status || "").trim() || null;
+      }
+    } else {
+      const festTables = ["fests", "fest"] as const;
+
+      for (const tableName of festTables) {
+        const { data: festRow, error: festError } = await supabase
+          .from(tableName)
+          .select("approval_request_id,workflow_status")
+          .eq("fest_id", workflowId)
+          .maybeSingle();
+
+        if (festError) {
+          if (isSchemaError(festError)) {
+            continue;
+          }
+
+          throw new Error(festError.message || "Unable to load fest workflow snapshot.");
+        }
+
+        if (!requestId) {
+          requestId = String((festRow as Record<string, unknown> | null)?.approval_request_id || "").trim();
+        }
+
+        if (workflowStatus == null) {
+          workflowStatus = String((festRow as Record<string, unknown> | null)?.workflow_status || "").trim() || null;
+        }
+
+        if (festRow) {
+          break;
+        }
+      }
     }
   }
 
@@ -198,7 +250,7 @@ async function fetchQuickSummaryFromSupabase(input: {
     const { data: requestRows } = await supabase
       .from("approval_requests")
       .select("id")
-      .eq("entity_ref", eventId)
+      .eq("entity_ref", workflowId)
       .order("created_at", { ascending: false })
       .limit(1);
 
@@ -287,11 +339,12 @@ async function fetchQuickSummaryFromSupabase(input: {
 }
 
 async function loadQuickSummaryWithCache(input: {
-  eventId: string;
+  workflowType: WorkflowType;
+  workflowId: string;
   approvalRequestId?: string | null;
   workflowStatus?: string | null;
-}): Promise<QuickApprovalSummaryItem[]> {
-  const cacheKey = String(input.eventId || "").trim();
+}): Promise<WorkflowQuickSummaryItem[]> {
+  const cacheKey = `${input.workflowType}:${String(input.workflowId || "").trim()}`;
   if (!cacheKey) {
     return getFallbackSummary(input.workflowStatus);
   }
@@ -324,7 +377,7 @@ async function loadQuickSummaryWithCache(input: {
   return requestPromise;
 }
 
-function getDominantStatus(rows: QuickApprovalSummaryItem[]): ApprovalVisualStatus {
+function getDominantStatus(rows: WorkflowQuickSummaryItem[]): ApprovalVisualStatus {
   if (rows.some((row) => row.status === "rejected")) {
     return "rejected";
   }
@@ -341,35 +394,39 @@ function getDominantStatus(rows: QuickApprovalSummaryItem[]): ApprovalVisualStat
 }
 
 export default function ApprovalTrackerButton({
-  eventId,
-  eventTitle,
+  workflowType,
+  workflowId,
+  workflowTitle,
   approvalRequestId,
   workflowStatus,
-  buttonLabel = "Approval Tracker",
+  buttonLabel = "Approvals",
   className,
 }: {
-  eventId: string;
-  eventTitle?: string;
+  workflowType: WorkflowType;
+  workflowId: string;
+  workflowTitle?: string;
   approvalRequestId?: string | null;
   workflowStatus?: string | null;
   buttonLabel?: string;
   className?: string;
 }) {
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
-  const [isMindmapOpen, setIsMindmapOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [summary, setSummary] = useState<QuickApprovalSummaryItem[]>(
+  const [summary, setSummary] = useState<WorkflowQuickSummaryItem[]>(
     getFallbackSummary(workflowStatus)
   );
 
   const closeTimerRef = useRef<number | null>(null);
 
-  const stableEventId = String(eventId || "").trim();
+  const stableWorkflowId = String(workflowId || "").trim();
+  const workflowHref = stableWorkflowId
+    ? `/workflows/${workflowType}/${encodeURIComponent(stableWorkflowId)}`
+    : "#";
 
   const refreshSummary = useMemo(
     () => async () => {
-      if (!stableEventId) {
+      if (!stableWorkflowId) {
         setSummary(getFallbackSummary(workflowStatus));
         setIsLoading(false);
         return;
@@ -380,7 +437,8 @@ export default function ApprovalTrackerButton({
 
       try {
         const nextSummary = await loadQuickSummaryWithCache({
-          eventId: stableEventId,
+          workflowType,
+          workflowId: stableWorkflowId,
           approvalRequestId,
           workflowStatus,
         });
@@ -393,7 +451,7 @@ export default function ApprovalTrackerButton({
         setIsLoading(false);
       }
     },
-    [approvalRequestId, stableEventId, workflowStatus]
+    [approvalRequestId, stableWorkflowId, workflowStatus, workflowType]
   );
 
   useEffect(() => {
@@ -441,16 +499,16 @@ export default function ApprovalTrackerButton({
           }
         }}
       >
-        <button
-          type="button"
-          onClick={() => setIsMindmapOpen(true)}
+        <Link
+          href={workflowHref}
+          title={workflowTitle || `${workflowType} workflow`}
           className="inline-flex items-center gap-2 rounded-full border border-[#154cb3]/20 bg-[#154cb3]/5 px-3 py-1.5 text-sm font-semibold text-[#154cb3] transition-all hover:border-[#154cb3]/40 hover:bg-[#154cb3]/10"
-          aria-haspopup="dialog"
+          aria-label={`Open ${workflowType} workflow tracker`}
         >
           <Workflow className="h-4 w-4" aria-hidden="true" />
           <span>{buttonLabel}</span>
           <ApprovalStatusIcon status={dominantStatus} className="h-4 w-4" animatePending />
-        </button>
+        </Link>
 
         {isPopoverOpen ? (
           <div className="absolute bottom-full right-0 z-50 mb-3 w-[min(26rem,calc(100vw-1.25rem))] rounded-2xl border border-white/35 bg-white/20 p-3 shadow-[0_18px_55px_-24px_rgba(15,23,42,0.6)] backdrop-blur-2xl sm:w-[22rem]">
@@ -493,15 +551,6 @@ export default function ApprovalTrackerButton({
           </div>
         ) : null}
       </div>
-
-      {isMindmapOpen ? (
-        <ApprovalMindmapModal
-          open={isMindmapOpen}
-          onClose={() => setIsMindmapOpen(false)}
-          eventId={stableEventId}
-          eventTitle={eventTitle}
-        />
-      ) : null}
     </>
   );
 }

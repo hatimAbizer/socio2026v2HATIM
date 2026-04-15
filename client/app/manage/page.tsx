@@ -11,9 +11,7 @@ import { formatDateFull } from "@/lib/dateUtils";
 import Link from "next/link";
 import { createBrowserClient } from "@supabase/ssr";
 import { toast } from "sonner";
-import ApprovalStatusPopover, {
-  ApprovalStatusRow,
-} from "@/app/manage/_components/ApprovalStatusPopover";
+import type { ApprovalStatusRow } from "@/app/manage/_components/ApprovalStatusPopover";
 import ApprovalTrackerButton from "@/app/manage/_components/ApprovalTrackerButton";
 import {
   addThemedChartsSheet,
@@ -631,9 +629,16 @@ const MappedFestCard = ({
   const isApprovalPending = Boolean(pendingApprovalLabel);
   const isEditLocked = isApprovalPending;
   const showDraftState = isDraft && !isApprovalPending;
-  const approvalRows = getApprovalRows(approvalTimeline || null, fest.workflow_status);
-  const approvalSubmittedLabel = formatApprovalDateTime(
-    approvalTimeline?.submitted_at || approvalTimeline?.created_at || null
+  const festApprovalRequestId = String(fest.approval_request_id || "").trim() || null;
+  const trackerButton = (
+    <ApprovalTrackerButton
+      workflowType="fest"
+      workflowId={fest.fest_id}
+      workflowTitle={fest.fest_title}
+      approvalRequestId={festApprovalRequestId}
+      workflowStatus={fest.workflow_status || null}
+      buttonLabel="Approvals"
+    />
   );
 
   return (
@@ -698,33 +703,21 @@ const MappedFestCard = ({
         </div>
         {isEditLocked ? (
           <div className="flex items-center gap-2">
-            <ApprovalStatusPopover
-              rows={approvalRows}
-              submittedLabel={approvalSubmittedLabel}
-              loading={isApprovalTimelineLoading}
-            />
+            {trackerButton}
             <span className="text-sm font-semibold text-slate-400" title="Fest is locked while approval is pending.">
               Editing locked
             </span>
           </div>
         ) : isDraft ? (
           <div className="flex items-center gap-2">
-            <ApprovalStatusPopover
-              rows={approvalRows}
-              submittedLabel={approvalSubmittedLabel}
-              loading={isApprovalTimelineLoading}
-            />
+            {trackerButton}
             <Link href={`/${baseUrl}/${fest.fest_id}`} className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline">
               Edit <ArrowRight className="w-4 h-4" />
             </Link>
           </div>
         ) : isArchived ? (
           <div className="flex items-center gap-2">
-            <ApprovalStatusPopover
-              rows={approvalRows}
-              submittedLabel={approvalSubmittedLabel}
-              loading={isApprovalTimelineLoading}
-            />
+            {trackerButton}
             <button
               onClick={(e) => {
                 e.preventDefault();
@@ -748,11 +741,7 @@ const MappedFestCard = ({
             >
               {isArchiveUpdating ? "Archiving..." : "Archive"} <History className="w-4 h-4" />
             </button>
-            <ApprovalStatusPopover
-              rows={approvalRows}
-              submittedLabel={approvalSubmittedLabel}
-              loading={isApprovalTimelineLoading}
-            />
+            {trackerButton}
             <Link href={`/${baseUrl}/${fest.fest_id}`} className="flex items-center gap-1.5 text-[#154cb3] font-semibold text-sm hover:underline">
               Manage <ArrowRight className="w-4 h-4" />
             </Link>
@@ -891,8 +880,9 @@ const MappedEventCard = ({
             </>
           )}
           <ApprovalTrackerButton
-            eventId={event.event_id}
-            eventTitle={event.title}
+            workflowType="event"
+            workflowId={event.event_id}
+            workflowTitle={event.title}
             approvalRequestId={String((event as any).approval_request_id || "").trim() || null}
             workflowStatus={event.workflow_status || null}
             buttonLabel="Approvals"
