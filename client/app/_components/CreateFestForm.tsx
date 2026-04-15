@@ -20,7 +20,7 @@ import {
   getPublishSubmittingLabel,
   resolvePublishActionMode,
 } from "./PublishActionButton";
-const API_URL = process.env.NEXT_PUBLIC_API_URL!.replace(/\/api\/?$/, "");
+import { buildServerApiUrl } from "../../lib/apiBase";
 const ALLOWED_FEST_IMAGE_TYPES = [
   "image/jpeg",
   "image/png",
@@ -1234,7 +1234,7 @@ function CreateFestForm(props?: CreateFestProps) {
         setErrors({});
         try {
           const response = await fetch(
-            `${API_URL}/api/fests/${festIdFromPath}`,
+            buildServerApiUrl(`/fests/${festIdFromPath}`),
             {
               headers: {
                 Authorization: `Bearer ${session.access_token}`,
@@ -1396,7 +1396,7 @@ function CreateFestForm(props?: CreateFestProps) {
     setErrors({});
     try {
       const response = await fetch(
-        `${API_URL}/api/fests/${festIdFromPath}`,
+        buildServerApiUrl(`/fests/${festIdFromPath}`),
         {
           method: "DELETE",
           headers: { Authorization: `Bearer ${session?.access_token}` },
@@ -2104,7 +2104,7 @@ function CreateFestForm(props?: CreateFestProps) {
         uploadFormData.append("file", imageFile);
         
         // Use the server's file upload API instead of Supabase storage
-        const uploadResponse = await fetch(`${API_URL}/api/upload/fest-image`, {
+        const uploadResponse = await fetch(buildServerApiUrl("/upload/fest-image"), {
           method: 'POST',
           body: uploadFormData,
           headers: {
@@ -2286,7 +2286,7 @@ function CreateFestForm(props?: CreateFestProps) {
       let response;
       if (finalIsEditMode && festIdFromPath) {
         response = await fetch(
-          `${API_URL}/api/fests/${festIdFromPath}`,
+          buildServerApiUrl(`/fests/${festIdFromPath}`),
           {
             method: "PUT",
             headers: {
@@ -2297,7 +2297,7 @@ function CreateFestForm(props?: CreateFestProps) {
           }
         );
       } else {
-        response = await fetch(`${API_URL}/api/fests`, {
+        response = await fetch(buildServerApiUrl("/fests"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
