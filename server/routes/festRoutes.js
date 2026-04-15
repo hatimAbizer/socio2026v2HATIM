@@ -815,10 +815,12 @@ const mapFestResponse = (fest) => {
 // GET all fests
 router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
   try {
-    const { page, pageSize, search, status, archive, sortBy, sortOrder, include_drafts } = req.query;
+    const { page, pageSize, search, status, archive, sortBy, sortOrder, include_drafts, owned_only } = req.query;
     const today = new Date().toISOString().split('T')[0];
     const includeDraftsRequested =
       typeof include_drafts === "string" && include_drafts.toLowerCase() === "true";
+    const ownedOnlyRequested =
+      typeof owned_only === "string" && owned_only.toLowerCase() === "true";
 
     let queryOptions = {
       order: { column: "created_at", ascending: false }
@@ -962,10 +964,55 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
 
     // Filter out archived/draft fests for public callers unless draft inclusion is explicitly allowed.
     const userInfo = req.userInfo;
+    const requesterEmail = normalizeEmail(userInfo?.email || req.user?.email || "");
+    const requesterAuthUuid = String(userInfo?.auth_uuid || req.userId || req.user?.id || "")
+      .trim()
+      .toLowerCase();
+    const hasRequesterIdentity = Boolean(requesterEmail || requesterAuthUuid);
+    const normalizeOwnerIdentity = (value) =>
+      String(value || "")
+        .trim()
+        .toLowerCase();
+    const festMatchesRequesterOwnership = (fest) => {
+      const ownerCandidates = [
+        fest?.created_by,
+        fest?.created_by_email,
+        fest?.contact_email,
+        fest?.organizer_email,
+        fest?.organiser_email,
+        fest?.auth_uuid,
+      ]
+        .map((candidate) => normalizeOwnerIdentity(candidate))
+        .filter(Boolean);
+
+      if (ownerCandidates.length === 0) {
+        return false;
+      }
+
+      if (requesterEmail && ownerCandidates.includes(requesterEmail)) {
+        return true;
+      }
+
+      if (requesterAuthUuid && ownerCandidates.includes(requesterAuthUuid)) {
+        return true;
+      }
+
+      return false;
+    };
+
+    const canAccessNonPublicViaOwnedScope = ownedOnlyRequested && hasRequesterIdentity;
+
+    if (ownedOnlyRequested) {
+      processedFests = hasRequesterIdentity
+        ? processedFests.filter((fest) => festMatchesRequesterOwnership(fest))
+        : [];
+    }
+
     const isAdminOrOrganizer = canAccessNonPublicFests(userInfo);
-    const shouldIncludeDrafts = includeDraftsRequested && isAdminOrOrganizer;
+    const shouldIncludeDrafts =
+      includeDraftsRequested && (isAdminOrOrganizer || canAccessNonPublicViaOwnedScope);
     
-    if (!isAdminOrOrganizer) {
+    if (!isAdminOrOrganizer && !canAccessNonPublicViaOwnedScope) {
       processedFests = processedFests.filter((fest) => !fest.is_archived && !asBoolean(fest.is_draft));
 
       console.log(`[Archive Filter] Non-organizer viewing ${processedFests.length} non-archived fests`);

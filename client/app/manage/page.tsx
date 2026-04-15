@@ -1055,7 +1055,7 @@ export default function ManageDashboard() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/fests?sortBy=created_at&sortOrder=desc&include_drafts=true`, {
+      const response = await fetch(`${API_URL}/api/fests?sortBy=created_at&sortOrder=desc&include_drafts=true&owned_only=true`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
