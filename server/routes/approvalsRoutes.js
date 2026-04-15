@@ -16,6 +16,7 @@ import {
   isServiceRoleCode,
   normalizeRoleCode,
 } from "../utils/roleAccessService.js";
+import { sendUserNotifications } from "./notificationRoutes.js";
 import {
   LIFECYCLE_STATUS,
   normalizeLifecycleStatus,
@@ -1032,6 +1033,154 @@ const recomputeApprovalRequestStatus = async (approvalRequestId) => {
   return "UNDER_REVIEW";
 };
 
+const getApprovalRoleLabel = (roleCode) => {
+  const normalizedRoleCode = normalizeRoleCode(roleCode);
+
+  if (normalizedRoleCode === ROLE_CODES.HOD) return "HOD";
+  if (normalizedRoleCode === ROLE_CODES.DEAN) return "Dean";
+  if (normalizedRoleCode === ROLE_CODES.CFO) return "CFO";
+  if (
+    normalizedRoleCode === ROLE_CODES.ACCOUNTS ||
+    normalizedRoleCode === ROLE_CODES.FINANCE_OFFICER
+  ) {
+    return "Finance Officer";
+  }
+  if (normalizedRoleCode === ROLE_CODES.ORGANIZER_TEACHER) {
+    return "Organizer Teacher";
+  }
+
+  return normalizedRoleCode || "Approver";
+};
+
+const isEventEntityType = (entityType) =>
+  ["EVENT", "STANDALONE_EVENT", "FEST_CHILD_EVENT"].includes(
+    normalizeWorkflowStatus(entityType)
+  );
+
+const resolveApprovalNotificationContext = async (approvalRequest) => {
+  const entityType = normalizeWorkflowStatus(approvalRequest?.entity_type);
+  const entityRef = String(approvalRequest?.entity_ref || "").trim();
+
+  if (!entityType || !entityRef) {
+    return null;
+  }
+
+  if (isEventEntityType(entityType)) {
+    const event = await queryOne("events", {
+      where: { event_id: entityRef },
+      select: "event_id,title,organizer_email,created_by",
+    });
+
+    if (!event) {
+      return null;
+    }
+
+    const organizerEmail = normalizeEmail(
+      event.organizer_email || event.created_by || approvalRequest?.requested_by_email || ""
+    );
+
+    return {
+      entityLabel: "Event",
+      entityId: entityRef,
+      title: String(event.title || "").trim() || "Event",
+      organizerEmail,
+      actionUrl: `/approvals/organiser/${encodeURIComponent(entityRef)}`,
+      notificationEntityId: entityRef,
+    };
+  }
+
+  if (entityType === "FEST") {
+    let fest = null;
+
+    for (const tableName of ["fests", "fest"]) {
+      try {
+        fest = await queryOne(tableName, {
+          where: { fest_id: entityRef },
+          select: "fest_id,fest_title,contact_email,created_by",
+        });
+
+        if (fest) {
+          break;
+        }
+      } catch (error) {
+        if (isMissingRelationError(error)) {
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    if (!fest) {
+      return null;
+    }
+
+    const organizerEmail = normalizeEmail(
+      fest.contact_email || fest.created_by || approvalRequest?.requested_by_email || ""
+    );
+
+    return {
+      entityLabel: "Fest",
+      entityId: entityRef,
+      title: String(fest.fest_title || "").trim() || "Fest",
+      organizerEmail,
+      actionUrl: `/approvals/fest/${encodeURIComponent(entityRef)}`,
+      notificationEntityId: entityRef,
+    };
+  }
+
+  return null;
+};
+
+const notifyDecisionToOrganizer = async ({
+  approvalRequest,
+  approvalStep,
+  decision,
+  comment,
+  requestStatus,
+}) => {
+  const context = await resolveApprovalNotificationContext(approvalRequest);
+  if (!context?.organizerEmail) {
+    return;
+  }
+
+  const normalizedDecision = normalizeDecision(decision);
+  const normalizedRequestStatus = normalizeWorkflowStatus(requestStatus, "UNDER_REVIEW");
+  const roleLabel = getApprovalRoleLabel(approvalStep?.role_code);
+
+  let title = `${context.entityLabel} update`;
+  let message = `${context.title} has a new approval update.`;
+  let type = "info";
+
+  if (normalizedDecision === "APPROVED") {
+    if (normalizedRequestStatus === "APPROVED") {
+      title = `${context.entityLabel} fully approved`;
+      message = `${context.title} has been fully approved. You can now publish it.`;
+      type = "success";
+    } else {
+      title = `${context.entityLabel} approved by ${roleLabel}`;
+      message = `${context.title} was approved by ${roleLabel}. Remaining approvals are still in progress.`;
+      type = "info";
+    }
+  } else if (normalizedDecision === "REJECTED") {
+    title = `${context.entityLabel} rejected by ${roleLabel}`;
+    message = comment
+      ? `${context.title} was rejected by ${roleLabel}. Note: ${comment}`
+      : `${context.title} was rejected by ${roleLabel}. Please review and resubmit.`;
+    type = "error";
+  }
+
+  await sendUserNotifications({
+    userEmails: [context.organizerEmail],
+    title,
+    message,
+    type,
+    event_id: context.notificationEntityId,
+    event_title: context.title,
+    action_url: context.actionUrl,
+  });
+};
+
 router.use(authenticateUser, getUserInfo(), checkRoleExpiration);
 
 router.get("/me/roles", async (req, res) => {
@@ -1384,6 +1533,19 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
       requestStatus,
       decidedByEmail: req.userInfo?.email || null,
       comment,
+    });
+
+    notifyDecisionToOrganizer({
+      approvalRequest,
+      approvalStep,
+      decision,
+      comment,
+      requestStatus,
+    }).catch((notificationError) => {
+      console.error(
+        "[ApprovalNotify] Failed to dispatch organizer decision notification:",
+        notificationError
+      );
     });
 
     return res.status(200).json({

@@ -924,7 +924,6 @@ export default function ManageDashboard() {
     String(value || "").trim().toLowerCase();
   const currentUserEmail = normalizeEmail(userData?.email);
   const isOwnedByCurrentUser = (...ownerCandidates: Array<string | null | undefined>) => {
-    if (isMasterAdmin) return true;
     if (!currentUserEmail) return false;
 
     const normalizedOwners = ownerCandidates

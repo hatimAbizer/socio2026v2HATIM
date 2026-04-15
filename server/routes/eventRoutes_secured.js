@@ -18,9 +18,13 @@ import {
   requireOwnership, 
   optionalAuth 
 } from "../middleware/authMiddleware.js";
-import { sendBroadcastNotification } from "./notificationRoutes.js";
+import {
+  sendBroadcastNotification,
+  sendUserNotifications,
+} from "./notificationRoutes.js";
 import { pushEventToGated, shouldPushEventToGated, isGatedEnabled } from "../utils/gatedSync.js";
 import { ROLE_CODES, hasAnyRoleCode } from "../utils/roleAccessService.js";
+import { resolveRoleMatrixApprover } from "../utils/roleMatrixApprover.js";
 import {
   LIFECYCLE_STATUS,
   deriveLifecycleStatus,
@@ -262,6 +266,168 @@ const normalizeEventLifecycleStatus = (eventRecord, fallback) => {
 
 const isEventLiveForNotifications = (eventRecord) => {
   return isRecordLiveForNotifications(eventRecord);
+};
+
+const getEventApprovalRoleLabel = (roleCode) => {
+  const normalizedRoleCode = normalizeWorkflowStatus(roleCode);
+
+  if (normalizedRoleCode === ROLE_CODES.HOD) return "HOD";
+  if (normalizedRoleCode === ROLE_CODES.DEAN) return "Dean";
+  if (normalizedRoleCode === ROLE_CODES.CFO) return "CFO";
+  if (
+    normalizedRoleCode === ROLE_CODES.ACCOUNTS ||
+    normalizedRoleCode === ROLE_CODES.FINANCE_OFFICER
+  ) {
+    return "Finance Officer";
+  }
+  if (normalizedRoleCode === ROLE_CODES.ORGANIZER_TEACHER) {
+    return "Organizer Teacher";
+  }
+
+  return normalizedRoleCode || "Approver";
+};
+
+const getEventApprovalActionUrlForRole = (roleCode) => {
+  const normalizedRoleCode = normalizeWorkflowStatus(roleCode);
+
+  if (normalizedRoleCode === ROLE_CODES.HOD) return "/manage/hod";
+  if (normalizedRoleCode === ROLE_CODES.DEAN) return "/manage/dean";
+  if (normalizedRoleCode === ROLE_CODES.CFO) return "/manage/cfo";
+  if (
+    normalizedRoleCode === ROLE_CODES.ACCOUNTS ||
+    normalizedRoleCode === ROLE_CODES.FINANCE_OFFICER
+  ) {
+    return "/manage/finance";
+  }
+  if (normalizedRoleCode === ROLE_CODES.ORGANIZER_TEACHER) return "/manage";
+
+  return "/manage";
+};
+
+const getEventApprovalDetailsUrl = (eventId) => {
+  return `/approvals/organiser/${encodeURIComponent(String(eventId || "").trim())}`;
+};
+
+const resolveEventApprovalRecipientsForRole = async ({
+  roleCode,
+  eventRecord,
+  organizerEmail,
+}) => {
+  const normalizedRoleCode = normalizeWorkflowStatus(roleCode);
+  if (!normalizedRoleCode) {
+    return [];
+  }
+
+  const normalizedOrganizerEmail = normalizeEmailAddress(organizerEmail || "");
+
+  if (normalizedRoleCode === ROLE_CODES.ORGANIZER_TEACHER) {
+    const normalizedFestId = String(eventRecord?.fest_id || "").trim();
+    if (!normalizedFestId) {
+      return [];
+    }
+
+    const parentFest = await queryFestById(normalizedFestId);
+    const candidateEmails = [
+      normalizeEmailAddress(parentFest?.contact_email || ""),
+      normalizeEmailAddress(parentFest?.created_by || ""),
+    ].filter(Boolean);
+
+    return Array.from(
+      new Set(candidateEmails.filter((email) => email !== normalizedOrganizerEmail))
+    );
+  }
+
+  const approver = await resolveRoleMatrixApprover({
+    roleCode: normalizedRoleCode,
+    department: eventRecord?.organizing_dept || null,
+    school: eventRecord?.organizing_school || null,
+    campus: eventRecord?.campus_hosted_at || null,
+    excludeEmail: normalizedOrganizerEmail || undefined,
+  });
+
+  const approverEmail = normalizeEmailAddress(approver?.email || "");
+  if (!approverEmail || approverEmail === normalizedOrganizerEmail) {
+    return [];
+  }
+
+  return [approverEmail];
+};
+
+const notifyEventSubmittedForApproval = async ({
+  eventRecord,
+  approvalRequest,
+  initiatedByEmail,
+}) => {
+  const eventId = String(eventRecord?.event_id || "").trim();
+  if (!eventId || !approvalRequest?.id) {
+    return;
+  }
+
+  const eventTitle = String(eventRecord?.title || "").trim() || "Event";
+  const organizerEmail = normalizeEmailAddress(
+    eventRecord?.organizer_email ||
+      eventRecord?.created_by ||
+      approvalRequest?.requested_by_email ||
+      initiatedByEmail ||
+      ""
+  );
+
+  const organizerActionUrl = getEventApprovalDetailsUrl(eventId);
+
+  if (organizerEmail) {
+    await sendUserNotifications({
+      userEmails: [organizerEmail],
+      title: "Event sent for approval",
+      message: `${eventTitle} has been sent for approval. You will get updates as each step is reviewed.`,
+      type: "info",
+      event_id: eventId,
+      event_title: eventTitle,
+      action_url: organizerActionUrl,
+    });
+  }
+
+  let approvalSteps = [];
+  try {
+    approvalSteps = await queryAll("approval_steps", {
+      where: { approval_request_id: approvalRequest.id },
+      order: { column: "sequence_order", ascending: true },
+    });
+  } catch (error) {
+    if (!isMissingRelationError(error)) {
+      throw error;
+    }
+  }
+
+  const roleCodes = Array.from(
+    new Set(
+      (approvalSteps || [])
+        .map((step) => normalizeWorkflowStatus(step?.role_code))
+        .filter(Boolean)
+    )
+  );
+
+  for (const roleCode of roleCodes) {
+    const approverEmails = await resolveEventApprovalRecipientsForRole({
+      roleCode,
+      eventRecord,
+      organizerEmail,
+    });
+
+    if (approverEmails.length === 0) {
+      continue;
+    }
+
+    const roleLabel = getEventApprovalRoleLabel(roleCode);
+    await sendUserNotifications({
+      userEmails: approverEmails,
+      title: `Approval required: ${eventTitle}`,
+      message: `${eventTitle} has been sent for ${roleLabel} approval. Please review it.`,
+      type: "warning",
+      event_id: eventId,
+      event_title: eventTitle,
+      action_url: getEventApprovalActionUrlForRole(roleCode),
+    });
+  }
 };
 
 const isBudgetRelatedFromEventPayload = ({
@@ -2652,6 +2818,19 @@ router.post(
         }
       }
 
+      if (primaryApprovalRequest) {
+        notifyEventSubmittedForApproval({
+          eventRecord: createdEventRecord,
+          approvalRequest: primaryApprovalRequest,
+          initiatedByEmail: req.userInfo?.email || null,
+        }).catch((notificationError) => {
+          console.error(
+            "[EventApprovalNotify] Failed to dispatch event approval notifications:",
+            notificationError
+          );
+        });
+      }
+
       const canGoLiveNow =
         !shouldSaveAsDraft &&
         !shouldArchiveOnCreate &&
@@ -3642,6 +3821,19 @@ router.put(
             if (refreshedEvent) {
               updatedEvent = refreshedEvent;
             }
+          }
+
+          if (workflowApprovalRequest) {
+            notifyEventSubmittedForApproval({
+              eventRecord: updatedEvent,
+              approvalRequest: workflowApprovalRequest,
+              initiatedByEmail: req.userInfo?.email || null,
+            }).catch((notificationError) => {
+              console.error(
+                "[EventApprovalNotify] Failed to dispatch event resubmission notifications:",
+                notificationError
+              );
+            });
           }
         } else {
           const publishResult = await applyEventWorkflowState({

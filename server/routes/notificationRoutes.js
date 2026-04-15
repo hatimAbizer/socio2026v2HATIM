@@ -7,6 +7,7 @@ import {
   sendPushToEmail,
   sendPushToAll,
 } from "../utils/webPushService.js";
+import { isRecordLiveForNotifications } from "../utils/notificationLifecycle.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -14,6 +15,161 @@ const supabase = createClient(
 );
 
 const router = express.Router();
+
+const normalizeNotificationEmail = (value) =>
+  String(value || "").trim().toLowerCase();
+
+const normalizeRecipientEmails = (emails = []) => {
+  const seen = new Set();
+  const normalized = [];
+
+  for (const rawEmail of Array.isArray(emails) ? emails : []) {
+    const email = normalizeNotificationEmail(rawEmail);
+    if (!email || seen.has(email)) {
+      continue;
+    }
+
+    seen.add(email);
+    normalized.push(email);
+  }
+
+  return normalized;
+};
+
+export async function sendUserNotification({
+  user_email,
+  recipient_email,
+  userEmail,
+  recipientEmail,
+  title,
+  message,
+  type = "info",
+  event_id = null,
+  event_title = null,
+  action_url = null,
+}) {
+  const targetEmail = normalizeNotificationEmail(
+    user_email || recipient_email || userEmail || recipientEmail
+  );
+  const normalizedTitle = String(title || "").trim();
+  const normalizedMessage = String(message || "").trim();
+
+  if (!targetEmail || !normalizedTitle || !normalizedMessage) {
+    return {
+      success: false,
+      skipped: true,
+      reason: "missing_required_fields",
+      user_email: targetEmail || null,
+    };
+  }
+
+  try {
+    const { data: notification, error } = await supabase
+      .from("notifications")
+      .insert({
+        title: normalizedTitle,
+        message: normalizedMessage,
+        type: type || "info",
+        event_id: event_id || null,
+        event_title: event_title || null,
+        action_url: action_url || null,
+        user_email: targetEmail,
+        is_broadcast: false,
+        read: false,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      return {
+        success: false,
+        error: error.message,
+        user_email: targetEmail,
+      };
+    }
+
+    let pushError = null;
+    try {
+      await sendPushToEmail(targetEmail, {
+        title: normalizedTitle,
+        body: normalizedMessage,
+        tag: notification.id,
+        actionUrl: action_url || "/notifications",
+      });
+    } catch (error) {
+      pushError = error?.message || String(error);
+      console.warn(
+        `[NOTIFY] Push delivery failed for ${targetEmail}:`,
+        pushError
+      );
+    }
+
+    return {
+      success: true,
+      user_email: targetEmail,
+      notification,
+      push_error: pushError,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error?.message || String(error),
+      user_email: targetEmail,
+    };
+  }
+}
+
+export async function sendUserNotifications({
+  userEmails = [],
+  recipientEmails = [],
+  title,
+  message,
+  type = "info",
+  event_id = null,
+  event_title = null,
+  action_url = null,
+}) {
+  const recipients = normalizeRecipientEmails([
+    ...(Array.isArray(userEmails) ? userEmails : []),
+    ...(Array.isArray(recipientEmails) ? recipientEmails : []),
+  ]);
+
+  if (recipients.length === 0) {
+    return {
+      success: true,
+      sentCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      results: [],
+    };
+  }
+
+  const results = [];
+  for (const email of recipients) {
+    const result = await sendUserNotification({
+      user_email: email,
+      title,
+      message,
+      type,
+      event_id,
+      event_title,
+      action_url,
+    });
+    results.push(result);
+  }
+
+  const sentCount = results.filter((result) => result.success).length;
+  const skippedCount = results.filter((result) => result.skipped).length;
+  const failedCount = results.length - sentCount - skippedCount;
+
+  return {
+    success: failedCount === 0,
+    sentCount,
+    skippedCount,
+    failedCount,
+    results,
+  };
+}
 
 // ─── PUSH SUBSCRIPTIONS ───────────────────────────────────────────────────────
 
@@ -191,7 +347,7 @@ router.post(
       // Verify the organiser owns this event
       const { data: event, error: eventError } = await supabase
         .from("events")
-        .select("event_id, title, created_by, event_date, event_time, venue")
+        .select("event_id, title, created_by, event_date, event_time, venue, status, activation_state, is_draft")
         .eq("event_id", event_id)
         .single();
 
@@ -201,6 +357,12 @@ router.post(
 
       if (event.created_by !== req.userInfo.email) {
         return res.status(403).json({ error: "You can only send reminders for events you created" });
+      }
+
+      if (!isRecordLiveForNotifications(event)) {
+        return res.status(409).json({
+          error: "Event is not published yet. Broadcast reminders are allowed only for live events.",
+        });
       }
 
       // Pre-set templates
@@ -539,38 +701,30 @@ router.patch("/notifications/mark-read", async (req, res) => {
 router.post("/notifications", async (req, res) => {
   try {
     const { title, message, type, event_id, event_title, action_url, recipient_email, user_email } = req.body;
-    const targetEmail = user_email || recipient_email;
 
-    if (!title || !message || !targetEmail) {
+    if (!title || !message || !(user_email || recipient_email)) {
       return res.status(400).json({ error: "title, message, and user_email are required" });
     }
 
-    const { data: notification, error } = await supabase
-      .from('notifications')
-      .insert({
-        title,
-        message,
-        type: type || 'info',
-        event_id: event_id || null,
-        event_title: event_title || null,
-        action_url: action_url || null,
-        user_email: targetEmail,
-        is_broadcast: false,
-        read: false
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    await sendPushToEmail(targetEmail, {
+    const result = await sendUserNotification({
+      user_email,
+      recipient_email,
       title,
-      body: message,
-      tag: notification.id,
-      actionUrl: action_url || "/notifications",
+      message,
+      type,
+      event_id,
+      event_title,
+      action_url,
     });
 
-    return res.status(201).json({ notification });
+    if (!result.success) {
+      const statusCode = result.skipped ? 400 : 500;
+      return res.status(statusCode).json({
+        error: result.reason || result.error || "Failed to create notification",
+      });
+    }
+
+    return res.status(201).json({ notification: result.notification });
 
   } catch (error) {
     console.error("Error creating notification:", error);

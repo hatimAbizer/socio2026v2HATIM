@@ -14,6 +14,7 @@ import {
   sendFestRejectedEmail,
   sendFestSubmittedToHodEmail,
 } from "../utils/emailService.js";
+import { sendUserNotifications } from "./notificationRoutes.js";
 
 const router = express.Router();
 
@@ -215,6 +216,148 @@ const resolveSchoolForFest = async (fest) => {
 const buildFestApprovalLink = (festId) => {
   const appOrigin = API_APP_URL.replace(/\/$/, "");
   return `${appOrigin}/approvals/fest/${encodeURIComponent(String(festId || ""))}`;
+};
+
+const buildFestApprovalActionPath = (festId) =>
+  `/approvals/fest/${encodeURIComponent(String(festId || "").trim())}`;
+
+const getFestRoleLabel = (roleCode) => {
+  const normalizedRoleCode = normalizeToken(roleCode).toUpperCase();
+
+  if (normalizedRoleCode === ROLE_CODES.HOD) return "HOD";
+  if (normalizedRoleCode === ROLE_CODES.DEAN) return "Dean";
+  if (normalizedRoleCode === ROLE_CODES.CFO) return "CFO";
+  if (
+    normalizedRoleCode === ROLE_CODES.ACCOUNTS ||
+    normalizedRoleCode === ROLE_CODES.FINANCE_OFFICER
+  ) {
+    return "Finance Officer";
+  }
+  if (normalizedRoleCode === ROLE_CODES.ORGANIZER_TEACHER) return "Organizer";
+
+  return normalizedRoleCode || "Approver";
+};
+
+const getFestOrganizerEmail = (fest, fallbackEmail = "") => {
+  return normalizeEmail(
+    fest?.contact_email || fest?.created_by || fallbackEmail || ""
+  );
+};
+
+const sendFestBellNotification = async ({
+  recipientEmails,
+  fest,
+  title,
+  message,
+  type = "info",
+}) => {
+  const festId = normalizeText(fest?.fest_id);
+  if (!festId) return;
+
+  const festTitle = normalizeText(fest?.fest_title) || festId;
+
+  await sendUserNotifications({
+    userEmails: recipientEmails,
+    title,
+    message,
+    type,
+    event_id: festId,
+    event_title: festTitle,
+    action_url: buildFestApprovalActionPath(festId),
+  });
+};
+
+const notifyFestSubmissionTransition = async ({ fest, requesterEmail, nextApproverEmail }) => {
+  const festTitle = normalizeText(fest?.fest_title) || "Fest";
+  const organizerEmail = getFestOrganizerEmail(fest, requesterEmail);
+
+  if (organizerEmail) {
+    await sendFestBellNotification({
+      recipientEmails: [organizerEmail],
+      fest,
+      title: "Fest sent for approval",
+      message: `${festTitle} has been sent for approval. You will receive updates as reviews progress.`,
+      type: "info",
+    });
+  }
+
+  const approverEmail = normalizeEmail(nextApproverEmail);
+  if (approverEmail) {
+    await sendFestBellNotification({
+      recipientEmails: [approverEmail],
+      fest,
+      title: `Approval required: ${festTitle}`,
+      message: `${festTitle} has been submitted and is awaiting your approval.`,
+      type: "warning",
+    });
+  }
+};
+
+const notifyFestDecisionTransition = async ({
+  fest,
+  requesterEmail,
+  actorRoleCode,
+  action,
+  notes,
+  status,
+  nextApproverEmail,
+  nextRoleCode,
+}) => {
+  const festTitle = normalizeText(fest?.fest_title) || "Fest";
+  const organizerEmail = getFestOrganizerEmail(fest, requesterEmail);
+  const normalizedAction = normalizeToken(action);
+  const actorLabel = getFestRoleLabel(actorRoleCode);
+  const normalizedStatus = normalizeToken(status);
+
+  if (organizerEmail) {
+    let organizerTitle = "Fest approval update";
+    let organizerMessage = `${festTitle} has a new approval update.`;
+    let organizerType = "info";
+
+    if (normalizedAction === "approved") {
+      if (normalizedStatus === FEST_STATUS.FULLY_APPROVED) {
+        organizerTitle = "Fest fully approved";
+        organizerMessage = `${festTitle} has been fully approved. You can now publish it.`;
+        organizerType = "success";
+      } else {
+        const nextLabel = getFestRoleLabel(nextRoleCode);
+        organizerTitle = `Fest approved by ${actorLabel}`;
+        organizerMessage = `${festTitle} was approved by ${actorLabel} and routed to ${nextLabel} for the next review step.`;
+        organizerType = "info";
+      }
+    } else if (normalizedAction === "rejected" || normalizedAction === "returned_for_revision") {
+      const isFinal = normalizedStatus === FEST_STATUS.FINAL_REJECTED;
+      organizerTitle = isFinal
+        ? `Fest final rejected by ${actorLabel}`
+        : `Fest rejected by ${actorLabel}`;
+      organizerMessage = notes
+        ? `${festTitle} was ${isFinal ? "final rejected" : "rejected"} by ${actorLabel}. Note: ${notes}`
+        : `${festTitle} was ${isFinal ? "final rejected" : "rejected"} by ${actorLabel}.`;
+      organizerType = "error";
+    }
+
+    await sendFestBellNotification({
+      recipientEmails: [organizerEmail],
+      fest,
+      title: organizerTitle,
+      message: organizerMessage,
+      type: organizerType,
+    });
+  }
+
+  if (normalizedAction === "approved") {
+    const approverEmail = normalizeEmail(nextApproverEmail);
+    if (approverEmail) {
+      const nextLabel = getFestRoleLabel(nextRoleCode);
+      await sendFestBellNotification({
+        recipientEmails: [approverEmail],
+        fest,
+        title: `Approval required: ${festTitle}`,
+        message: `${festTitle} has been routed to you for ${nextLabel} approval.`,
+        type: "warning",
+      });
+    }
+  }
 };
 
 const validateReviewActionPayload = ({ action, notes }) => {
@@ -576,6 +719,14 @@ router.post("/:festId/submit", async (req, res) => {
       return res.status(400).json({ error: submission.error });
     }
 
+    notifyFestSubmissionTransition({
+      fest: submission.updatedFest || fest,
+      requesterEmail: req.userInfo?.email,
+      nextApproverEmail: submission.hod?.email,
+    }).catch((notificationError) => {
+      console.error("[FestApprovalNotify] submit notification error:", notificationError);
+    });
+
     return res.status(200).json({
       success: true,
       status: FEST_STATUS.PENDING_HOD,
@@ -664,6 +815,19 @@ router.post("/:festId/hod-action", async (req, res) => {
           link: buildFestApprovalLink(festId),
         });
 
+        notifyFestDecisionTransition({
+          fest: updatedFest || fest,
+          requesterEmail: req.userInfo?.email,
+          actorRoleCode: ROLE_CODES.HOD,
+          action,
+          notes,
+          status: FEST_STATUS.PENDING_DEAN,
+          nextApproverEmail: dean.email,
+          nextRoleCode: ROLE_CODES.DEAN,
+        }).catch((notificationError) => {
+          console.error("[FestApprovalNotify] hod-action dean-route notification error:", notificationError);
+        });
+
         return res.status(200).json({
           success: true,
           status: FEST_STATUS.PENDING_DEAN,
@@ -717,6 +881,19 @@ router.post("/:festId/hod-action", async (req, res) => {
           link: buildFestApprovalLink(festId),
         });
 
+        notifyFestDecisionTransition({
+          fest: updatedFest || fest,
+          requesterEmail: req.userInfo?.email,
+          actorRoleCode: ROLE_CODES.HOD,
+          action,
+          notes,
+          status: FEST_STATUS.PENDING_CFO,
+          nextApproverEmail: cfo.email,
+          nextRoleCode: ROLE_CODES.CFO,
+        }).catch((notificationError) => {
+          console.error("[FestApprovalNotify] hod-action cfo-route notification error:", notificationError);
+        });
+
         return res.status(200).json({
           success: true,
           status: FEST_STATUS.PENDING_CFO,
@@ -746,6 +923,17 @@ router.post("/:festId/hod-action", async (req, res) => {
         link: `${API_APP_URL.replace(/\/$/, "")}/fest/${encodeURIComponent(festId)}`,
       });
 
+      notifyFestDecisionTransition({
+        fest: updatedFest || fest,
+        requesterEmail: req.userInfo?.email,
+        actorRoleCode: ROLE_CODES.HOD,
+        action,
+        notes,
+        status: FEST_STATUS.FULLY_APPROVED,
+      }).catch((notificationError) => {
+        console.error("[FestApprovalNotify] hod-action final-approval notification error:", notificationError);
+      });
+
       return res.status(200).json({ success: true, status: FEST_STATUS.FULLY_APPROVED, fest: updatedFest });
     }
 
@@ -771,6 +959,17 @@ router.post("/:festId/hod-action", async (req, res) => {
     });
 
     await notifyFestRejection({ fest, step: "HOD", notes, requester: req.userInfo });
+
+    notifyFestDecisionTransition({
+      fest: updatedFest || fest,
+      requesterEmail: req.userInfo?.email,
+      actorRoleCode: ROLE_CODES.HOD,
+      action,
+      notes,
+      status,
+    }).catch((notificationError) => {
+      console.error("[FestApprovalNotify] hod-action rejection notification error:", notificationError);
+    });
 
     return res.status(200).json({ success: true, status, fest: updatedFest });
   } catch (error) {
@@ -854,6 +1053,19 @@ router.post("/:festId/dean-action", async (req, res) => {
           link: buildFestApprovalLink(festId),
         });
 
+        notifyFestDecisionTransition({
+          fest: updatedFest || fest,
+          requesterEmail: req.userInfo?.email,
+          actorRoleCode: ROLE_CODES.DEAN,
+          action,
+          notes,
+          status: FEST_STATUS.PENDING_CFO,
+          nextApproverEmail: cfo.email,
+          nextRoleCode: ROLE_CODES.CFO,
+        }).catch((notificationError) => {
+          console.error("[FestApprovalNotify] dean-action cfo-route notification error:", notificationError);
+        });
+
         return res.status(200).json({
           success: true,
           status: FEST_STATUS.PENDING_CFO,
@@ -883,6 +1095,17 @@ router.post("/:festId/dean-action", async (req, res) => {
         link: `${API_APP_URL.replace(/\/$/, "")}/fest/${encodeURIComponent(festId)}`,
       });
 
+      notifyFestDecisionTransition({
+        fest: updatedFest || fest,
+        requesterEmail: req.userInfo?.email,
+        actorRoleCode: ROLE_CODES.DEAN,
+        action,
+        notes,
+        status: FEST_STATUS.FULLY_APPROVED,
+      }).catch((notificationError) => {
+        console.error("[FestApprovalNotify] dean-action final-approval notification error:", notificationError);
+      });
+
       return res.status(200).json({ success: true, status: FEST_STATUS.FULLY_APPROVED, fest: updatedFest });
     }
 
@@ -908,6 +1131,17 @@ router.post("/:festId/dean-action", async (req, res) => {
     });
 
     await notifyFestRejection({ fest, step: "Dean", notes, requester: req.userInfo });
+
+    notifyFestDecisionTransition({
+      fest: updatedFest || fest,
+      requesterEmail: req.userInfo?.email,
+      actorRoleCode: ROLE_CODES.DEAN,
+      action,
+      notes,
+      status,
+    }).catch((notificationError) => {
+      console.error("[FestApprovalNotify] dean-action rejection notification error:", notificationError);
+    });
 
     return res.status(200).json({ success: true, status, fest: updatedFest });
   } catch (error) {
@@ -982,6 +1216,19 @@ router.post("/:festId/cfo-action", async (req, res) => {
         link: buildFestApprovalLink(festId),
       });
 
+      notifyFestDecisionTransition({
+        fest: updatedFest || fest,
+        requesterEmail: req.userInfo?.email,
+        actorRoleCode: ROLE_CODES.CFO,
+        action,
+        notes,
+        status: FEST_STATUS.PENDING_ACCOUNTS,
+        nextApproverEmail: accounts.email,
+        nextRoleCode: ROLE_CODES.ACCOUNTS,
+      }).catch((notificationError) => {
+        console.error("[FestApprovalNotify] cfo-action accounts-route notification error:", notificationError);
+      });
+
       return res.status(200).json({
         success: true,
         status: FEST_STATUS.PENDING_ACCOUNTS,
@@ -1016,6 +1263,17 @@ router.post("/:festId/cfo-action", async (req, res) => {
     });
 
     await notifyFestRejection({ fest, step: "CFO", notes, requester: req.userInfo });
+
+    notifyFestDecisionTransition({
+      fest: updatedFest || fest,
+      requesterEmail: req.userInfo?.email,
+      actorRoleCode: ROLE_CODES.CFO,
+      action,
+      notes,
+      status,
+    }).catch((notificationError) => {
+      console.error("[FestApprovalNotify] cfo-action rejection notification error:", notificationError);
+    });
 
     return res.status(200).json({ success: true, status, fest: updatedFest });
   } catch (error) {
@@ -1082,6 +1340,17 @@ router.post("/:festId/accounts-action", async (req, res) => {
         link: `${API_APP_URL.replace(/\/$/, "")}/fest/${encodeURIComponent(festId)}`,
       });
 
+      notifyFestDecisionTransition({
+        fest: updatedFest || fest,
+        requesterEmail: req.userInfo?.email,
+        actorRoleCode: ROLE_CODES.ACCOUNTS,
+        action,
+        notes,
+        status: FEST_STATUS.FULLY_APPROVED,
+      }).catch((notificationError) => {
+        console.error("[FestApprovalNotify] accounts-action final-approval notification error:", notificationError);
+      });
+
       return res.status(200).json({ success: true, status: FEST_STATUS.FULLY_APPROVED, fest: updatedFest });
     }
 
@@ -1107,6 +1376,17 @@ router.post("/:festId/accounts-action", async (req, res) => {
     });
 
     await notifyFestRejection({ fest, step: "Accounts", notes, requester: req.userInfo });
+
+    notifyFestDecisionTransition({
+      fest: updatedFest || fest,
+      requesterEmail: req.userInfo?.email,
+      actorRoleCode: ROLE_CODES.ACCOUNTS,
+      action,
+      notes,
+      status,
+    }).catch((notificationError) => {
+      console.error("[FestApprovalNotify] accounts-action rejection notification error:", notificationError);
+    });
 
     return res.status(200).json({ success: true, status, fest: updatedFest });
   } catch (error) {
