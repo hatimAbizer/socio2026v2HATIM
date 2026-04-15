@@ -561,7 +561,7 @@ function normalizeUserRecord(row: any, fallback?: AssignmentFallback): UserRoleR
   const departmentId = isHod
     ? normalizeNullableText(row?.department_id) || fallback?.department_id || null
     : null;
-  const schoolId = isDean
+  const schoolId = isDean || isHod
     ? normalizeNullableText(row?.school_id) || fallback?.school_id || null
     : null;
   const campus = isCfo
@@ -913,6 +913,7 @@ function buildAssignmentFallbackMap(
     if (roleCode === ROLE_CODE_HOD) {
       entry.is_hod = true;
       entry.department_id = normalizeNullableText(assignment.department_scope) || entry.department_id;
+      entry.school_id = normalizeNullableText(assignment.school_scope) || entry.school_id;
       entry.campus = normalizeNullableText(assignment.campus_scope) || entry.campus;
     }
 
@@ -1115,6 +1116,55 @@ function buildServiceScopeOptions(assignments: RoleMatrixAssignment[], serviceRo
 
 function roleRequiresScope(role: RoleMatrixAssignableRole): boolean {
   return role === "hod" || role === "dean" || role === "venue_service" || role === "catering_service" || role === "stalls_service";
+}
+
+type DepartmentScopeDetails = {
+  departmentLabel: string | null;
+  schoolName: string | null;
+};
+
+async function resolveDepartmentScopeDetails(
+  adminClient: any,
+  scopeValue: string | null
+): Promise<DepartmentScopeDetails> {
+  const normalizedScope = normalizeNullableText(scopeValue);
+  let departmentLabel: string | null = null;
+  let schoolName: string | null = null;
+
+  if (normalizedScope) {
+    const fallbackDepartment = FALLBACK_DEPARTMENT_OPTIONS.find(
+      (option) => normalizeNullableText(option.id) === normalizedScope
+    );
+
+    if (fallbackDepartment) {
+      departmentLabel = normalizeNullableText(fallbackDepartment.department_name) || normalizedScope;
+      schoolName = normalizeNullableText(fallbackDepartment.school);
+    }
+
+    const { data, error } = await adminClient
+      .from("departments_courses")
+      .select("id,department_name,school")
+      .eq("id", normalizedScope)
+      .maybeSingle();
+
+    if (error) {
+      if (!(isMissingRelationError(error) || isMissingColumnError(error))) {
+        throw new Error(error.message || "Failed to validate the selected department.");
+      }
+    } else if (!data && !fallbackDepartment) {
+      throw new Error("Selected department does not exist.");
+    }
+
+    if (data && typeof data === "object") {
+      departmentLabel = normalizeNullableText((data as any).department_name) || departmentLabel || normalizedScope;
+      schoolName = normalizeNullableText((data as any).school) || schoolName;
+    }
+  }
+
+  return {
+    departmentLabel,
+    schoolName,
+  };
 }
 
 async function syncRoleAssignment(
@@ -1562,22 +1612,9 @@ export async function updateUserAccess(
       return { ok: false, error: "Select a venue before enabling Venue Manager." };
     }
 
-    if (payload.is_hod) {
-      const { data, error } = await adminClient
-        .from("departments_courses")
-        .select("id")
-        .eq("id", payload.department_id)
-        .maybeSingle();
-      if (error) {
-        if (isMissingRelationError(error) || isMissingColumnError(error)) {
-          // Catalog table missing in this environment; allow scoped value without strict lookup.
-        } else {
-          return { ok: false, error: error.message || "Failed to validate department." };
-        }
-      } else if (!data) {
-        return { ok: false, error: "Selected department does not exist." };
-      }
-    }
+    const hodDepartmentDetails = payload.is_hod
+      ? await resolveDepartmentScopeDetails(adminClient, payload.department_id)
+      : null;
 
     if (payload.is_dean) {
       const { data, error } = await adminClient
@@ -1622,14 +1659,18 @@ export async function updateUserAccess(
       }
     }
 
-    const strictDepartmentId =
-      payload.is_hod
-        ? payload.department_id
+    const strictDepartmentId = payload.is_hod
+      ? payload.department_id
+      : payload.is_dean || payload.is_cfo || payload.is_venue_manager
+        ? null
         : normalizeNullableText((existingUser as any)?.department_id);
-    const strictSchoolId =
-      payload.is_dean
+    const strictSchoolId = payload.is_hod
+      ? hodDepartmentDetails?.schoolName || normalizeNullableText((existingUser as any)?.school_id)
+      : payload.is_dean
         ? payload.school_id
-        : normalizeNullableText((existingUser as any)?.school_id);
+        : payload.is_cfo || payload.is_venue_manager
+          ? null
+          : normalizeNullableText((existingUser as any)?.school_id);
     const strictCampus =
       payload.is_hod || payload.is_dean || payload.is_cfo || payload.is_venue_manager
         ? payload.campus
@@ -1637,7 +1678,22 @@ export async function updateUserAccess(
     const strictVenueId =
       payload.is_venue_manager
         ? payload.venue_id
-        : normalizeNullableText((existingUser as any)?.venue_id);
+        : payload.is_hod || payload.is_dean || payload.is_cfo
+          ? null
+          : normalizeNullableText((existingUser as any)?.venue_id);
+
+    const strictDepartmentLabel = payload.is_hod
+      ? hodDepartmentDetails?.departmentLabel || normalizeNullableText(payload.department_id)
+      : payload.is_dean || payload.is_cfo || payload.is_venue_manager
+        ? null
+        : normalizeNullableText((existingUser as any)?.department);
+    const strictSchoolLabel = payload.is_hod
+      ? hodDepartmentDetails?.schoolName || normalizeNullableText((existingUser as any)?.school)
+      : payload.is_dean
+        ? payload.school_id
+        : payload.is_cfo || payload.is_venue_manager
+          ? null
+          : normalizeNullableText((existingUser as any)?.school);
 
     const nextUniversityRole: UniversityRoleKey = payload.is_hod
       ? "hod"
@@ -1683,6 +1739,8 @@ export async function updateUserAccess(
       school_id: strictSchoolId,
       campus: strictCampus,
       venue_id: strictVenueId,
+      department: strictDepartmentLabel,
+      school: strictSchoolLabel,
       university_role: nextUniversityRole,
     });
 
@@ -1709,6 +1767,7 @@ export async function updateUserAccess(
             enabled: payload.is_hod,
             assignedBy: actingUser.email,
             departmentScope: strictDepartmentId,
+            schoolScope: strictSchoolId,
             campusScope: strictCampus,
           })
         );
@@ -1971,35 +2030,9 @@ export async function assignRoleMatrixEntry(
     let selectedDepartmentSchool: string | null = null;
 
     if (roleValue === "hod") {
-      const fallbackDepartment = FALLBACK_DEPARTMENT_OPTIONS.find(
-        (option) => normalizeNullableText(option.id) === scopeValue
-      );
-
-      if (fallbackDepartment) {
-        selectedDepartmentLabel = normalizeNullableText(fallbackDepartment.department_name) || scopeValue;
-        selectedDepartmentSchool = normalizeNullableText(fallbackDepartment.school);
-      }
-
-      const { data, error } = await adminClient
-        .from("departments_courses")
-        .select("id,department_name,school")
-        .eq("id", scopeValue)
-        .maybeSingle();
-
-      if (error) {
-        if (!(isMissingRelationError(error) || isMissingColumnError(error))) {
-          return { ok: false, error: error.message || "Failed to validate the selected department." };
-        }
-      }
-
-      if (!error && !data) {
-        return { ok: false, error: "Selected department does not exist." };
-      }
-
-      if (!error && data) {
-        selectedDepartmentLabel = normalizeNullableText((data as any).department_name) || scopeValue;
-        selectedDepartmentSchool = normalizeNullableText((data as any).school);
-      }
+      const departmentScopeDetails = await resolveDepartmentScopeDetails(adminClient, scopeValue);
+      selectedDepartmentLabel = departmentScopeDetails.departmentLabel;
+      selectedDepartmentSchool = departmentScopeDetails.schoolName;
     }
 
     if (roleValue === "dean") {
@@ -2107,7 +2140,7 @@ export async function assignRoleMatrixEntry(
       usersUpdatePayload.is_venue = roleValue === "venue_service";
 
       usersUpdatePayload.department_id = roleValue === "hod" ? scopeValue : null;
-      usersUpdatePayload.school_id = roleValue === "dean" ? scopeValue : null;
+      usersUpdatePayload.school_id = roleValue === "hod" ? selectedDepartmentSchool : roleValue === "dean" ? scopeValue : null;
       usersUpdatePayload.campus = campus;
       usersUpdatePayload.venue_id = roleValue === "venue_service" ? scopeValue : null;
 
@@ -2161,6 +2194,7 @@ export async function assignRoleMatrixEntry(
           enabled: roleValue === "hod",
           assignedBy: actingUser.email,
           departmentScope: roleValue === "hod" ? scopeValue : null,
+          schoolScope: roleValue === "hod" ? selectedDepartmentSchool : null,
           campusScope: roleValue === "hod" ? campus : null,
           assignedReason: "Role Matrix assignment",
         }),

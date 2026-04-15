@@ -558,7 +558,8 @@ function roleMatrixScopeOptions(data: RolesPageData, role: RoleMatrixAssignableR
 function resolveDomainSummary(user: UserRoleRow, data: RolesPageData): string {
   if (user.access.is_hod && user.access.department_id) {
     const department = data.departments.find((item) => item.id === user.access.department_id);
-    return `HOD: ${department?.department_name || user.access.department_id}`;
+    const schoolSuffix = user.access.school_id ? ` / ${user.access.school_id}` : "";
+    return `HOD: ${department?.department_name || user.access.department_id}${schoolSuffix}`;
   }
 
   if (user.access.is_dean && user.access.school_id) {
