@@ -829,19 +829,82 @@ router.delete("/notifications/:id", async (req, res) => {
 // which merges broadcasts with their individual notifications and filters
 // out anything they've dismissed.
 
-export async function sendBroadcastNotification({ title, message, type = 'info', event_id = null, event_title = null, action_url = null }) {
-  console.log('[BROADCAST] Creating single broadcast notification:', { title, event_id });
+export async function sendBroadcastNotification({
+  title,
+  message,
+  type = 'info',
+  event_id = null,
+  event_title = null,
+  action_url = null,
+  disableDedupe = false,
+}) {
+  const normalizedTitle = String(title || "").trim();
+  const normalizedMessage = String(message || "").trim();
+  const normalizedType = String(type || "info").trim() || "info";
+  const normalizedEventId = String(event_id || "").trim() || null;
+  const normalizedEventTitle = String(event_title || "").trim() || null;
+  const normalizedActionUrl = String(action_url || "").trim() || null;
+
+  if (!normalizedTitle || !normalizedMessage) {
+    return {
+      success: false,
+      skipped: true,
+      reason: "missing_required_fields",
+    };
+  }
+
+  console.log('[BROADCAST] Creating single broadcast notification:', {
+    title: normalizedTitle,
+    event_id: normalizedEventId,
+  });
 
   try {
+    if (!disableDedupe) {
+      let duplicateQuery = supabase
+        .from('notifications')
+        .select('id,created_at')
+        .eq('is_broadcast', true)
+        .eq('title', normalizedTitle)
+        .eq('type', normalizedType);
+
+      duplicateQuery = normalizedEventId
+        ? duplicateQuery.eq('event_id', normalizedEventId)
+        : duplicateQuery.is('event_id', null);
+
+      duplicateQuery = normalizedActionUrl
+        ? duplicateQuery.eq('action_url', normalizedActionUrl)
+        : duplicateQuery.is('action_url', null);
+
+      const {
+        data: existingBroadcasts,
+        error: duplicateLookupError,
+      } = await duplicateQuery.order('created_at', { ascending: false }).limit(1);
+
+      if (duplicateLookupError) {
+        console.warn('[BROADCAST] Duplicate lookup failed, continuing with insert:', duplicateLookupError.message);
+      } else if (Array.isArray(existingBroadcasts) && existingBroadcasts.length > 0) {
+        const existingBroadcast = existingBroadcasts[0];
+        console.log(
+          `[BROADCAST] Duplicate broadcast skipped (existing id: ${existingBroadcast.id})`
+        );
+        return {
+          success: true,
+          skipped: true,
+          reason: 'duplicate_broadcast',
+          notificationId: existingBroadcast.id,
+        };
+      }
+    }
+
     const { data, error } = await supabase
       .from('notifications')
       .insert({
-        title,
-        message,
-        type,
-        event_id,
-        event_title,
-        action_url,
+        title: normalizedTitle,
+        message: normalizedMessage,
+        type: normalizedType,
+        event_id: normalizedEventId,
+        event_title: normalizedEventTitle,
+        action_url: normalizedActionUrl,
         user_email: null,
         is_broadcast: true,
         read: false
@@ -855,10 +918,10 @@ export async function sendBroadcastNotification({ title, message, type = 'info',
     }
 
     await sendPushToAll({
-      title,
-      body: message,
+      title: normalizedTitle,
+      body: normalizedMessage,
       tag: data.id,
-      actionUrl: action_url || "/notifications",
+      actionUrl: normalizedActionUrl || "/notifications",
     });
 
     console.log(`[BROADCAST] Created 1 broadcast row (id: ${data.id}) — all users will see it`);

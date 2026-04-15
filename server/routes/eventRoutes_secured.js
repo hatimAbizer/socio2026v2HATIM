@@ -32,8 +32,10 @@ import {
   shouldEntityRemainDraft,
 } from "../utils/lifecycleStatus.js";
 import {
+  hasApprovalRequestReference,
   isRecordLiveForNotifications,
-  shouldSendLifecycleNotification,
+  shouldSendCreateBroadcast,
+  shouldSendPublishBroadcast,
 } from "../utils/notificationLifecycle.js";
 
 const router = express.Router();
@@ -3030,10 +3032,14 @@ router.post(
         activationState === "ACTIVE" &&
         !asBoolean(createdEventRecord?.is_draft);
       const isEventReadyForNotifications = isEventLiveForNotifications(createdEventRecord);
-      const shouldSendNotifications = shouldSendLifecycleNotification({
+      const shouldSendNotifications = shouldSendCreateBroadcast({
         record: createdEventRecord,
         sendNotificationsInput: send_notifications,
         defaultSendNotifications: true,
+        hasApprovalRequest: Boolean(
+          primaryApprovalRequest?.id ||
+            String(createdEventRecord?.approval_request_id || "").trim()
+        ),
       });
 
       // Send notifications to all users about the new event (non-blocking)
@@ -3893,11 +3899,15 @@ router.put(
       }
 
       const notifyPublishIfNeeded = (eventRecord) => {
-        if (!shouldSendPublishNotifications) {
-          return;
-        }
+        const shouldBroadcast = shouldSendPublishBroadcast({
+          record: eventRecord,
+          sendNotificationsInput: shouldSendPublishNotifications,
+          defaultSendNotifications: true,
+          hasApprovalRequest: hasApprovalRequestReference(eventRecord),
+          legacyWorkflowStatus: eventRecord?.workflow_status,
+        });
 
-        if (!isEventLiveForNotifications(eventRecord)) {
+        if (!shouldBroadcast) {
           return;
         }
 
@@ -4313,10 +4323,12 @@ router.post(
 
       const refreshedEvent =
         (await queryOne("events", { where: { event_id: eventId } })) || eventRecord;
-      const shouldSendNotifications = shouldSendLifecycleNotification({
+      const shouldSendNotifications = shouldSendPublishBroadcast({
         record: refreshedEvent,
         sendNotificationsInput: req.body?.send_notifications,
         defaultSendNotifications: true,
+        hasApprovalRequest: hasApprovalRequestReference(refreshedEvent),
+        legacyWorkflowStatus: refreshedEvent?.workflow_status,
       });
 
       if (shouldSendNotifications) {

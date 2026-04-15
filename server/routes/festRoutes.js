@@ -21,8 +21,10 @@ import {
   shouldEntityRemainDraft,
 } from "../utils/lifecycleStatus.js";
 import {
+  hasApprovalRequestReference,
   isRecordLiveForNotifications,
-  shouldSendLifecycleNotification,
+  shouldSendCreateBroadcast,
+  shouldSendPublishBroadcast,
 } from "../utils/notificationLifecycle.js";
 
 const router = express.Router();
@@ -1544,14 +1546,18 @@ router.post(
       }
 
       const isFestReadyForNotifications = isFestLiveForNotifications(createdFest);
-      const shouldSendNotifications = shouldSendLifecycleNotification({
+      const shouldSendNotifications = shouldSendCreateBroadcast({
         record: createdFest,
         sendNotificationsInput,
         defaultSendNotifications: true,
+        hasApprovalRequest: Boolean(
+          workflowApprovalRequest?.id ||
+            String(createdFest?.approval_request_id || "").trim()
+        ),
       });
 
       // Send notifications to all users about the new fest (non-blocking)
-      if (shouldSendNotifications && shouldPublishNow && isFestReadyForNotifications) {
+      if (shouldSendNotifications && isFestReadyForNotifications) {
         sendBroadcastNotification({
           title: 'New Fest Announced',
           message: `${festPayload.fest_title} — Don't miss this fest!`,
@@ -2062,7 +2068,15 @@ router.put(
         }
       }
 
-      if (shouldSendPublishNotifications && isFestReadyForNotifications) {
+      const shouldSendPublishBroadcastNow = shouldSendPublishBroadcast({
+        record: updatedFest,
+        sendNotificationsInput: shouldSendPublishNotifications,
+        defaultSendNotifications: true,
+        hasApprovalRequest: hasApprovalRequestReference(updatedFest),
+        legacyWorkflowStatus: updatedFest?.workflow_status,
+      });
+
+      if (shouldSendPublishBroadcastNow && isFestReadyForNotifications) {
         sendBroadcastNotification({
           title: "Fest Published",
           message: `${updatedFest.fest_title} is now live!`,
@@ -2337,10 +2351,12 @@ router.post(
 
       const refreshedFest = await queryOne(festTable, { where: { fest_id: festId } });
       const publishedFest = refreshedFest || festRecord;
-      const shouldSendNotifications = shouldSendLifecycleNotification({
+      const shouldSendNotifications = shouldSendPublishBroadcast({
         record: publishedFest,
         sendNotificationsInput: req.body?.send_notifications,
         defaultSendNotifications: true,
+        hasApprovalRequest: hasApprovalRequestReference(publishedFest),
+        legacyWorkflowStatus: publishedFest?.workflow_status,
       });
 
       if (shouldSendNotifications) {

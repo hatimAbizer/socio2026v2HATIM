@@ -14,7 +14,11 @@ import {
   sendFestRejectedEmail,
   sendFestSubmittedToHodEmail,
 } from "../utils/emailService.js";
-import { sendUserNotifications } from "./notificationRoutes.js";
+import {
+  sendBroadcastNotification,
+  sendUserNotifications,
+} from "./notificationRoutes.js";
+import { shouldSendFinalApprovalBroadcast } from "../utils/notificationLifecycle.js";
 
 const router = express.Router();
 
@@ -444,11 +448,42 @@ const updateFestWorkflow = async (festId, workflowStatus, extraUpdates = {}) => 
   };
 
   const updatedRows = await update("fests", updates, { fest_id: festId });
-  if (Array.isArray(updatedRows) && updatedRows.length > 0) {
-    return updatedRows[0];
+  const updatedFest =
+    Array.isArray(updatedRows) && updatedRows.length > 0
+      ? updatedRows[0]
+      : await queryOne("fests", { where: { fest_id: festId } });
+
+  if (
+    normalizeToken(workflowStatus) === FEST_STATUS.FULLY_APPROVED &&
+    updatedFest?.fest_id
+  ) {
+    const festTitle = normalizeText(updatedFest?.fest_title) || updatedFest.fest_id;
+    const shouldBroadcast = shouldSendFinalApprovalBroadcast({
+      record: {
+        ...updatedFest,
+        status: updatedFest?.status || "approved",
+        activation_state: updatedFest?.activation_state || "ACTIVE",
+        is_draft: updatedFest?.is_draft ?? false,
+      },
+      defaultSendNotifications: true,
+      requireLiveRecord: false,
+    });
+
+    if (shouldBroadcast) {
+      sendBroadcastNotification({
+        title: "Fest Approved",
+        message: `${festTitle} has been approved.`,
+        type: "info",
+        event_id: updatedFest.fest_id,
+        event_title: festTitle,
+        action_url: `/fest/${encodeURIComponent(updatedFest.fest_id)}`,
+      }).catch((broadcastError) => {
+        console.error("[FestApprovalBroadcast] final-approval broadcast error:", broadcastError);
+      });
+    }
   }
 
-  return queryOne("fests", { where: { fest_id: festId } });
+  return updatedFest;
 };
 
 const submitToHod = async ({ fest, requester }) => {

@@ -17,6 +17,8 @@ import {
   sendUnderFestEventApprovedEmail,
   sendUnderFestEventToOrganiserEmail,
 } from "../utils/emailService.js";
+import { sendBroadcastNotification } from "./notificationRoutes.js";
+import { shouldSendFinalApprovalBroadcast } from "../utils/notificationLifecycle.js";
 
 const router = express.Router();
 
@@ -310,11 +312,48 @@ const updateEventWorkflow = async (eventId, workflowStatus, extraUpdates = {}) =
   };
 
   const updatedRows = await update("events", payload, { event_id: eventId });
-  if (Array.isArray(updatedRows) && updatedRows.length > 0) {
-    return updatedRows[0];
+  const updatedEvent =
+    Array.isArray(updatedRows) && updatedRows.length > 0
+      ? updatedRows[0]
+      : await queryOne("events", { where: { event_id: eventId } });
+
+  const terminalApprovalStatuses = new Set([
+    EVENT_STATUS.AUTO_APPROVED,
+    EVENT_STATUS.FULLY_APPROVED,
+    EVENT_STATUS.ORGANISER_APPROVED,
+  ]);
+
+  if (
+    terminalApprovalStatuses.has(normalizeToken(workflowStatus)) &&
+    updatedEvent?.event_id
+  ) {
+    const eventTitle = normalizeText(updatedEvent?.title) || updatedEvent.event_id;
+    const shouldBroadcast = shouldSendFinalApprovalBroadcast({
+      record: {
+        ...updatedEvent,
+        status: updatedEvent?.status || "approved",
+        activation_state: updatedEvent?.activation_state || "ACTIVE",
+        is_draft: updatedEvent?.is_draft ?? false,
+      },
+      defaultSendNotifications: true,
+      requireLiveRecord: false,
+    });
+
+    if (shouldBroadcast) {
+      sendBroadcastNotification({
+        title: "Event Approved",
+        message: `${eventTitle} has been approved.`,
+        type: "info",
+        event_id: updatedEvent.event_id,
+        event_title: eventTitle,
+        action_url: `/event/${encodeURIComponent(updatedEvent.event_id)}`,
+      }).catch((broadcastError) => {
+        console.error("[EventApprovalBroadcast] final-approval broadcast error:", broadcastError);
+      });
+    }
   }
 
-  return queryOne("events", { where: { event_id: eventId } });
+  return updatedEvent;
 };
 
 const ensureSubheadForFest = async ({ festId, requesterEmail }) => {

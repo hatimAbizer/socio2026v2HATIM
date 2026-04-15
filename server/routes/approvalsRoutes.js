@@ -16,12 +16,16 @@ import {
   isServiceRoleCode,
   normalizeRoleCode,
 } from "../utils/roleAccessService.js";
-import { sendUserNotifications } from "./notificationRoutes.js";
+import {
+  sendBroadcastNotification,
+  sendUserNotifications,
+} from "./notificationRoutes.js";
 import {
   LIFECYCLE_STATUS,
   normalizeLifecycleStatus,
   shouldEntityRemainDraft,
 } from "../utils/lifecycleStatus.js";
+import { shouldSendFinalApprovalBroadcast } from "../utils/notificationLifecycle.js";
 
 const router = express.Router();
 
@@ -1322,7 +1326,7 @@ const resolveApprovalNotificationContext = async (approvalRequest) => {
   if (isEventEntityType(entityType)) {
     const event = await queryOne("events", {
       where: { event_id: entityRef },
-      select: "event_id,title,organizer_email,created_by",
+      select: "event_id,title,organizer_email,created_by,status,is_draft,activation_state,workflow_status,approval_request_id",
     });
 
     if (!event) {
@@ -1339,7 +1343,9 @@ const resolveApprovalNotificationContext = async (approvalRequest) => {
       title: String(event.title || "").trim() || "Event",
       organizerEmail,
       actionUrl: `/approvals/organiser/${encodeURIComponent(entityRef)}`,
+      publicActionUrl: `/event/${encodeURIComponent(entityRef)}`,
       notificationEntityId: entityRef,
+      record: event,
     };
   }
 
@@ -1350,7 +1356,7 @@ const resolveApprovalNotificationContext = async (approvalRequest) => {
       try {
         fest = await queryOne(tableName, {
           where: { fest_id: entityRef },
-          select: "fest_id,fest_title,contact_email,created_by",
+          select: "fest_id,fest_title,contact_email,created_by,status,is_draft,activation_state,workflow_status,approval_request_id",
         });
 
         if (fest) {
@@ -1379,7 +1385,9 @@ const resolveApprovalNotificationContext = async (approvalRequest) => {
       title: String(fest.fest_title || "").trim() || "Fest",
       organizerEmail,
       actionUrl: `/approvals/fest/${encodeURIComponent(entityRef)}`,
+      publicActionUrl: `/fest/${encodeURIComponent(entityRef)}`,
       notificationEntityId: entityRef,
+      record: fest,
     };
   }
 
@@ -1432,6 +1440,40 @@ const notifyDecisionToOrganizer = async ({
     event_id: context.notificationEntityId,
     event_title: context.title,
     action_url: context.actionUrl,
+  });
+};
+
+const notifyPublicBroadcastOnFinalApproval = async ({
+  approvalRequest,
+  requestStatus,
+}) => {
+  const normalizedRequestStatus = normalizeWorkflowStatus(requestStatus, "UNDER_REVIEW");
+  if (normalizedRequestStatus !== "APPROVED") {
+    return;
+  }
+
+  const context = await resolveApprovalNotificationContext(approvalRequest);
+  if (!context?.notificationEntityId || !context?.record) {
+    return;
+  }
+
+  const shouldBroadcast = shouldSendFinalApprovalBroadcast({
+    record: context.record,
+    defaultSendNotifications: true,
+    requireLiveRecord: true,
+  });
+
+  if (!shouldBroadcast) {
+    return;
+  }
+
+  await sendBroadcastNotification({
+    title: `${context.entityLabel} Approved`,
+    message: `${context.title} has been approved.`,
+    type: "info",
+    event_id: context.notificationEntityId,
+    event_title: context.title,
+    action_url: context.publicActionUrl || context.actionUrl,
   });
 };
 
@@ -1943,6 +1985,16 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
       console.error(
         "[ApprovalNotify] Failed to dispatch organizer decision notification:",
         notificationError
+      );
+    });
+
+    notifyPublicBroadcastOnFinalApproval({
+      approvalRequest,
+      requestStatus,
+    }).catch((broadcastError) => {
+      console.error(
+        "[ApprovalBroadcast] Failed to dispatch public final-approval broadcast:",
+        broadcastError
       );
     });
 
