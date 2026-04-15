@@ -151,10 +151,14 @@ const UNIVERSITY_ROLE_TO_ROLE_CODES: Record<string, string[]> = {
 const ROLE_TAG_LABEL_ALIASES: Record<string, string> = {
   "masteradmin": "Master Admin",
   "master admin": "Master Admin",
+  "master administrator": "Master Admin",
   "support": "Support",
   "hod": "HOD",
+  "head of department": "HOD",
+  "department head": "HOD",
   "dean": "Dean",
   "cfo": "CFO",
+  "chief financial officer": "CFO",
   "organiser": "Organiser",
   "organizer": "Organiser",
   "organiser teacher": "Organiser",
@@ -167,26 +171,68 @@ const ROLE_TAG_LABEL_ALIASES: Record<string, string> = {
   "organiser volunteer": "Volunteer",
   "organizer volunteer": "Volunteer",
   "finance officer": "Finance Officer",
+  "finance office": "Finance Officer",
   "accounts": "Accounts",
   "it": "IT",
+  "information technology": "IT",
+  "it services": "IT",
   "it service": "IT",
   "service it": "IT",
   "venue": "Venue",
+  "venue management": "Venue",
+  "venue services": "Venue",
   "venue service": "Venue",
   "venue manager": "Venue",
   "service venue": "Venue",
   "catering": "Catering",
+  "catering services": "Catering",
   "catering service": "Catering",
   "catering vendors": "Catering",
   "catering vendor": "Catering",
   "service catering": "Catering",
   "stall": "Stalls/Misc",
   "stalls": "Stalls/Misc",
+  "stalls misc": "Stalls/Misc",
+  "stalls and misc": "Stalls/Misc",
+  "stalls miscellaneous": "Stalls/Misc",
+  "stall and misc": "Stalls/Misc",
+  "stall miscellaneous": "Stalls/Misc",
   "stall misc": "Stalls/Misc",
   "stalls service": "Stalls/Misc",
-  "stalls misc": "Stalls/Misc",
   "service stalls": "Stalls/Misc",
 };
+
+const ROLE_TAG_CANONICAL_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /\b(master\s*admin|master\s*administrator)\b/, label: "Master Admin" },
+  { pattern: /\b(head\s+of\s+department|department\s+head|hod)\b/, label: "HOD" },
+  { pattern: /\bdean\b/, label: "Dean" },
+  { pattern: /\b(cfo|chief\s+financial\s+officer)\b/, label: "CFO" },
+  { pattern: /\bfinance\s+offic(e|er)\b/, label: "Finance Officer" },
+  { pattern: /\b(accounts?)\b/, label: "Accounts" },
+  {
+    pattern: /\b(student\s+(organiser|organizer)|(organiser|organizer)\s+student)\b/,
+    label: "Student Organizer",
+  },
+  { pattern: /\b(organiser|organizer)(\s+teacher)?\b/, label: "Organiser" },
+  { pattern: /\b(volunteer|(organiser|organizer)\s+volunteer)\b/, label: "Volunteer" },
+  {
+    pattern: /\b(it|information\s+technology|it\s+service(s)?|service\s+it)\b/,
+    label: "IT",
+  },
+  {
+    pattern: /\b(venue|venue\s+service(s)?|service\s+venue|venue\s+manager|venue\s+management)\b/,
+    label: "Venue",
+  },
+  {
+    pattern: /\b(catering|catering\s+service(s)?|service\s+catering|catering\s+vendor(s)?)\b/,
+    label: "Catering",
+  },
+  {
+    pattern: /\b(stalls?\s*(and\s*)?misc(ellaneous)?|stalls?\s+service|service\s+stalls|stalls?)\b/,
+    label: "Stalls/Misc",
+  },
+  { pattern: /\bsupport\b/, label: "Support" },
+];
 
 const normalizeText = (value: unknown): string => String(value || "").trim();
 
@@ -207,8 +253,22 @@ const canonicalizeRoleTag = (roleTag: unknown): string => {
     return "";
   }
 
-  const aliasKey = normalizeRoleTagKey(rawRoleTag.replace(/_/g, " "));
-  return ROLE_TAG_LABEL_ALIASES[aliasKey] || rawRoleTag;
+  const normalizedInput = rawRoleTag
+    .replace(/[_/]+/g, " ")
+    .replace(/[()\[\]{}]/g, " ");
+  const aliasKey = normalizeRoleTagKey(normalizedInput);
+
+  if (ROLE_TAG_LABEL_ALIASES[aliasKey]) {
+    return ROLE_TAG_LABEL_ALIASES[aliasKey];
+  }
+
+  for (const rule of ROLE_TAG_CANONICAL_PATTERNS) {
+    if (rule.pattern.test(aliasKey)) {
+      return rule.label;
+    }
+  }
+
+  return rawRoleTag;
 };
 
 const deriveRoleCodesFromUniversityRole = (universityRole: unknown): string[] => {
@@ -287,6 +347,64 @@ const resolveProfileRoleTags = (userData: UserData | null): string[] => {
     tags.set(normalizedRoleTagKey, canonicalRoleTag);
   };
 
+  const addBooleanDerivedRoleTags = () => {
+    if (Boolean(userData.is_organiser)) addRoleTag("Organiser");
+    if (Boolean(userData.is_support)) addRoleTag("Support");
+    if (Boolean(userData.is_masteradmin)) addRoleTag("Master Admin");
+    if (Boolean(userData.is_hod)) addRoleTag("HOD");
+    if (Boolean(userData.is_dean)) addRoleTag("Dean");
+    if (Boolean(userData.is_cfo)) {
+      addRoleTag("CFO");
+      addRoleTag("Accounts");
+    }
+    if (Boolean(userData.is_finance_officer) || Boolean(userData.is_finance_office)) {
+      addRoleTag("Finance Officer");
+    }
+    if (
+      Boolean(userData.is_organiser_student) ||
+      Boolean(userData.is_student_organiser) ||
+      Boolean(userData.is_student_organizer)
+    ) {
+      addRoleTag("Student Organizer");
+    }
+    if (Boolean(userData.is_volunteer)) addRoleTag("Volunteer");
+    if (Boolean(userData.is_service_it) || Boolean(userData.is_it_service) || Boolean(userData.is_it)) {
+      addRoleTag("IT");
+    }
+    if (Boolean(userData.is_service_venue) || Boolean(userData.is_venue_manager) || Boolean(userData.is_venue)) {
+      addRoleTag("Venue");
+    }
+    if (
+      Boolean(userData.is_service_catering) ||
+      Boolean(userData.is_catering_vendors) ||
+      Boolean(userData.is_catering_vendor)
+    ) {
+      addRoleTag("Catering");
+    }
+    if (
+      Boolean(userData.is_service_stalls) ||
+      Boolean(userData.is_stalls_misc) ||
+      Boolean(userData.is_stall_misc) ||
+      Boolean(userData.is_stalls)
+    ) {
+      addRoleTag("Stalls/Misc");
+    }
+  };
+
+  // Primary source for profile chips: persisted boolean flags in users table.
+  addBooleanDerivedRoleTags();
+
+  if (!userData.is_cfo) {
+    tags.delete(normalizeRoleTagKey("Accounts"));
+  }
+
+  const booleanDrivenTags = Array.from(tags.values());
+  if (booleanDrivenTags.length > 0) {
+    return booleanDrivenTags;
+  }
+
+  // Fallback for legacy records that might not have booleans hydrated yet.
+
   if (Array.isArray(userData.role_matrix_tags)) {
     userData.role_matrix_tags
       .map((tag) => normalizeText(tag))
@@ -327,31 +445,6 @@ const resolveProfileRoleTags = (userData: UserData | null): string[] => {
     } else {
       addRoleTag(normalizedUniversityRole);
     }
-  }
-
-  if (userData.is_organiser) addRoleTag("Organiser");
-  if (userData.is_support) addRoleTag("Support");
-  if (userData.is_masteradmin) addRoleTag("Master Admin");
-  if (userData.is_hod) addRoleTag("HOD");
-  if (userData.is_dean) addRoleTag("Dean");
-  if (userData.is_cfo) {
-    addRoleTag("CFO");
-    addRoleTag("Accounts");
-  }
-  if (userData.is_finance_officer || userData.is_finance_office) {
-    addRoleTag("Finance Officer");
-  }
-  if (userData.is_organiser_student || userData.is_student_organiser || userData.is_student_organizer) {
-    addRoleTag("Student Organizer");
-  }
-  if (userData.is_volunteer) addRoleTag("Volunteer");
-  if (userData.is_service_it || userData.is_it_service || userData.is_it) addRoleTag("IT");
-  if (userData.is_service_venue || userData.is_venue_manager || userData.is_venue) addRoleTag("Venue");
-  if (userData.is_service_catering || userData.is_catering_vendors || userData.is_catering_vendor) {
-    addRoleTag("Catering");
-  }
-  if (userData.is_service_stalls || userData.is_stalls_misc || userData.is_stall_misc || userData.is_stalls) {
-    addRoleTag("Stalls/Misc");
   }
 
   if (!userData.is_cfo) {

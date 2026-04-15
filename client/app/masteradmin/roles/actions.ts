@@ -179,21 +179,27 @@ const USER_SELECT_COLUMNS = [
   "email",
   "created_at",
   "is_organiser",
+  "is_organiser_student",
   "is_student_organiser",
   "is_student_organizer",
+  "is_service_it",
   "is_it_service",
   "is_it",
+  "is_service_catering",
   "is_catering_vendors",
   "is_catering_vendor",
+  "is_service_stalls",
   "is_stalls_misc",
   "is_stall_misc",
   "is_stalls",
+  "is_service_venue",
   "is_support",
   "is_masteradmin",
   "is_hod",
   "is_dean",
   "is_cfo",
   "is_finance_officer",
+  "is_finance_office",
   "is_volunteer",
   "is_venue_manager",
   "department_id",
@@ -526,7 +532,7 @@ function normalizeUserRecord(row: any, fallback?: AssignmentFallback): UserRoleR
     Boolean(fallback?.is_finance_officer);
 
   const isStudentOrganiser =
-    readBooleanFlag(row, ["is_student_organiser", "is_student_organizer"]) ||
+    readBooleanFlag(row, ["is_organiser_student", "is_student_organiser", "is_student_organizer"]) ||
     Boolean(fallback?.is_student_organiser);
 
   const isVolunteer =
@@ -536,18 +542,20 @@ function normalizeUserRecord(row: any, fallback?: AssignmentFallback): UserRoleR
   const isSupport = Boolean(row?.is_support) || Boolean(fallback?.is_support);
 
   const isVenueManager =
-    (typeof row?.is_venue_manager === "boolean" ? row.is_venue_manager : false) ||
+    readBooleanFlag(row, ["is_venue_manager", "is_service_venue", "is_venue"]) ||
     role === "venue_manager" ||
     Boolean(fallback?.is_venue_manager);
 
-  const isItService = readBooleanFlag(row, ["is_it_service", "is_it"]) || Boolean(fallback?.is_it_service);
+  const isItService =
+    readBooleanFlag(row, ["is_service_it", "is_it_service", "is_it"]) ||
+    Boolean(fallback?.is_it_service);
 
   const isCateringVendors =
-    readBooleanFlag(row, ["is_catering_vendors", "is_catering_vendor"]) ||
+    readBooleanFlag(row, ["is_service_catering", "is_catering_vendors", "is_catering_vendor"]) ||
     Boolean(fallback?.is_catering_vendors);
 
   const isStallsMisc =
-    readBooleanFlag(row, ["is_stalls_misc", "is_stall_misc", "is_stalls"]) ||
+    readBooleanFlag(row, ["is_service_stalls", "is_stalls_misc", "is_stall_misc", "is_stalls"]) ||
     Boolean(fallback?.is_stalls_misc);
 
   const departmentId = isHod
@@ -1647,6 +1655,7 @@ export async function updateUserAccess(
 
     await applyUsersUpdateWithFallback(adminClient, targetUserId, {
       is_organiser: payload.is_organiser,
+      is_organiser_student: payload.is_student_organiser,
       is_student_organiser: payload.is_student_organiser,
       is_student_organizer: payload.is_student_organiser,
       is_support: payload.is_support,
@@ -1655,12 +1664,18 @@ export async function updateUserAccess(
       is_dean: payload.is_dean,
       is_cfo: payload.is_cfo,
       is_finance_officer: payload.is_finance_officer,
+      is_finance_office: payload.is_finance_officer,
       is_volunteer: payload.is_volunteer,
       is_venue_manager: payload.is_venue_manager,
+      is_service_venue: payload.is_venue_manager,
+      is_venue: payload.is_venue_manager,
+      is_service_it: payload.is_it_service,
       is_it_service: payload.is_it_service,
       is_it: payload.is_it_service,
+      is_service_catering: payload.is_catering_vendors,
       is_catering_vendors: payload.is_catering_vendors,
       is_catering_vendor: payload.is_catering_vendors,
+      is_service_stalls: payload.is_stalls_misc,
       is_stalls_misc: payload.is_stalls_misc,
       is_stall_misc: payload.is_stalls_misc,
       is_stalls: payload.is_stalls_misc,
@@ -2030,6 +2045,7 @@ export async function assignRoleMatrixEntry(
 
     if (roleValue === "student_organiser") {
       nextAccess.is_student_organiser = true;
+      usersUpdatePayload.is_organiser_student = true;
       usersUpdatePayload.is_student_organiser = true;
       usersUpdatePayload.is_student_organizer = true;
     }
@@ -2046,18 +2062,21 @@ export async function assignRoleMatrixEntry(
 
     if (roleValue === "it_service") {
       nextAccess.is_it_service = true;
+      usersUpdatePayload.is_service_it = true;
       usersUpdatePayload.is_it_service = true;
       usersUpdatePayload.is_it = true;
     }
 
     if (roleValue === "catering_service") {
       nextAccess.is_catering_vendors = true;
+      usersUpdatePayload.is_service_catering = true;
       usersUpdatePayload.is_catering_vendors = true;
       usersUpdatePayload.is_catering_vendor = true;
     }
 
     if (roleValue === "stalls_service") {
       nextAccess.is_stalls_misc = true;
+      usersUpdatePayload.is_service_stalls = true;
       usersUpdatePayload.is_stalls_misc = true;
       usersUpdatePayload.is_stall_misc = true;
       usersUpdatePayload.is_stalls = true;
@@ -2066,6 +2085,7 @@ export async function assignRoleMatrixEntry(
     if (roleValue === "finance_officer") {
       nextAccess.is_finance_officer = true;
       usersUpdatePayload.is_finance_officer = true;
+      usersUpdatePayload.is_finance_office = true;
     }
 
     if (roleValue === "master_admin") {
@@ -2083,6 +2103,8 @@ export async function assignRoleMatrixEntry(
       usersUpdatePayload.is_dean = roleValue === "dean";
       usersUpdatePayload.is_cfo = roleValue === "cfo";
       usersUpdatePayload.is_venue_manager = roleValue === "venue_service";
+      usersUpdatePayload.is_service_venue = roleValue === "venue_service";
+      usersUpdatePayload.is_venue = roleValue === "venue_service";
 
       usersUpdatePayload.department_id = roleValue === "hod" ? scopeValue : null;
       usersUpdatePayload.school_id = roleValue === "dean" ? scopeValue : null;
@@ -2111,6 +2133,8 @@ export async function assignRoleMatrixEntry(
           is_hod: roleValue === "hod",
           is_dean: roleValue === "dean",
           is_cfo: roleValue === "cfo",
+          is_venue_manager: roleValue === "venue_service",
+          is_service_venue: roleValue === "venue_service",
           school:
             roleValue === "dean"
               ? scopeValue
