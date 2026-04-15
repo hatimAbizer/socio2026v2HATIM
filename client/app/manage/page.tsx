@@ -923,19 +923,6 @@ export default function ManageDashboard() {
   const normalizeEmail = (value: string | null | undefined) =>
     String(value || "").trim().toLowerCase();
   const currentUserEmail = normalizeEmail(userData?.email);
-  const isCurrentUserFestHead = (fest: Fest) => {
-    if (!currentUserEmail) return false;
-    const heads = Array.isArray(fest.event_heads) ? fest.event_heads : [];
-
-    return heads.some((head) => {
-      if (!head) return false;
-      if (typeof head === "string") {
-        return normalizeEmail(head) === currentUserEmail;
-      }
-
-      return normalizeEmail((head as { email?: string | null }).email) === currentUserEmail;
-    });
-  };
   const isOwnedByCurrentUser = (...ownerCandidates: Array<string | null | undefined>) => {
     if (isMasterAdmin) return true;
     if (!currentUserEmail) return false;
@@ -944,8 +931,7 @@ export default function ManageDashboard() {
       .map((owner) => normalizeEmail(owner))
       .filter(Boolean);
 
-    // Legacy records may not have ownership metadata populated.
-    if (normalizedOwners.length === 0) return true;
+    if (normalizedOwners.length === 0) return false;
     return normalizedOwners.includes(currentUserEmail);
   };
 
@@ -1048,7 +1034,7 @@ export default function ManageDashboard() {
         closing_date: fest.closing_date || null,
         fest_image_url: fest.fest_image_url || "",
         organizing_dept: fest.organizing_dept || "",
-        created_by: fest.created_by || fest.createdBy || fest.user_email || fest.organiser_email || null,
+        created_by: fest.created_by || fest.createdBy || null,
         contact_email: fest.contact_email || fest.contactEmail || null,
         event_heads: Array.isArray(fest.event_heads)
           ? fest.event_heads
@@ -1084,10 +1070,7 @@ export default function ManageDashboard() {
             return false;
           }
 
-          return (
-            isOwnedByCurrentUser(fest.created_by, fest.contact_email) ||
-            isCurrentUserFestHead(fest)
-          );
+          return isOwnedByCurrentUser(fest.created_by);
         }
       );
 
@@ -1285,11 +1268,7 @@ export default function ManageDashboard() {
       lifecycleStatus: (e as any).lifecycle_status || (e as any).status,
       createdBy: e.created_by,
     });
-    const isOwnerOrMaster = isOwnedByCurrentUser(
-      e.created_by,
-      (e as any).organizer_email,
-      (e as any).organiser_email
-    );
+    const isOwnerOrMaster = isOwnedByCurrentUser(e.created_by);
     const matchesCampus = campusFilter === "all" || (e as any).campus_hosted_at === campusFilter;
     const eventIsPast = isPastDate(e.event_date);
     const archiveState = getEffectiveArchiveState(e);
