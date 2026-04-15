@@ -26,7 +26,6 @@ type EventJoinRow = {
   fest_id?: string | null;
   campus_hosted_at?: string | null;
   approval_requests?: ApprovalJoinRow[] | ApprovalJoinRow | null;
-  event_budgets?: BudgetJoinRow[] | BudgetJoinRow | null;
 };
 
 type UserNameRow = {
@@ -180,13 +179,46 @@ export async function fetchCfoDashboardData({
       created_at,
       approval_level,
       version
-    ),
-    event_budgets!inner (
-      event_id,
-      total_estimated_expense,
-      total_actual_expense
     )
   `;
+
+  const { data: budgetData, error: budgetError } = await supabase
+    .from("event_budgets")
+    .select("event_id,total_estimated_expense,total_actual_expense")
+    .gt("total_estimated_expense", normalizedThreshold);
+
+  if (budgetError) {
+    throw new Error(`Failed to load CFO budget data: ${budgetError.message}`);
+  }
+
+  const budgetRows = Array.isArray(budgetData) ? (budgetData as BudgetJoinRow[]) : [];
+  const budgetByEventId = new Map<string, BudgetJoinRow>();
+
+  budgetRows.forEach((row) => {
+    const eventId = normalizeText(row.event_id);
+    if (!eventId) {
+      return;
+    }
+
+    if (!budgetByEventId.has(eventId)) {
+      budgetByEventId.set(eventId, row);
+    }
+  });
+
+  const thresholdEventIds = Array.from(budgetByEventId.keys());
+
+  if (thresholdEventIds.length === 0) {
+    return {
+      queue: [],
+      metrics: {
+        campusRequestedBudgetYtd: 0,
+        campusApprovedBudgetYtd: 0,
+        highValuePendingRequests: 0,
+        highValuePendingBudget: 0,
+        l2Threshold: normalizedThreshold,
+      },
+    };
+  }
 
   let pendingEventsQuery = supabase
     .from("events")
@@ -194,7 +226,7 @@ export async function fetchCfoDashboardData({
     .is("fest_id", null)
     .eq("approval_requests.approval_level", "L3_CFO")
     .eq("approval_requests.status", "pending")
-    .gt("event_budgets.total_estimated_expense", normalizedThreshold)
+    .in("event_id", thresholdEventIds)
     .order("created_at", {
       ascending: true,
       referencedTable: "approval_requests",
@@ -275,7 +307,7 @@ export async function fetchCfoDashboardData({
   const queue: CfoApprovalQueueItem[] = pendingEvents
     .map((row) => {
       const approvalRow = toSingleRecord(row.approval_requests);
-      const budgetRow = toSingleRecord(row.event_budgets);
+      const budgetRow = budgetByEventId.get(normalizeText(row.event_id)) || null;
       const organizerEmail = normalizeText(row.organizer_email).toLowerCase();
       const departmentId = normalizeText(row.organizing_dept);
       const schoolId = normalizeText(row.organizing_school);
@@ -309,7 +341,7 @@ export async function fetchCfoDashboardData({
     .select(queueSelect)
     .is("fest_id", null)
     .eq("approval_requests.approval_level", "L3_CFO")
-    .gt("event_budgets.total_estimated_expense", normalizedThreshold)
+    .in("event_id", thresholdEventIds)
     .gte("event_date", startDate)
     .lte("event_date", endDate);
 
@@ -327,7 +359,7 @@ export async function fetchCfoDashboardData({
 
   const ytdTotals = ytdEvents.reduce(
     (acc, eventRow) => {
-      const budgetRow = toSingleRecord(eventRow.event_budgets);
+      const budgetRow = budgetByEventId.get(normalizeText(eventRow.event_id)) || null;
       const budgetValue = toNumber(budgetRow?.total_estimated_expense);
 
       const approvalRows = toRecordArray(eventRow.approval_requests)
