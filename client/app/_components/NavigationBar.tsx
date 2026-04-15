@@ -8,8 +8,6 @@ import { NotificationSystem } from "./NotificationSystem";
 import TermsConsentModal from "./TermsConsentModal";
 import {
   getAccessibleServiceRoleDashboards,
-  hasAnyRoleCode,
-  hasRoleAlias,
 } from "@/lib/roleDashboards";
 import { useState, useEffect, useCallback, useRef, useMemo, memo } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
@@ -157,11 +155,7 @@ function NavigationBar() {
   const displayAvatar = userData?.avatar_url || session?.user?.user_metadata?.avatar_url || null;
   const avatarInitial = (displayName || "U").charAt(0).toUpperCase();
   const userRecord = (userData as Record<string, unknown> | null) || null;
-  const universityRole = (userData as any)?.university_role;
-  const isMasterAdmin =
-    Boolean((userData as any)?.is_masteradmin) ||
-    hasAnyRoleCode(userRecord, ["MASTER_ADMIN"]) ||
-    hasRoleAlias(universityRole, ["masteradmin", "master admin"]);
+  const isMasterAdmin = Boolean((userData as any)?.is_masteradmin);
   const isOrganiser = Boolean(userData?.is_organiser);
   const isSupport = Boolean(userData?.is_support);
   const isHod = Boolean((userData as any)?.is_hod);
@@ -170,10 +164,7 @@ function NavigationBar() {
   const isStudentOrganiser = Boolean((userData as any)?.is_organiser_student);
   const isVolunteer = Boolean((userData as any)?.is_volunteer);
   const isFinanceOfficer = Boolean((userData as any)?.is_finance_officer);
-  const accessibleServiceRoleDashboards = getAccessibleServiceRoleDashboards(
-    userRecord,
-    isMasterAdmin
-  );
+  const accessibleServiceRoleDashboards = getAccessibleServiceRoleDashboards(userRecord, isMasterAdmin);
   // Only allow dashboard if user has that role, or admin (admin handled separately)
   const canOpenManageDashboard = isOrganiser;
   const canOpenHodDashboard = isHod;

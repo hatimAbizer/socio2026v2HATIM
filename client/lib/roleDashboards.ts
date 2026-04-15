@@ -197,16 +197,7 @@ export function hasServiceRoleAccess(
     return false;
   }
 
-  if (hasAnyRoleCode(userLike, roleConfig.roleCodes)) {
-    return true;
-  }
-
-  const hasFlag = roleConfig.userFlagKeys.some((key) => Boolean(userLike[key]));
-  if (hasFlag) {
-    return true;
-  }
-
-  return hasRoleAlias(userLike.university_role, roleConfig.aliases);
+  return roleConfig.userFlagKeys.some((key) => Boolean(userLike[key]));
 }
 
 export function getAccessibleServiceRoleDashboards(
