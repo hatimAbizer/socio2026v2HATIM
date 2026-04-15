@@ -37,6 +37,10 @@ type FestDetailRow = {
   opening_date?: string | null;
   organizing_dept?: string | null;
   contact_email?: string | null;
+  budget_amount?: number | string | null;
+  estimated_budget_amount?: number | string | null;
+  total_estimated_expense?: number | string | null;
+  custom_fields?: unknown;
 };
 
 type BudgetRow = {
@@ -190,6 +194,54 @@ function getYearDateBounds(now: Date): { startDate: string; endDate: string } {
   };
 }
 
+function parseJsonArraySafely(value: unknown): any[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function getFestBudgetAmount(festRow: FestDetailRow | null | undefined): number {
+  const directBudget =
+    toNumber(festRow?.total_estimated_expense) ||
+    toNumber(festRow?.estimated_budget_amount) ||
+    toNumber(festRow?.budget_amount);
+
+  if (directBudget > 0) {
+    return directBudget;
+  }
+
+  const customFields = parseJsonArraySafely(festRow?.custom_fields);
+  const budgetSettings = customFields.find((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+
+    return String((entry as Record<string, unknown>).key || "") === "__budget_approval__";
+  }) as Record<string, unknown> | undefined;
+
+  const value =
+    budgetSettings &&
+    typeof budgetSettings.value === "object" &&
+    budgetSettings.value !== null &&
+    !Array.isArray(budgetSettings.value)
+      ? (budgetSettings.value as Record<string, unknown>)
+      : null;
+
+  const customBudget = toNumber(value?.amount);
+  return customBudget > 0 ? customBudget : 0;
+}
+
 async function fetchFestRowsWithFallback(
   supabase: any,
   festIds: string[]
@@ -198,7 +250,8 @@ async function fetchFestRowsWithFallback(
     return [];
   }
 
-  const selectClause = "fest_id, fest_title, opening_date, organizing_dept, contact_email";
+  const selectClause =
+    "fest_id, fest_title, opening_date, organizing_dept, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense, custom_fields";
 
   const { data: primaryData, error: primaryError } = await supabase
     .from("fests")
@@ -515,6 +568,7 @@ export async function fetchHodDashboardData({
       );
 
       const eventBudget = !isFestEntity ? budgetsByEventId.get(entityRef) : null;
+      const festBudget = isFestEntity ? getFestBudgetAmount(festRow) : 0;
       const displayName = isFestEntity
         ? normalizeText(festRow?.fest_title) || "Untitled Fest"
         : normalizeText(eventRow?.title) || "Untitled Event";
@@ -537,7 +591,9 @@ export async function fetchHodDashboardData({
         eventId: resolvedEntityId,
         eventName: displayName,
         entityType: isFestEntity ? "fest" : "event",
-        totalBudget: toNumber(eventBudget?.total_estimated_expense),
+        totalBudget: isFestEntity
+          ? festBudget
+          : toNumber(eventBudget?.total_estimated_expense),
         coordinatorName,
         departmentName,
         eventDate: displayDate,
