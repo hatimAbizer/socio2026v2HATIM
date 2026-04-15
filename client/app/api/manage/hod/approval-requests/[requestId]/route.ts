@@ -490,14 +490,12 @@ export async function PATCH(
     }
 
     if (!upstreamResponse.ok) {
-<<<<<<< Updated upstream
       const upstreamError =
         upstreamPayload?.error ||
         upstreamPayload?.message ||
         upstreamText ||
         "Unable to update approval decision.";
 
-=======
       console.error("[ManageHod] Upstream approval decision failed", {
         requestId,
         requestIdentifier,
@@ -505,7 +503,6 @@ export async function PATCH(
         status: upstreamResponse.status,
         error: upstreamPayload?.error || null,
       });
->>>>>>> Stashed changes
       return jsonError(
         upstreamResponse.status,
         upstreamError

@@ -143,6 +143,53 @@ const normalizeApiOrigin = (value: string | null | undefined) => {
 
   return "";
 };
+
+const mapFestFromApi = (fest: any): Fest => ({
+  fest_id: String(fest.fest_id || fest.id || fest.festId || fest.fest_title || fest.title || ""),
+  fest_title: fest.fest_title || fest.title || "Untitled",
+  description: fest.description || "",
+  opening_date: fest.opening_date || null,
+  closing_date: fest.closing_date || null,
+  fest_image_url: fest.fest_image_url || "",
+  organizing_dept: fest.organizing_dept || "",
+  created_by:
+    fest.created_by ||
+    fest.createdBy ||
+    fest.created_by_email ||
+    fest.createdByEmail ||
+    null,
+  auth_uuid: fest.auth_uuid || fest.authUuid || null,
+  contact_email:
+    fest.contact_email ||
+    fest.contactEmail ||
+    fest.organizer_email ||
+    fest.organizerEmail ||
+    fest.organiser_email ||
+    fest.organiserEmail ||
+    null,
+  organizer_email: fest.organizer_email || fest.organizerEmail || null,
+  organiser_email: fest.organiser_email || fest.organiserEmail || null,
+  event_heads: Array.isArray(fest.event_heads)
+    ? fest.event_heads
+    : Array.isArray(fest.eventHeads)
+      ? fest.eventHeads
+      : [],
+  campus_hosted_at: fest.campus_hosted_at || fest.campus || null,
+  is_draft:
+    isBooleanLikeTrue(fest.is_draft) ||
+    isDraftLifecycleStatus(fest.lifecycle_status || fest.status),
+  is_archived: fest.is_archived === true,
+  archived_at: fest.archived_at || null,
+  workflow_status: fest.workflow_status || null,
+  status: fest.status || null,
+  lifecycle_status: fest.lifecycle_status || null,
+  approval_request_id: fest.approval_request_id || null,
+  is_budget_related:
+    fest.is_budget_related === true ||
+    fest.is_budget_related === 1 ||
+    fest.is_budget_related === "1" ||
+    fest.is_budget_related === "true",
+});
 const MANUAL_UNARCHIVE_OVERRIDE = "system:manual_unarchive_override";
 const PENDING_WORKFLOW_STATUS_REGEX = /^pending_level_([1-4])$/;
 const PENDING_LIFECYCLE_STATUSES = new Set(["pending_approval", "pending_approvals"]);
@@ -1262,58 +1309,34 @@ export default function ManageDashboard() {
       }
 
       const payload = await response.json();
-      const rawFests = Array.isArray(payload?.fests)
+      let rawFests = Array.isArray(payload?.fests)
         ? payload.fests
         : Array.isArray(payload)
           ? payload
           : [];
 
-      const mappedFests: Fest[] = rawFests.map((fest: any) => ({
-        fest_id: String(fest.fest_id || fest.id || fest.festId || fest.fest_title || fest.title || ""),
-        fest_title: fest.fest_title || fest.title || "Untitled",
-        description: fest.description || "",
-        opening_date: fest.opening_date || null,
-        closing_date: fest.closing_date || null,
-        fest_image_url: fest.fest_image_url || "",
-        organizing_dept: fest.organizing_dept || "",
-        created_by:
-          fest.created_by ||
-          fest.createdBy ||
-          fest.created_by_email ||
-          fest.createdByEmail ||
-          null,
-        auth_uuid: fest.auth_uuid || fest.authUuid || null,
-        contact_email:
-          fest.contact_email ||
-          fest.contactEmail ||
-          fest.organizer_email ||
-          fest.organizerEmail ||
-          fest.organiser_email ||
-          fest.organiserEmail ||
-          null,
-        organizer_email: fest.organizer_email || fest.organizerEmail || null,
-        organiser_email: fest.organiser_email || fest.organiserEmail || null,
-        event_heads: Array.isArray(fest.event_heads)
-          ? fest.event_heads
-          : Array.isArray(fest.eventHeads)
-            ? fest.eventHeads
-            : [],
-        campus_hosted_at: fest.campus_hosted_at || fest.campus || null,
-        is_draft:
-          isBooleanLikeTrue(fest.is_draft) ||
-          isDraftLifecycleStatus(fest.lifecycle_status || fest.status),
-        is_archived: fest.is_archived === true,
-        archived_at: fest.archived_at || null,
-        workflow_status: fest.workflow_status || null,
-        status: fest.status || null,
-        lifecycle_status: fest.lifecycle_status || null,
-        approval_request_id: fest.approval_request_id || null,
-        is_budget_related:
-          fest.is_budget_related === true ||
-          fest.is_budget_related === 1 ||
-          fest.is_budget_related === "1" ||
-          fest.is_budget_related === "true",
-      }));
+      if (rawFests.length === 0) {
+        const fallbackResponse = await apiGetWithFallback(
+          `/api/fests?sortBy=created_at&sortOrder=desc&include_drafts=true`,
+          {
+            headers: {
+              Authorization: `Bearer ${authToken}`,
+            },
+            cache: "no-store",
+          }
+        );
+
+        if (fallbackResponse.ok) {
+          const fallbackPayload = await fallbackResponse.json();
+          rawFests = Array.isArray(fallbackPayload?.fests)
+            ? fallbackPayload.fests
+            : Array.isArray(fallbackPayload)
+              ? fallbackPayload
+              : [];
+        }
+      }
+
+      const mappedFests: Fest[] = rawFests.map(mapFestFromApi);
 
       const visibleFests = mappedFests.filter((fest) =>
         canViewPendingApprovalCard({
