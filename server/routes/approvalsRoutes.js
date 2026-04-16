@@ -2417,7 +2417,8 @@ const resolveApprovalNotificationContext = async (approvalRequest) => {
   if (isEventEntityType(entityType)) {
     const event = await queryOne("events", {
       where: { event_id: entityRef },
-      select: "event_id,title,organizer_email,created_by,status,is_draft,activation_state,workflow_status,approval_request_id",
+      select:
+        "event_id,title,organizer_email,created_by,status,is_draft,activation_state,workflow_phase,workflow_status,campus_hosted_at,approval_request_id",
     });
 
     if (!event) {
@@ -2515,9 +2516,16 @@ const notifyDecisionToOrganizer = async ({
 
   if (normalizedDecision === "APPROVED") {
     if (normalizedRequestStatus === "APPROVED") {
-      title = `${context.entityLabel} fully approved`;
-      message = `${context.title} has been fully approved. You can now publish it.`;
-      type = "success";
+      const workflowPhase = normalizeWorkflowPhase(context.record?.workflow_phase, "");
+      if (workflowPhase === WORKFLOW_PHASE.LOGISTICS_APPROVAL) {
+        title = `${context.entityLabel} moved to logistics`;
+        message = `${context.title} has cleared budget approvals and moved to logistics processing.`;
+        type = "info";
+      } else {
+        title = `${context.entityLabel} fully approved`;
+        message = `${context.title} has been fully approved. You can now publish it.`;
+        type = "success";
+      }
     } else {
       title = `${context.entityLabel} approved by ${roleLabel}`;
       message = `${context.title} was approved by ${roleLabel}. Remaining approvals are still in progress.`;
