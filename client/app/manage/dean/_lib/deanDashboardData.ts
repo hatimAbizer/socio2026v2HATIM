@@ -125,6 +125,32 @@ function normalizeEntityType(value: unknown): string {
   return normalizeText(value).toUpperCase();
 }
 
+function isMissingColumnError(
+  error: { code?: string | null; message?: string | null } | null | undefined,
+  columnName?: string | null
+): boolean {
+  const code = String(error?.code || "").trim().toUpperCase();
+  const message = String(error?.message || "").trim().toLowerCase();
+  const normalizedColumn = String(columnName || "").trim().toLowerCase();
+
+  if (!normalizedColumn) {
+    return (
+      code === "42703" ||
+      code === "PGRST204" ||
+      message.includes("column") ||
+      message.includes("schema cache")
+    );
+  }
+
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes(`column \"${normalizedColumn}\"`) ||
+    message.includes(`${normalizedColumn} does not exist`) ||
+    (message.includes("could not find") && message.includes(normalizedColumn))
+  );
+}
+
 function toRecordArray<T>(value: T[] | T | null | undefined): T[] {
   if (!value) {
     return [];
@@ -231,7 +257,10 @@ async function fetchFestRowsWithFallback(
     return [];
   }
 
-  const selectClause = "fest_id, fest_title, opening_date, organizing_dept, organizing_school, campus_hosted_at, contact_email";
+  const selectClause =
+    "fest_id, fest_title, opening_date, organizing_dept, organizing_school, campus_hosted_at, contact_email";
+  const legacySelectClause =
+    "fest_id, fest_title, opening_date, organizing_dept, contact_email";
 
   const { data: primaryData, error: primaryError } = await supabase
     .from("fests")
@@ -242,6 +271,22 @@ async function fetchFestRowsWithFallback(
     return primaryData as FestDetailRow[];
   }
 
+  const shouldRetryPrimaryWithLegacySelect =
+    isMissingColumnError(primaryError, "organizing_school") ||
+    isMissingColumnError(primaryError, "campus_hosted_at") ||
+    isMissingColumnError(primaryError);
+
+  if (primaryError && shouldRetryPrimaryWithLegacySelect) {
+    const { data: legacyPrimaryData, error: legacyPrimaryError } = await supabase
+      .from("fests")
+      .select(legacySelectClause)
+      .in("fest_id", festIds);
+
+    if (!legacyPrimaryError && Array.isArray(legacyPrimaryData)) {
+      return legacyPrimaryData as FestDetailRow[];
+    }
+  }
+
   const { data: fallbackData, error: fallbackError } = await supabase
     .from("fest")
     .select(selectClause)
@@ -249,6 +294,22 @@ async function fetchFestRowsWithFallback(
 
   if (!fallbackError && Array.isArray(fallbackData)) {
     return fallbackData as FestDetailRow[];
+  }
+
+  const shouldRetryFallbackWithLegacySelect =
+    isMissingColumnError(fallbackError, "organizing_school") ||
+    isMissingColumnError(fallbackError, "campus_hosted_at") ||
+    isMissingColumnError(fallbackError);
+
+  if (fallbackError && shouldRetryFallbackWithLegacySelect) {
+    const { data: legacyFallbackData, error: legacyFallbackError } = await supabase
+      .from("fest")
+      .select(legacySelectClause)
+      .in("fest_id", festIds);
+
+    if (!legacyFallbackError && Array.isArray(legacyFallbackData)) {
+      return legacyFallbackData as FestDetailRow[];
+    }
   }
 
   if (primaryError && fallbackError) {

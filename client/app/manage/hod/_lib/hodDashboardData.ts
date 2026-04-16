@@ -158,6 +158,133 @@ function isMissingRelationError(
   );
 }
 
+function isMissingColumnError(
+  error: { code?: string | null; message?: string | null } | null | undefined,
+  columnName?: string | null
+): boolean {
+  const code = String(error?.code || "").trim().toUpperCase();
+  const message = String(error?.message || "").trim().toLowerCase();
+  const normalizedColumn = String(columnName || "").trim().toLowerCase();
+
+  if (!normalizedColumn) {
+    return (
+      code === "42703" ||
+      code === "PGRST204" ||
+      message.includes("column") ||
+      message.includes("schema cache")
+    );
+  }
+
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes(`column \"${normalizedColumn}\"`) ||
+    message.includes(`${normalizedColumn} does not exist`) ||
+    (message.includes("could not find") && message.includes(normalizedColumn))
+  );
+}
+
+async function fetchFestRowsFromTableWithFallback(
+  supabase: any,
+  tableName: string,
+  festIds: string[]
+): Promise<{
+  rows: FestDetailRow[];
+  error: { code?: string | null; message?: string | null } | null;
+}> {
+  const selectClauseWithBudget =
+    "fest_id, fest_title, opening_date, organizing_dept, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense, custom_fields";
+  const selectClauseLegacy =
+    "fest_id, fest_title, opening_date, organizing_dept, contact_email, custom_fields";
+
+  const { data: primaryData, error: primaryError } = await supabase
+    .from(tableName)
+    .select(selectClauseWithBudget)
+    .in("fest_id", festIds);
+
+  if (!primaryError && Array.isArray(primaryData)) {
+    return { rows: primaryData as FestDetailRow[], error: null };
+  }
+
+  if (primaryError && isMissingRelationError(primaryError, tableName)) {
+    return { rows: [], error: primaryError };
+  }
+
+  const shouldRetryWithLegacySelect =
+    isMissingColumnError(primaryError, "budget_amount") ||
+    isMissingColumnError(primaryError, "estimated_budget_amount") ||
+    isMissingColumnError(primaryError, "total_estimated_expense") ||
+    isMissingColumnError(primaryError);
+
+  if (!shouldRetryWithLegacySelect) {
+    return {
+      rows: [],
+      error:
+        (primaryError as { code?: string | null; message?: string | null } | null) ||
+        null,
+    };
+  }
+
+  const { data: legacyData, error: legacyError } = await supabase
+    .from(tableName)
+    .select(selectClauseLegacy)
+    .in("fest_id", festIds);
+
+  if (!legacyError && Array.isArray(legacyData)) {
+    return { rows: legacyData as FestDetailRow[], error: null };
+  }
+
+  return {
+    rows: [],
+    error:
+      (legacyError as { code?: string | null; message?: string | null } | null) ||
+      (primaryError as { code?: string | null; message?: string | null } | null) ||
+      null,
+  };
+}
+
+async function fetchAllFestRowsFromTableWithFallback(
+  supabase: any,
+  tableName: string
+): Promise<FestDetailRow[]> {
+  const selectClauseWithBudget =
+    "fest_id, fest_title, opening_date, organizing_dept, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense, custom_fields";
+  const selectClauseLegacy =
+    "fest_id, fest_title, opening_date, organizing_dept, contact_email, custom_fields";
+
+  const { data: primaryData, error: primaryError } = await supabase
+    .from(tableName)
+    .select(selectClauseWithBudget);
+
+  if (!primaryError && Array.isArray(primaryData)) {
+    return primaryData as FestDetailRow[];
+  }
+
+  if (primaryError && isMissingRelationError(primaryError, tableName)) {
+    return [];
+  }
+
+  const shouldRetryWithLegacySelect =
+    isMissingColumnError(primaryError, "budget_amount") ||
+    isMissingColumnError(primaryError, "estimated_budget_amount") ||
+    isMissingColumnError(primaryError, "total_estimated_expense") ||
+    isMissingColumnError(primaryError);
+
+  if (!shouldRetryWithLegacySelect) {
+    return [];
+  }
+
+  const { data: legacyData, error: legacyError } = await supabase
+    .from(tableName)
+    .select(selectClauseLegacy);
+
+  if (legacyError || !Array.isArray(legacyData)) {
+    return [];
+  }
+
+  return legacyData as FestDetailRow[];
+}
+
 function toSingleRecord<T>(joined: T | T[] | null | undefined): T | null {
   if (!joined) {
     return null;
@@ -250,13 +377,10 @@ async function fetchFestRowsWithFallback(
     return [];
   }
 
-  const selectClause =
-    "fest_id, fest_title, opening_date, organizing_dept, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense, custom_fields";
-
-  const { data: primaryData, error: primaryError } = await supabase
-    .from("fests")
-    .select(selectClause)
-    .in("fest_id", festIds);
+  const {
+    rows: primaryData,
+    error: primaryError,
+  } = await fetchFestRowsFromTableWithFallback(supabase, "fests", festIds);
 
   const mergedByFestId = new Map<string, FestDetailRow>();
   if (!primaryError && Array.isArray(primaryData)) {
@@ -268,10 +392,10 @@ async function fetchFestRowsWithFallback(
     });
   }
 
-  const { data: fallbackData, error: fallbackError } = await supabase
-    .from("fest")
-    .select(selectClause)
-    .in("fest_id", festIds);
+  const {
+    rows: fallbackData,
+    error: fallbackError,
+  } = await fetchFestRowsFromTableWithFallback(supabase, "fest", festIds);
 
   if (!fallbackError && Array.isArray(fallbackData)) {
     (fallbackData as FestDetailRow[]).forEach((row) => {
@@ -296,11 +420,12 @@ async function fetchFestRowsWithFallback(
   if (unresolvedRefs.length > 0) {
     const tableNames = ["fests", "fest"];
     for (const tableName of tableNames) {
-      const { data: allRowsData, error: allRowsError } = await supabase
-        .from(tableName)
-        .select(selectClause);
+      const allRowsData = await fetchAllFestRowsFromTableWithFallback(
+        supabase,
+        tableName
+      );
 
-      if (allRowsError || !Array.isArray(allRowsData)) {
+      if (!Array.isArray(allRowsData)) {
         continue;
       }
 
