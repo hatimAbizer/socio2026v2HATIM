@@ -29,8 +29,26 @@ const ASSIGNMENT_FALLBACK_ROLE_SET = new Set([
   ...SERVICE_ROLE_CODES,
 ]);
 
-export const normalizeRoleCode = (roleCode) =>
-  String(roleCode || "").trim().toUpperCase();
+const ROLE_CODE_ALIASES = Object.freeze({
+  HOD_EVENT_MANAGER: ROLE_CODES.HOD,
+  L1_HOD: ROLE_CODES.HOD,
+  DEAN_DIRECTOR: ROLE_CODES.DEAN,
+  L2_DEAN: ROLE_CODES.DEAN,
+  CAMPUS_DIRECTOR_CFO: ROLE_CODES.CFO,
+  L3_CFO: ROLE_CODES.CFO,
+  L4_ACCOUNTS: ROLE_CODES.ACCOUNTS,
+  FINANCE: ROLE_CODES.FINANCE_OFFICER,
+  FINANCE_OFFICE: ROLE_CODES.FINANCE_OFFICER,
+});
+
+export const normalizeRoleCode = (roleCode) => {
+  const normalized = String(roleCode || "").trim().toUpperCase();
+  if (!normalized) {
+    return "";
+  }
+
+  return ROLE_CODE_ALIASES[normalized] || normalized;
+};
 
 const isTruthy = (value) => value === true || value === 1 || value === "1" || value === "true";
 

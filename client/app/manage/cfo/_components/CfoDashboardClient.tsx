@@ -181,7 +181,11 @@ export default function CfoDashboardClient({
 
       applySuccessfulAction(requestId, action);
       setModalState(null);
-      toast.success(decisionMessage(action));
+      toast.success(
+        typeof payload?.message === "string" && payload.message.trim()
+          ? payload.message
+          : decisionMessage(action)
+      );
       router.refresh();
     } catch (error) {
       const message =

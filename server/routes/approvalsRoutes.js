@@ -3122,6 +3122,12 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
     });
 
     if (!approvalRequest) {
+      approvalRequest = await queryOne("approval_requests", {
+        where: { id: requestId },
+      });
+    }
+
+    if (!approvalRequest) {
       return res.status(404).json({ error: "Approval request not found" });
     }
 
@@ -3167,7 +3173,9 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
       });
     }
 
-    const stepRoleCode = normalizeRoleCode(approvalStep.role_code);
+    const stepRoleCode = normalizeRoleCode(
+      approvalStep.role_code || approvalStep.step_code
+    );
 
     if (
       isMasterAdminRequest(req) &&
