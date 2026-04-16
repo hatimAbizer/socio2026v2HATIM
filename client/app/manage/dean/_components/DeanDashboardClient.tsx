@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -28,6 +28,8 @@ type ModalState = {
   errorMessage: string | null;
 };
 
+type CompletedActionMap = Record<string, DeanApprovalAction>;
+
 const currencyFormatter = new Intl.NumberFormat("en-IN", {
   style: "currency",
   currency: "INR",
@@ -35,6 +37,7 @@ const currencyFormatter = new Intl.NumberFormat("en-IN", {
 });
 
 const NOTE_MIN_CHARS = 1;
+const ROW_COMPLETION_DISPLAY_MS = 1600;
 
 async function fetchWithTimeout(
   url: string,
@@ -92,8 +95,10 @@ export default function DeanDashboardClient({
     initialDepartmentKpis
   );
   const [selectedDepartment, setSelectedDepartment] = useState<string>("all");
+  const [completedActions, setCompletedActions] = useState<CompletedActionMap>({});
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [modalState, setModalState] = useState<ModalState | null>(null);
+  const completionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const departmentOptions = useMemo(
     () =>
@@ -111,8 +116,28 @@ export default function DeanDashboardClient({
     return queue.filter((item) => item.departmentName === selectedDepartment);
   }, [queue, selectedDepartment]);
 
+  useEffect(() => {
+    return () => {
+      Object.values(completionTimers.current).forEach((timerId) => clearTimeout(timerId));
+      completionTimers.current = {};
+    };
+  }, []);
+
+  const clearCompletionTimer = (requestId: string) => {
+    const existing = completionTimers.current[requestId];
+    if (existing) {
+      clearTimeout(existing);
+      delete completionTimers.current[requestId];
+    }
+  };
+
   const applySuccessfulAction = (requestId: string, action: DeanApprovalAction) => {
     const actedRow = queue.find((row) => row.id === requestId) || null;
+
+    setCompletedActions((previous) => ({
+      ...previous,
+      [requestId]: action,
+    }));
 
     if (actedRow) {
       setMetrics((previous) => ({
@@ -134,7 +159,20 @@ export default function DeanDashboardClient({
       }
     }
 
-    setQueue((previous) => previous.filter((row) => row.id !== requestId));
+    clearCompletionTimer(requestId);
+    completionTimers.current[requestId] = setTimeout(() => {
+      setQueue((previous) => previous.filter((row) => row.id !== requestId));
+      setCompletedActions((previous) => {
+        if (!previous[requestId]) {
+          return previous;
+        }
+
+        const next = { ...previous };
+        delete next[requestId];
+        return next;
+      });
+      delete completionTimers.current[requestId];
+    }, ROW_COMPLETION_DISPLAY_MS);
   };
 
   const submitAction = async (params: {
@@ -274,6 +312,7 @@ export default function DeanDashboardClient({
 
       <DeanApprovalTable
         rows={filteredQueue}
+        completedActions={completedActions}
         activeRequestId={activeRequestId}
         onApprove={(requestId) => {
           void submitAction({ requestId, action: "approve" });

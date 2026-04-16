@@ -131,6 +131,14 @@ async function resolveSchoolScopeFromDepartment(
   return "";
 }
 
+async function resolveSchoolScopeCandidatesFromDepartment(
+  supabase: any,
+  departmentValue: unknown
+): Promise<string[]> {
+  const school = await resolveSchoolScopeFromDepartment(supabase, departmentValue);
+  return school ? [school] : [];
+}
+
 function parseAction(value: unknown): DecisionAction | null {
   if (value === "approve" || value === "return") {
     return value;
@@ -237,7 +245,7 @@ function getRoleScopedCampuses(
 async function resolveRequestScopeFromEntity(
   supabase: any,
   requestRow: ApprovalRequestRow
-): Promise<{ schoolScope: string; campusScope: string }> {
+): Promise<{ schoolScopes: string[]; campusScope: string }> {
   const entityType = String(requestRow.entity_type || "").trim().toUpperCase();
   const entityRef = String(requestRow.entity_ref || "").trim();
 
@@ -298,12 +306,52 @@ async function resolveRequestScopeFromEntity(
     );
   }
 
-  schoolScope = schoolScope || normalizeScope(requestRow.organizing_dept);
+  const schoolScopes = new Set<string>();
+  const directSchoolScope = schoolScope || normalizeScope(requestRow.organizing_school);
+  if (directSchoolScope) {
+    schoolScopes.add(directSchoolScope);
+  }
+
+  const departmentCandidates = [
+    requestRow.organizing_dept,
+    departmentScope,
+  ];
+
+  for (const departmentCandidate of departmentCandidates) {
+    const mappedScopes = await resolveSchoolScopeCandidatesFromDepartment(
+      supabase,
+      departmentCandidate
+    );
+    mappedScopes.forEach((mappedScope) => {
+      if (mappedScope) {
+        schoolScopes.add(mappedScope);
+      }
+    });
+  }
+
+  if (schoolScopes.size === 0) {
+    const deptFallback = normalizeScope(requestRow.organizing_dept);
+    if (deptFallback) {
+      schoolScopes.add(deptFallback);
+    }
+  }
 
   return {
-    schoolScope,
+    schoolScopes: Array.from(schoolScopes),
     campusScope,
   };
+}
+
+function hasMatchingScope(allowedScopes: string[], candidateScopes: string[]): boolean {
+  if (allowedScopes.length === 0 || candidateScopes.length === 0) {
+    return false;
+  }
+
+  const normalizedAllowed = new Set(allowedScopes.map((scope) => normalizeScope(scope)).filter(Boolean));
+  return candidateScopes
+    .map((scope) => normalizeScope(scope))
+    .filter(Boolean)
+    .some((scope) => normalizedAllowed.has(scope));
 }
 
 function jsonError(status: number, error: string) {
@@ -421,22 +469,22 @@ export async function PATCH(
     }
 
     if (!isMasterAdmin) {
-      const allowedScopes = getRoleScopedDepartments(userProfile, "DEAN");
+      const allowedScopes = getRoleScopedDepartments(userProfile, "DEAN").map((scope) => normalizeScope(scope));
       if (allowedScopes.length === 0) {
         return jsonError(403, "No school scope is mapped to this Dean account.");
       }
 
-      const allowedCampuses = getRoleScopedCampuses(userProfile, "DEAN");
+      const allowedCampuses = getRoleScopedCampuses(userProfile, "DEAN").map((scope) => normalizeScope(scope));
       if (allowedCampuses.length === 0) {
         return jsonError(403, "No campus scope is mapped to this Dean account.");
       }
 
-      const { schoolScope, campusScope } = await resolveRequestScopeFromEntity(
+      const { schoolScopes, campusScope } = await resolveRequestScopeFromEntity(
         supabase,
         requestRow
       );
 
-      if (!schoolScope || !allowedScopes.includes(schoolScope)) {
+      if (!hasMatchingScope(allowedScopes, schoolScopes)) {
         return jsonError(403, "This request does not belong to your school scope.");
       }
 
