@@ -6,7 +6,6 @@ import { toast } from "sonner";
 
 import ApprovalDecisionModal from "../../hod/_components/ApprovalDecisionModal";
 import CfoApprovalTable from "./CfoApprovalTable";
-import { processCfoApprovalAction } from "../actions";
 import { CfoApprovalAction, CfoApprovalQueueItem, CfoDashboardMetrics } from "../types";
 
 interface CfoDashboardClientProps {
@@ -30,6 +29,24 @@ const currencyFormatter = new Intl.NumberFormat("en-IN", {
 });
 
 const NOTE_MIN_CHARS = 20;
+
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 function decisionMessage(action: CfoApprovalAction): string {
   if (action === "approve") {
@@ -141,35 +158,25 @@ export default function CfoDashboardClient({
     setActiveRequestId(requestId);
 
     try {
-      if (action === "approve") {
-        const result = await processCfoApprovalAction({
-          requestId,
-          note: note?.trim() || undefined,
-        });
+      const response = await fetchWithTimeout(
+        `/api/manage/cfo/approval-requests/${encodeURIComponent(requestId)}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            action,
+            note: note?.trim() || null,
+          }),
+        },
+        20000
+      );
 
-        if (!result.ok) {
-          throw new Error(result.message || "Unable to process CFO approval handoff.");
-        }
-      } else {
-        const response = await fetch(
-          `/api/manage/cfo/approval-requests/${encodeURIComponent(requestId)}`,
-          {
-            method: "PATCH",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              action,
-              note: note?.trim() || null,
-            }),
-          }
-        );
+      const payload = await response.json().catch(() => null);
 
-        const payload = await response.json().catch(() => null);
-
-        if (!response.ok) {
-          throw new Error(payload?.error || "Unable to update approval request.");
-        }
+      if (!response.ok) {
+        throw new Error(payload?.error || "Unable to update approval request.");
       }
 
       applySuccessfulAction(requestId, action);
@@ -178,7 +185,11 @@ export default function CfoDashboardClient({
       router.refresh();
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Unable to update approval request.";
+        error instanceof Error
+          ? error.name === "AbortError"
+            ? "Approval service timeout. Please try again."
+            : error.message
+          : "Unable to update approval request.";
 
       if (modalState && modalState.requestId === requestId) {
         setModalState((previous) =>

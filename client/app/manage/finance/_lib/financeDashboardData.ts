@@ -18,13 +18,25 @@ type EventRow = {
   fest?: string | null;
 };
 
-type ApprovalJoinRow = {
+type ApprovalRequestQueueRow = {
+  id?: string | null;
+  entity_type?: string | null;
+  entity_ref?: string | null;
+  organizing_dept?: string | null;
+  organizing_school?: string | null;
+  campus_hosted_at?: string | null;
+  submitted_at?: string | null;
+  created_at?: string | null;
+};
+
+type ApprovalStepQueueRow = {
   id?: string | null;
   status?: string | null;
   created_at?: string | null;
-  approval_level?: string | null;
-  cfo_approved_at?: string | null;
-  version?: number | string | null;
+  step_code?: string | null;
+  approval_request_id?: string | null;
+  decided_at?: string | null;
+  approval_requests?: ApprovalRequestQueueRow[] | ApprovalRequestQueueRow | null;
 };
 
 type BudgetRow = {
@@ -36,11 +48,6 @@ type BudgetRow = {
   settlement_status?: string | null;
   finance_status?: string | null;
   [key: string]: unknown;
-};
-
-type EventWithApprovalBudgetRow = EventRow & {
-  approval_requests?: ApprovalJoinRow[] | ApprovalJoinRow | null;
-  event_budgets?: BudgetRow[] | BudgetRow | null;
 };
 
 type UserNameRow = {
@@ -121,6 +128,15 @@ function toSingleRecord<T>(value: T[] | T | null | undefined): T | null {
   return rows[0] ?? null;
 }
 
+function normalizeEntityType(value: unknown): string {
+  return normalizeText(value).toUpperCase();
+}
+
+function isEventEntityType(value: unknown): boolean {
+  const entityType = normalizeEntityType(value);
+  return ["EVENT", "STANDALONE_EVENT", "FEST_CHILD_EVENT"].includes(entityType);
+}
+
 function isMissingRelationError(error: { code?: string | null; message?: string | null }) {
   const code = normalizeText(error?.code).toUpperCase();
   const message = normalizeLower(error?.message);
@@ -131,6 +147,32 @@ function isMissingRelationError(error: { code?: string | null; message?: string 
     message.includes("relation") ||
     message.includes("does not exist") ||
     message.includes("schema cache")
+  );
+}
+
+function isMissingColumnError(
+  error: { code?: string | null; message?: string | null } | null | undefined,
+  columnName?: string | null
+): boolean {
+  const code = String(error?.code || "").trim().toUpperCase();
+  const message = String(error?.message || "").trim().toLowerCase();
+  const normalizedColumn = String(columnName || "").trim().toLowerCase();
+
+  if (!normalizedColumn) {
+    return (
+      code === "42703" ||
+      code === "PGRST204" ||
+      message.includes("column") ||
+      message.includes("schema cache")
+    );
+  }
+
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes(`column \"${normalizedColumn}\"`) ||
+    message.includes(`${normalizedColumn} does not exist`) ||
+    (message.includes("could not find") && message.includes(normalizedColumn))
   );
 }
 
@@ -257,55 +299,169 @@ function toDocumentItem(row: ExpenseDocumentRow): FinanceExpenseDocumentItem {
 export async function fetchFinanceDashboardData({ supabase }: { supabase: any }): Promise<FinanceDashboardData> {
   const warnings: string[] = [];
 
-  const approvalSelect = `
-    event_id,
-    title,
-    event_date,
-    organizing_dept,
-    organizing_school,
-    organizer_email,
-    fest,
+  const pendingSelectWithSchool = `
+    id,
+    status,
+    step_code,
+    created_at,
     approval_requests!inner (
       id,
-      status,
-      created_at,
-      approval_level,
-      cfo_approved_at,
-      version
-    ),
-    event_budgets!inner (
-      id,
-      event_id,
-      total_estimated_expense,
-      total_actual_expense,
-      advance_paid,
-      settlement_status,
-      finance_status
+      entity_type,
+      entity_ref,
+      organizing_dept,
+      organizing_school,
+      submitted_at,
+      created_at
     )
   `;
 
-  const { data: approvalEventsData, error: approvalEventsError } = await supabase
-    .from("events")
-    .select(approvalSelect)
-    .eq("approval_requests.approval_level", "L4_ACCOUNTS")
-    .eq("approval_requests.status", "pending")
-    .gt("event_budgets.total_estimated_expense", 0)
-    .order("created_at", {
-      ascending: true,
-      referencedTable: "approval_requests",
-    });
+  const pendingSelectLegacy = `
+    id,
+    status,
+    step_code,
+    created_at,
+    approval_requests!inner (
+      id,
+      entity_type,
+      entity_ref,
+      organizing_dept,
+      submitted_at,
+      created_at
+    )
+  `;
 
-  if (approvalEventsError) {
-    throw new Error(`Failed to load L4 approval queue: ${approvalEventsError.message}`);
+  let pendingQueryResult = await supabase
+    .from("approval_steps")
+    .select(pendingSelectWithSchool)
+    .eq("role_code", "ACCOUNTS")
+    .in("step_code", ["ACCOUNTS", "L4_ACCOUNTS"])
+    .eq("status", "PENDING")
+    .order("created_at", { ascending: true });
+
+  if (
+    pendingQueryResult.error &&
+    isMissingColumnError(pendingQueryResult.error, "organizing_school")
+  ) {
+    pendingQueryResult = await supabase
+      .from("approval_steps")
+      .select(pendingSelectLegacy)
+      .eq("role_code", "ACCOUNTS")
+      .in("step_code", ["ACCOUNTS", "L4_ACCOUNTS"])
+      .eq("status", "PENDING")
+      .order("created_at", { ascending: true });
   }
 
-  const approvalRows = Array.isArray(approvalEventsData)
-    ? (approvalEventsData as EventWithApprovalBudgetRow[])
+  const { data: pendingStepsData, error: pendingStepsError } = pendingQueryResult;
+
+  if (pendingStepsError) {
+    throw new Error(`Failed to load L4 approval queue: ${pendingStepsError.message}`);
+  }
+
+  const pendingSteps = Array.isArray(pendingStepsData)
+    ? (pendingStepsData as ApprovalStepQueueRow[])
     : [];
+
+  const pendingRequestRows = pendingSteps
+    .map((row) => toSingleRecord(row.approval_requests))
+    .filter((row): row is ApprovalRequestQueueRow => Boolean(row))
+    .filter((requestRow) => isEventEntityType(requestRow.entity_type));
+
+  const approvalRequestIds = Array.from(
+    new Set(
+      pendingRequestRows
+        .map((row) => normalizeText(row.id))
+        .filter((value) => value.length > 0)
+    )
+  );
+
+  const approvalEventIds = Array.from(
+    new Set(
+      pendingRequestRows
+        .map((row) => normalizeText(row.entity_ref))
+        .filter((value) => value.length > 0)
+    )
+  );
+
+  let approvalEventById = new Map<string, EventRow>();
+  if (approvalEventIds.length > 0) {
+    const { data: approvalEventRowsData, error: approvalEventRowsError } = await supabase
+      .from("events")
+      .select("event_id,title,event_date,organizing_dept,organizing_school,organizer_email,fest")
+      .in("event_id", approvalEventIds);
+
+    if (approvalEventRowsError) {
+      throw new Error(`Failed to load event details for L4 queue: ${approvalEventRowsError.message}`);
+    }
+
+    const approvalEventRows = Array.isArray(approvalEventRowsData)
+      ? (approvalEventRowsData as EventRow[])
+      : [];
+
+    approvalEventById = new Map(
+      approvalEventRows
+        .map((row) => [normalizeText(row.event_id), row] as const)
+        .filter(([eventId]) => eventId.length > 0)
+    );
+  }
+
+  let approvalBudgetsByEventId = new Map<string, BudgetRow>();
+  if (approvalEventIds.length > 0) {
+    const { data: approvalBudgetRowsData, error: approvalBudgetRowsError } = await supabase
+      .from("event_budgets")
+      .select("id,event_id,total_estimated_expense,total_actual_expense,advance_paid,settlement_status,finance_status")
+      .in("event_id", approvalEventIds)
+      .gt("total_estimated_expense", 0);
+
+    if (approvalBudgetRowsError) {
+      throw new Error(`Failed to load L4 queue budgets: ${approvalBudgetRowsError.message}`);
+    }
+
+    const approvalBudgetRows = Array.isArray(approvalBudgetRowsData)
+      ? (approvalBudgetRowsData as BudgetRow[])
+      : [];
+
+    approvalBudgetsByEventId = new Map(
+      approvalBudgetRows
+        .map((row) => [normalizeText(row.event_id), row] as const)
+        .filter(([eventId]) => eventId.length > 0)
+    );
+  }
+
+  const cfoApprovedAtByRequestId = new Map<string, string>();
+  if (approvalRequestIds.length > 0) {
+    const { data: cfoStepRowsData, error: cfoStepRowsError } = await supabase
+      .from("approval_steps")
+      .select("approval_request_id,status,decided_at,created_at")
+      .in("approval_request_id", approvalRequestIds)
+      .eq("role_code", "CFO")
+      .in("step_code", ["CFO", "L3_CFO"])
+      .eq("status", "APPROVED")
+      .order("decided_at", { ascending: false });
+
+    if (cfoStepRowsError) {
+      throw new Error(`Failed to load CFO approval timestamps: ${cfoStepRowsError.message}`);
+    }
+
+    const cfoStepRows = Array.isArray(cfoStepRowsData)
+      ? (cfoStepRowsData as ApprovalStepQueueRow[])
+      : [];
+
+    cfoStepRows.forEach((stepRow) => {
+      const requestId = normalizeText(stepRow.approval_request_id);
+      if (!requestId || cfoApprovedAtByRequestId.has(requestId)) {
+        return;
+      }
+
+      cfoApprovedAtByRequestId.set(
+        requestId,
+        normalizeText(stepRow.decided_at) || normalizeText(stepRow.created_at)
+      );
+    });
+  }
 
   const organizerEmails = Array.from(
     new Set(
-      approvalRows
+      Array.from(approvalEventById.values())
         .map((row) => normalizeLower(row.organizer_email))
         .filter((email) => email.length > 0)
     )
@@ -328,29 +484,56 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
     }
   }
 
-  const approvals: FinanceL4ApprovalItem[] = approvalRows
-    .map((row) => {
-      const approval = toSingleRecord(row.approval_requests);
-      const budget = toSingleRecord(row.event_budgets);
-      const coordinatorEmail = normalizeLower(row.organizer_email);
+  const approvalsByRequestId = new Map<string, FinanceL4ApprovalItem>();
 
-      return {
-        id: normalizeText(approval?.id),
-        eventId: normalizeText(row.event_id),
-        eventName: normalizeText(row.title) || "Untitled Event",
-        eventDate: normalizeText(row.event_date) || null,
-        cfoApprovedAt: normalizeText(approval?.cfo_approved_at) || null,
-        requestedAt: normalizeText(approval?.created_at) || null,
-        departmentName: normalizeText(row.organizing_dept) || "Unknown Department",
-        schoolName: normalizeText(row.organizing_school) || "Unknown School",
-        coordinatorName: deriveCoordinatorName(
-          coordinatorEmail,
-          coordinatorEmail ? organizerNames.get(coordinatorEmail) : null
-        ),
-        totalEstimatedExpense: toNumber(budget?.total_estimated_expense),
-      };
-    })
-    .filter((item) => item.id.length > 0 && item.eventId.length > 0);
+  pendingSteps.forEach((stepRow) => {
+    const requestRow = toSingleRecord(stepRow.approval_requests);
+    if (!requestRow || !isEventEntityType(requestRow.entity_type)) {
+      return;
+    }
+
+    const requestId = normalizeText(requestRow.id);
+    const eventId = normalizeText(requestRow.entity_ref);
+    if (!requestId || !eventId || approvalsByRequestId.has(requestId)) {
+      return;
+    }
+
+    const eventRow = approvalEventById.get(eventId);
+    const budgetRow = approvalBudgetsByEventId.get(eventId);
+    if (!budgetRow) {
+      return;
+    }
+
+    const coordinatorEmail = normalizeLower(eventRow?.organizer_email);
+
+    approvalsByRequestId.set(requestId, {
+      id: requestId,
+      eventId,
+      eventName: normalizeText(eventRow?.title) || "Untitled Event",
+      eventDate: normalizeText(eventRow?.event_date) || null,
+      cfoApprovedAt: cfoApprovedAtByRequestId.get(requestId) || null,
+      requestedAt:
+        normalizeText(requestRow.submitted_at) ||
+        normalizeText(requestRow.created_at) ||
+        normalizeText(stepRow.created_at) ||
+        null,
+      departmentName:
+        normalizeText(eventRow?.organizing_dept) ||
+        normalizeText(requestRow.organizing_dept) ||
+        "Unknown Department",
+      schoolName:
+        normalizeText(eventRow?.organizing_school) ||
+        normalizeText(requestRow.organizing_school) ||
+        "Unknown School",
+      coordinatorName: deriveCoordinatorName(
+        coordinatorEmail,
+        coordinatorEmail ? organizerNames.get(coordinatorEmail) : null
+      ),
+      totalEstimatedExpense: toNumber(budgetRow.total_estimated_expense),
+    });
+  });
+
+  const approvals: FinanceL4ApprovalItem[] = Array.from(approvalsByRequestId.values());
 
   const { data: budgetRowsData, error: budgetRowsError } = await supabase
     .from("event_budgets")

@@ -285,13 +285,6 @@ export async function submitFinanceApprovalDecisionAction(input: {
       return fail("Reject/Return note must be at least 20 characters.");
     }
 
-    if (action === "approve") {
-      return processAccountsApprovalAction({
-        requestId,
-        note,
-      });
-    }
-
     const authContext = await resolveFinanceSession();
     if (!authContext.ok) {
       return fail(authContext.error);
@@ -343,7 +336,14 @@ export async function submitFinanceApprovalDecisionAction(input: {
       return fail("No pending Accounts step exists for this request.");
     }
 
-    const comments = action === "return" ? `RETURN_FOR_REVISION: ${note}` : note;
+    const comments =
+      action === "approve"
+        ? note || null
+        : action === "return"
+        ? `RETURN_FOR_REVISION: ${note}`
+        : note;
+
+    const decision = action === "approve" ? "APPROVED" : "REJECTED";
 
     const stepCode = normalizeText((pendingStepRow as Record<string, unknown>).step_code);
     if (!stepCode) {
@@ -373,7 +373,7 @@ export async function submitFinanceApprovalDecisionAction(input: {
           Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          decision: "REJECTED",
+          decision,
           comment: comments,
         }),
         cache: "no-store",
@@ -403,7 +403,12 @@ export async function submitFinanceApprovalDecisionAction(input: {
     await logFinanceAudit(supabase, {
       eventId: eventId || null,
       budgetId: null,
-      action: action === "return" ? "L4_RETURNED" : "L4_REJECTED",
+      action:
+        action === "approve"
+          ? "L4_APPROVED_STEP_DECIDED"
+          : action === "return"
+          ? "L4_RETURNED"
+          : "L4_REJECTED",
       notes: comments,
       actedByEmail: user.email || null,
       metadata: {
@@ -415,6 +420,12 @@ export async function submitFinanceApprovalDecisionAction(input: {
     });
 
     revalidatePath("/manage/finance");
+    revalidatePath("/manage/cfo");
+
+    if (action === "approve") {
+      return success("L4 finance approval recorded successfully.");
+    }
+
     return success("L4 finance decision recorded successfully.");
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error while saving decision.";
