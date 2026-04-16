@@ -1160,7 +1160,7 @@ export async function submitLogisticsDecisionAction(input: {
 export async function submitLogisticsDecisionFormAction(
   service: LogisticsServiceKey,
   formData: FormData
-): Promise<LogisticsActionResult> {
+): Promise<void> {
   const requestId = normalizeText(formData.get("requestId"));
   const actionValue = normalizeText(formData.get("action")).toLowerCase();
   const note = normalizeText(formData.get("note"));
@@ -1170,10 +1170,14 @@ export async function submitLogisticsDecisionFormAction(
       ? (actionValue as LogisticsDecisionAction)
       : "approve";
 
-  return submitLogisticsDecisionAction({
+  const result = await submitLogisticsDecisionAction({
     service,
     requestId,
     action,
     note,
   });
+
+  if (!result.ok) {
+    throw new Error(result.message || "Unable to submit logistics decision.");
+  }
 }

@@ -779,6 +779,7 @@ export type Database = {
           archived_at: string | null
           archived_by: string | null
           auth_uuid: string | null
+          budget_amount: number | null
           campus_hosted_at: string | null
           category: string | null
           closing_date: string | null
@@ -790,6 +791,7 @@ export type Database = {
           department_access: Json
           department_hosted_at: string | null
           description: string | null
+          estimated_budget_amount: number | null
           event_heads: Json
           faqs: Json
           fest_id: string
@@ -811,6 +813,7 @@ export type Database = {
           sponsors: Json
           status: string
           timeline: Json
+          total_estimated_expense: number | null
           updated_at: string
           venue: string | null
           workflow_phase: Database["public"]["Enums"]["workflow_phase_enum"]
@@ -830,6 +833,7 @@ export type Database = {
           archived_at?: string | null
           archived_by?: string | null
           auth_uuid?: string | null
+          budget_amount?: number | null
           campus_hosted_at?: string | null
           category?: string | null
           closing_date?: string | null
@@ -841,6 +845,7 @@ export type Database = {
           department_access?: Json
           department_hosted_at?: string | null
           description?: string | null
+          estimated_budget_amount?: number | null
           event_heads?: Json
           faqs?: Json
           fest_id: string
@@ -862,6 +867,7 @@ export type Database = {
           sponsors?: Json
           status?: string
           timeline?: Json
+          total_estimated_expense?: number | null
           updated_at?: string
           venue?: string | null
           workflow_phase?: Database["public"]["Enums"]["workflow_phase_enum"]
@@ -881,6 +887,7 @@ export type Database = {
           archived_at?: string | null
           archived_by?: string | null
           auth_uuid?: string | null
+          budget_amount?: number | null
           campus_hosted_at?: string | null
           category?: string | null
           closing_date?: string | null
@@ -892,6 +899,7 @@ export type Database = {
           department_access?: Json
           department_hosted_at?: string | null
           description?: string | null
+          estimated_budget_amount?: number | null
           event_heads?: Json
           faqs?: Json
           fest_id?: string
@@ -913,6 +921,7 @@ export type Database = {
           sponsors?: Json
           status?: string
           timeline?: Json
+          total_estimated_expense?: number | null
           updated_at?: string
           venue?: string | null
           workflow_phase?: Database["public"]["Enums"]["workflow_phase_enum"]
@@ -1011,11 +1020,15 @@ export type Database = {
           event_title: string | null
           id: string
           is_broadcast: boolean | null
+          is_read: boolean
+          legacy_event_id: string | null
           message: string | null
           read: boolean
+          target_role: string | null
           title: string
           type: string | null
           user_email: string | null
+          user_id: string | null
         }
         Insert: {
           action_url?: string | null
@@ -1024,11 +1037,15 @@ export type Database = {
           event_title?: string | null
           id?: string
           is_broadcast?: boolean | null
+          is_read?: boolean
+          legacy_event_id?: string | null
           message?: string | null
           read?: boolean
+          target_role?: string | null
           title: string
           type?: string | null
           user_email?: string | null
+          user_id?: string | null
         }
         Update: {
           action_url?: string | null
@@ -1037,11 +1054,15 @@ export type Database = {
           event_title?: string | null
           id?: string
           is_broadcast?: boolean | null
+          is_read?: boolean
+          legacy_event_id?: string | null
           message?: string | null
           read?: boolean
+          target_role?: string | null
           title?: string
           type?: string | null
           user_email?: string | null
+          user_id?: string | null
         }
         Relationships: []
       }
