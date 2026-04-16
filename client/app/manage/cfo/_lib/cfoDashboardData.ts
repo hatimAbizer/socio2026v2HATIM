@@ -15,9 +15,12 @@ type ApprovalRequestJoinRow = {
 
 type ApprovalStepQueueRow = {
   id?: string | null;
+  approval_request_id?: string | null;
   status?: string | null;
   created_at?: string | null;
   step_code?: string | null;
+  role_code?: string | null;
+  sequence_order?: number | string | null;
   approval_requests?: ApprovalRequestJoinRow[] | ApprovalRequestJoinRow | null;
 };
 
@@ -192,6 +195,27 @@ function isLikelyUuid(value: string): boolean {
   );
 }
 
+const ROLE_CODE_ALIASES: Record<string, string> = {
+  CAMPUS_DIRECTOR_CFO: "CFO",
+  L3_CFO: "CFO",
+  L4_ACCOUNTS: "ACCOUNTS",
+  FINANCE: "FINANCE_OFFICER",
+  FINANCE_OFFICE: "FINANCE_OFFICER",
+};
+
+function normalizeRoleCode(value: unknown): string {
+  const normalized = normalizeText(value).toUpperCase();
+  if (!normalized) {
+    return "";
+  }
+
+  return ROLE_CODE_ALIASES[normalized] || normalized;
+}
+
+function isCfoRoleCode(value: unknown): boolean {
+  return normalizeRoleCode(value) === "CFO";
+}
+
 function normalizeEntityType(value: unknown): string {
   return normalizeText(value).toUpperCase();
 }
@@ -353,6 +377,8 @@ export async function fetchCfoDashboardData({
 
   const pendingSelectWithSchool = `
     id,
+    sequence_order,
+    role_code,
     status,
     created_at,
     step_code,
@@ -370,6 +396,8 @@ export async function fetchCfoDashboardData({
 
   const pendingSelectLegacy = `
     id,
+    sequence_order,
+    role_code,
     status,
     created_at,
     step_code,
@@ -415,7 +443,68 @@ export async function fetchCfoDashboardData({
     ? (pendingStepsData as ApprovalStepQueueRow[])
     : [];
 
-  const pendingRequestRows = pendingSteps
+  const pendingRequestIds = Array.from(
+    new Set(
+      pendingSteps
+        .map((row) => normalizeText(toSingleRecord(row.approval_requests)?.id))
+        .filter((requestId) => requestId.length > 0)
+    )
+  );
+
+  let actionablePendingSteps = pendingSteps;
+
+  if (pendingRequestIds.length > 0) {
+    const { data: requestPendingStepsData, error: requestPendingStepsError } = await supabase
+      .from("approval_steps")
+      .select("approval_request_id,sequence_order,step_code,role_code,status")
+      .in("approval_request_id", pendingRequestIds)
+      .eq("status", "PENDING")
+      .order("sequence_order", { ascending: true });
+
+    if (requestPendingStepsError) {
+      throw new Error(`Failed to validate active CFO steps: ${requestPendingStepsError.message}`);
+    }
+
+    const requestPendingSteps = Array.isArray(requestPendingStepsData)
+      ? (requestPendingStepsData as ApprovalStepQueueRow[])
+      : [];
+
+    const activePendingByRequestId = new Map<
+      string,
+      { sequenceOrder: number; roleCode: string }
+    >();
+
+    requestPendingSteps.forEach((row) => {
+      const requestId = normalizeText(row.approval_request_id);
+      if (!requestId || activePendingByRequestId.has(requestId)) {
+        return;
+      }
+
+      activePendingByRequestId.set(requestId, {
+        sequenceOrder: toNumber(row.sequence_order),
+        roleCode: normalizeRoleCode(row.role_code || row.step_code),
+      });
+    });
+
+    actionablePendingSteps = pendingSteps.filter((row) => {
+      const requestId = normalizeText(toSingleRecord(row.approval_requests)?.id);
+      if (!requestId) {
+        return false;
+      }
+
+      const activeStep = activePendingByRequestId.get(requestId);
+      if (!activeStep || !isCfoRoleCode(activeStep.roleCode)) {
+        return false;
+      }
+
+      const rowSequenceOrder = toNumber(row.sequence_order);
+      const rowRoleCode = normalizeRoleCode(row.role_code || row.step_code);
+
+      return rowSequenceOrder === activeStep.sequenceOrder && isCfoRoleCode(rowRoleCode);
+    });
+  }
+
+  const pendingRequestRows = actionablePendingSteps
     .map((row) => toSingleRecord(row.approval_requests))
     .filter((row): row is ApprovalRequestJoinRow => Boolean(row))
     .filter((requestRow) => isSupportedEntityType(requestRow.entity_type));
@@ -548,7 +637,7 @@ export async function fetchCfoDashboardData({
     }
   }
 
-  const queue: CfoApprovalQueueItem[] = pendingSteps
+  const queue: CfoApprovalQueueItem[] = actionablePendingSteps
     .map((stepRow) => {
       const requestRow = toSingleRecord(stepRow.approval_requests);
       if (!requestRow || !isSupportedEntityType(requestRow.entity_type)) {

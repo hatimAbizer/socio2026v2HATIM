@@ -3155,6 +3155,18 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
     }
 
     if (!approvalStep) {
+      const normalizedRequestedRoleCode = normalizeRoleCode(stepCode);
+
+      if (normalizedRequestedRoleCode) {
+        approvalStep = (pendingStepsForRequest || []).find(
+          (stepRow) =>
+            normalizeRoleCode(stepRow?.role_code || stepRow?.step_code) ===
+            normalizedRequestedRoleCode
+        ) || null;
+      }
+    }
+
+    if (!approvalStep) {
       return res.status(404).json({ error: "Approval step not found" });
     }
 

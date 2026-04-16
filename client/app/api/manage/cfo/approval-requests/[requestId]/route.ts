@@ -14,10 +14,33 @@ type ApprovalRequestRow = {
 };
 
 type ApprovalStepRow = {
+  id?: string;
   step_code?: string | null;
   status?: string | null;
   role_code?: string | null;
+  sequence_order?: number | string | null;
 };
+
+const ROLE_CODE_ALIASES: Record<string, string> = {
+  CAMPUS_DIRECTOR_CFO: "CFO",
+  L3_CFO: "CFO",
+  L4_ACCOUNTS: "ACCOUNTS",
+  FINANCE: "FINANCE_OFFICER",
+  FINANCE_OFFICE: "FINANCE_OFFICER",
+};
+
+function normalizeRoleCode(value: unknown): string {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) {
+    return "";
+  }
+
+  return ROLE_CODE_ALIASES[normalized] || normalized;
+}
+
+function isCfoRoleCode(value: unknown): boolean {
+  return normalizeRoleCode(value) === "CFO";
+}
 
 function parseAction(value: unknown): DecisionAction | null {
   if (value === "approve" || value === "reject" || value === "return") {
@@ -90,7 +113,7 @@ export async function PATCH(
 
     const isMasterAdmin = Boolean(userProfile.is_masteradmin);
     const isCfo =
-      hasAnyRoleCode(userProfile, ["CFO"]) ||
+      hasAnyRoleCode(userProfile, ["CFO", "L3_CFO", "CAMPUS_DIRECTOR_CFO"]) ||
       Boolean(userProfile.is_cfo);
     if (!isMasterAdmin && !isCfo) {
       return jsonError(403, "Only CFO or Master Admin users can perform L3 actions.");
@@ -108,72 +131,84 @@ export async function PATCH(
       return jsonError(400, "A rejection note of at least 20 characters is required.");
     }
 
-    const { data: approvalData, error: approvalError } = await supabase
+    let approvalData: ApprovalRequestRow | null = null;
+
+    const { data: approvalByIdData, error: approvalByIdError } = await supabase
       .from("approval_requests")
       .select("id,request_id,status")
       .eq("id", requestId)
       .maybeSingle();
 
-    if (approvalError) {
-      return jsonError(500, `Failed to fetch approval request: ${approvalError.message}`);
+    if (approvalByIdError) {
+      return jsonError(500, `Failed to fetch approval request: ${approvalByIdError.message}`);
+    }
+
+    if (approvalByIdData) {
+      approvalData = approvalByIdData as ApprovalRequestRow;
+    } else {
+      const { data: approvalByRequestIdData, error: approvalByRequestIdError } = await supabase
+        .from("approval_requests")
+        .select("id,request_id,status")
+        .eq("request_id", requestId)
+        .maybeSingle();
+
+      if (approvalByRequestIdError) {
+        return jsonError(500, `Failed to fetch approval request: ${approvalByRequestIdError.message}`);
+      }
+
+      approvalData = (approvalByRequestIdData as ApprovalRequestRow | null) || null;
     }
 
     if (!approvalData) {
       return jsonError(404, "Approval request not found.");
     }
 
-    const requestRow = approvalData as ApprovalRequestRow;
+    const requestRow = approvalData;
     const requestStatus = String(requestRow.status || "").trim().toUpperCase();
     if (!requestStatus || requestStatus === "APPROVED" || requestStatus === "REJECTED") {
       return jsonError(409, "This request is no longer pending.");
     }
 
     const approvalRequestDbId = String(requestRow.id || "").trim();
-    const requestIdentifier = String(requestRow.request_id || "").trim();
+    const requestIdentifier = String(requestRow.request_id || approvalRequestDbId || "").trim();
 
     if (!approvalRequestDbId || !requestIdentifier) {
       return jsonError(400, "Approval request is missing workflow identifiers.");
     }
 
-    const { data: pendingStepData, error: pendingStepError } = await supabase
+    const { data: pendingStepsData, error: pendingStepError } = await supabase
       .from("approval_steps")
-      .select("step_code,status,role_code")
+      .select("id,step_code,status,role_code,sequence_order")
       .eq("approval_request_id", approvalRequestDbId)
-      .eq("role_code", "CFO")
       .eq("status", "PENDING")
-      .order("sequence_order", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+      .order("sequence_order", { ascending: true });
 
     if (pendingStepError) {
       return jsonError(500, `Failed to load pending CFO step: ${pendingStepError.message}`);
     }
 
-    let resolvedPendingStep = pendingStepData as ApprovalStepRow | null;
+    const pendingSteps = Array.isArray(pendingStepsData)
+      ? (pendingStepsData as ApprovalStepRow[])
+      : [];
 
-    if (!resolvedPendingStep) {
-      const { data: fallbackStepData, error: fallbackStepError } = await supabase
-        .from("approval_steps")
-        .select("step_code,status,role_code")
-        .eq("approval_request_id", approvalRequestDbId)
-        .in("step_code", ["CFO", "L3_CFO", "CAMPUS_DIRECTOR_CFO"])
-        .eq("status", "PENDING")
-        .order("sequence_order", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      if (fallbackStepError) {
-        return jsonError(500, `Failed to load pending CFO step: ${fallbackStepError.message}`);
-      }
-
-      resolvedPendingStep = (fallbackStepData as ApprovalStepRow | null) || null;
+    const activePendingStep = pendingSteps[0] || null;
+    if (!activePendingStep) {
+      return jsonError(409, "No pending approval step exists for this request.");
     }
 
-    if (!resolvedPendingStep) {
-      return jsonError(409, "No pending CFO step exists for this request.");
+    const activeRoleCode = normalizeRoleCode(
+      activePendingStep.role_code || activePendingStep.step_code
+    );
+    if (!isCfoRoleCode(activeRoleCode)) {
+      return jsonError(
+        409,
+        `Current active step is ${activeRoleCode || "UNKNOWN"}, not CFO.`
+      );
     }
 
-    const stepCode = String(resolvedPendingStep.step_code || "").trim();
+    const stepCode = String(
+      activePendingStep.step_code || activePendingStep.role_code || ""
+    ).trim();
     if (!stepCode) {
       return jsonError(400, "Approval request is missing step identifiers.");
     }

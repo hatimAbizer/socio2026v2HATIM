@@ -5,6 +5,11 @@ const KNOWN_WORKFLOW_API_ORIGINS = [
   "https://sociodevserver.vercel.app",
 ] as const;
 
+const DEVELOPMENT_WORKFLOW_API_ORIGINS = [
+  "http://localhost:8000",
+  "http://127.0.0.1:8000",
+] as const;
+
 function normalizeApiOrigin(rawValue: string | undefined): string {
   const value = String(rawValue || "").trim();
   if (!value) {
@@ -48,6 +53,8 @@ async function fetchWithTimeout(
 }
 
 export function resolveWorkflowApiOrigins(): string[] {
+  const isProduction = process.env.NODE_ENV === "production";
+
   const envOrigins = [
     process.env.NEXT_PUBLIC_API_URL,
     process.env.API_URL,
@@ -61,6 +68,13 @@ export function resolveWorkflowApiOrigins(): string[] {
   envOrigins
     .filter((origin) => origin.length > 0)
     .forEach((origin) => uniqueOrigins.add(origin));
+
+  if (!isProduction) {
+    DEVELOPMENT_WORKFLOW_API_ORIGINS
+      .map((origin) => normalizeApiOrigin(origin))
+      .filter((origin) => origin.length > 0)
+      .forEach((origin) => uniqueOrigins.add(origin));
+  }
 
   KNOWN_WORKFLOW_API_ORIGINS
     .map((origin) => normalizeApiOrigin(origin))
