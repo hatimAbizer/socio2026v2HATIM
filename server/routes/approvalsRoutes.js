@@ -720,6 +720,14 @@ const syncServiceOutcomeToEvent = async ({ serviceRequest, decidedByEmail, comme
 };
 
 const normalizeDecision = (decision) => String(decision || "").trim().toUpperCase();
+const isTruthyValue = (value) => {
+  if (value === true || value === 1 || value === "1") {
+    return true;
+  }
+
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["true", "yes", "on"].includes(normalized);
+};
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -1570,6 +1578,97 @@ const ensureDeanStepAfterHodTransition = async ({ approvalRequest, approvalStep,
   ]);
 };
 
+const ensureFinanceStepsAfterDeanTransition = async ({ approvalRequest, approvalStep, nowIso }) => {
+  const requestDbId = String(approvalRequest?.id || "").trim();
+  if (!requestDbId) {
+    return;
+  }
+
+  const stepRoleCode = normalizeRoleCode(approvalStep?.role_code || approvalStep?.step_code);
+  if (stepRoleCode !== ROLE_CODES.DEAN) {
+    return;
+  }
+
+  if (!isTruthyValue(approvalRequest?.is_budget_related)) {
+    return;
+  }
+
+  const allSteps = await queryAll("approval_steps", {
+    where: { approval_request_id: requestDbId },
+    order: { column: "sequence_order", ascending: false },
+  });
+
+  const hasCfoStep = (allSteps || []).some((stepRow) => {
+    const roleCode = normalizeRoleCode(stepRow?.role_code || stepRow?.step_code);
+    return roleCode === ROLE_CODES.CFO;
+  });
+
+  const hasAccountsStep = (allSteps || []).some((stepRow) => {
+    const roleCode = normalizeRoleCode(stepRow?.role_code || stepRow?.step_code);
+    return roleCode === ROLE_CODES.ACCOUNTS || roleCode === ROLE_CODES.FINANCE_OFFICER;
+  });
+
+  // If either finance step already exists, preserve the authored chain and do not mutate ordering.
+  if (hasCfoStep || hasAccountsStep) {
+    return;
+  }
+
+  const deanSequenceOrder = Number(approvalStep?.sequence_order || 0) || 1;
+  const deanStepGroup = Number(approvalStep?.step_group || deanSequenceOrder) || deanSequenceOrder;
+
+  for (const stepRow of allSteps || []) {
+    const stepId = String(stepRow?.id || "").trim();
+    if (!stepId || stepId === String(approvalStep?.id || "").trim()) {
+      continue;
+    }
+
+    const sequenceOrder = Number(stepRow?.sequence_order || 0);
+    if (!Number.isFinite(sequenceOrder) || sequenceOrder <= deanSequenceOrder) {
+      continue;
+    }
+
+    const stepGroupValue = Number(stepRow?.step_group || sequenceOrder);
+    const shiftedStepGroup = Number.isFinite(stepGroupValue) && stepGroupValue > 0
+      ? stepGroupValue + 2
+      : sequenceOrder + 2;
+
+    await update(
+      "approval_steps",
+      {
+        sequence_order: sequenceOrder + 2,
+        step_group: shiftedStepGroup,
+        updated_at: nowIso,
+      },
+      { id: stepId }
+    );
+  }
+
+  await insert("approval_steps", [
+    {
+      approval_request_id: requestDbId,
+      step_code: "CFO",
+      role_code: ROLE_CODES.CFO,
+      step_group: deanStepGroup + 1,
+      sequence_order: deanSequenceOrder + 1,
+      required_count: 1,
+      status: "WAITING",
+      created_at: nowIso,
+      updated_at: nowIso,
+    },
+    {
+      approval_request_id: requestDbId,
+      step_code: "ACCOUNTS",
+      role_code: ROLE_CODES.ACCOUNTS,
+      step_group: deanStepGroup + 2,
+      sequence_order: deanSequenceOrder + 2,
+      required_count: 1,
+      status: "WAITING",
+      created_at: nowIso,
+      updated_at: nowIso,
+    },
+  ]);
+};
+
 const recomputeApprovalRequestStatus = async (approvalRequestId) => {
   const steps = await queryAll("approval_steps", {
     where: { approval_request_id: approvalRequestId },
@@ -2350,6 +2449,12 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
 
     if (decision === "APPROVED") {
       await ensureDeanStepAfterHodTransition({
+        approvalRequest,
+        approvalStep,
+        nowIso,
+      });
+
+      await ensureFinanceStepsAfterDeanTransition({
         approvalRequest,
         approvalStep,
         nowIso,

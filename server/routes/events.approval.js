@@ -86,6 +86,18 @@ const parseNumber = (value) => {
   return parsed;
 };
 
+const isMissingRelationError = (error) => {
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || "").toLowerCase();
+
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    (message.includes("relation") && message.includes("does not exist")) ||
+    (message.includes("could not find") && message.includes("schema cache"))
+  );
+};
+
 const userHasRole = (userInfo, roleCode) => {
   if (!userInfo) return false;
 
@@ -181,14 +193,62 @@ const getEventBudgetAmount = (eventRecord) => {
     parseNumber(eventRecord?.budget_amount) ||
     parseNumber(eventRecord?.estimated_budget_amount) ||
     parseNumber(eventRecord?.total_estimated_expense) ||
-    parseNumber(eventRecord?.budget) ||
-    parseNumber(eventRecord?.registration_fee);
+    parseNumber(eventRecord?.budget);
 
   if (directAmount > 0) {
     return directAmount;
   }
 
   return 0;
+};
+
+const resolveEventBudgetAmount = async (eventRecord) => {
+  const directAmount = getEventBudgetAmount(eventRecord);
+  if (directAmount > 0) {
+    return directAmount;
+  }
+
+  const eventId = normalizeText(eventRecord?.event_id || eventRecord?.eventId);
+  if (!eventId) {
+    return 0;
+  }
+
+  try {
+    const budgetRow = await queryOne("event_budgets", {
+      where: { event_id: eventId },
+      select: "event_id,total_estimated_expense,total_actual_expense",
+    });
+
+    const budgetAmount =
+      parseNumber(budgetRow?.total_estimated_expense) ||
+      parseNumber(budgetRow?.total_actual_expense);
+
+    return budgetAmount > 0 ? budgetAmount : 0;
+  } catch (error) {
+    const code = String(error?.code || "").toUpperCase();
+    if (
+      isMissingRelationError(error) ||
+      code === "42703" ||
+      code === "PGRST204"
+    ) {
+      return 0;
+    }
+
+    throw error;
+  }
+};
+
+const shouldRouteThroughBudgetStep = async (eventRecord) => {
+  if (
+    asBoolean(eventRecord?.needs_budget_approval) ||
+    asBoolean(eventRecord?.claims_applicable) ||
+    asBoolean(eventRecord?.is_budget_related)
+  ) {
+    return true;
+  }
+
+  const budgetAmount = await resolveEventBudgetAmount(eventRecord);
+  return budgetAmount > 0;
 };
 
 const findApprover = async ({ roleCode, department, school, campus, excludeEmail }) =>
@@ -374,7 +434,7 @@ const routeStandaloneBudgetStep = async ({
   eventId,
   version,
 }) => {
-  const budgetAmount = getEventBudgetAmount(event);
+  const budgetAmount = await resolveEventBudgetAmount(event);
   const threshold = getCampusBudgetThreshold(event?.campus_hosted_at);
 
   if (budgetAmount <= 0) {
@@ -629,7 +689,7 @@ router.get("/:eventId/context", async (req, res) => {
       }),
     ]);
 
-    const resolvedBudgetAmount = getEventBudgetAmount(event);
+    const resolvedBudgetAmount = await resolveEventBudgetAmount(event);
     const eventForContext = {
       ...event,
       budget_amount:
@@ -788,7 +848,7 @@ router.post("/:eventId/submit", async (req, res) => {
     }
 
     const needsHodDean = asBoolean(event.needs_hod_dean_approval);
-    const needsBudget = asBoolean(event.needs_budget_approval) || asBoolean(event.claims_applicable);
+    const needsBudget = await shouldRouteThroughBudgetStep(event);
 
     if (!needsHodDean && !needsBudget) {
       const updatedEvent = await updateEventWorkflow(eventId, EVENT_STATUS.AUTO_APPROVED, {
@@ -1121,7 +1181,7 @@ router.post("/:eventId/hod-dean-action", async (req, res) => {
           version,
         });
 
-        if (asBoolean(event.needs_budget_approval) || asBoolean(event.claims_applicable)) {
+        if (await shouldRouteThroughBudgetStep(event)) {
           const budgetRouting = await routeStandaloneBudgetStep({
             event,
             requester: req.userInfo,
@@ -1220,7 +1280,7 @@ router.post("/:eventId/hod-dean-action", async (req, res) => {
           version,
         });
 
-        if (asBoolean(event.needs_budget_approval) || asBoolean(event.claims_applicable)) {
+        if (await shouldRouteThroughBudgetStep(event)) {
           const budgetRouting = await routeStandaloneBudgetStep({
             event,
             requester: req.userInfo,
