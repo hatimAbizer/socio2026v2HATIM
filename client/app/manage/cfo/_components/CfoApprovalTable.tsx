@@ -1,10 +1,11 @@
 "use client";
 
-import { CfoApprovalQueueItem } from "../types";
+import { CfoApprovalAction, CfoApprovalQueueItem } from "../types";
 import CfoApproveAndHandoffButton from "./CfoApproveAndHandoffButton";
 
 interface CfoApprovalTableProps {
   rows: CfoApprovalQueueItem[];
+  completedActions: Record<string, CfoApprovalAction>;
   activeRequestId: string | null;
   onApprove: (requestId: string) => void;
   onReject: (requestId: string) => void;
@@ -36,6 +37,7 @@ function formatDateLabel(dateValue: string | null): string {
 
 export default function CfoApprovalTable({
   rows,
+  completedActions,
   activeRequestId,
   onApprove,
   onReject,
@@ -85,6 +87,8 @@ export default function CfoApprovalTable({
           <tbody className="divide-y divide-slate-100">
             {rows.map((row) => {
               const isWorking = activeRequestId === row.id;
+              const completedAction = completedActions[row.id] || null;
+              const isCompleted = Boolean(completedAction);
 
               return (
                 <tr key={row.id} className="hover:bg-slate-50/70">
@@ -108,28 +112,46 @@ export default function CfoApprovalTable({
                   <td className="px-5 py-4 align-top text-sm text-slate-700">{row.coordinatorName}</td>
                   <td className="px-5 py-4 align-top text-sm text-slate-700">{formatDateLabel(row.eventDate)}</td>
                   <td className="px-5 py-4 align-top">
-                    <div className="flex flex-wrap gap-2">
-                      <CfoApproveAndHandoffButton
-                        onClick={() => onApprove(row.id)}
-                        disabled={isWorking}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => onReject(row.id)}
-                        disabled={isWorking}
-                        className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                    {isCompleted ? (
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                          completedAction === "approve"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : completedAction === "return"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-red-100 text-red-800"
+                        }`}
                       >
-                        Reject
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onReturn(row.id)}
-                        disabled={isWorking}
-                        className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        Return for Revision
-                      </button>
-                    </div>
+                        {completedAction === "approve"
+                          ? "Approved"
+                          : completedAction === "return"
+                            ? "Returned for Revision"
+                            : "Rejected"}
+                      </span>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        <CfoApproveAndHandoffButton
+                          onClick={() => onApprove(row.id)}
+                          disabled={isWorking}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => onReject(row.id)}
+                          disabled={isWorking}
+                          className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onReturn(row.id)}
+                          disabled={isWorking}
+                          className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Return for Revision
+                        </button>
+                      </div>
+                    )}
                     {isWorking ? <p className="mt-2 text-xs text-slate-500">Processing...</p> : null}
                   </td>
                 </tr>

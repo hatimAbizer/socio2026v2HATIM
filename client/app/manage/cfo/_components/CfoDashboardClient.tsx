@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -22,6 +22,8 @@ type ModalState = {
   errorMessage: string | null;
 };
 
+type CompletedActionMap = Record<string, CfoApprovalAction>;
+
 const currencyFormatter = new Intl.NumberFormat("en-IN", {
   style: "currency",
   currency: "INR",
@@ -29,6 +31,7 @@ const currencyFormatter = new Intl.NumberFormat("en-IN", {
 });
 
 const NOTE_MIN_CHARS = 20;
+const ROW_COMPLETION_DISPLAY_MS = 1600;
 
 async function fetchWithTimeout(
   url: string,
@@ -86,8 +89,10 @@ export default function CfoDashboardClient({
   const [metrics, setMetrics] = useState<CfoDashboardMetrics>(initialMetrics);
   const [selectedSchool, setSelectedSchool] = useState<string>("all");
   const [selectedDepartment, setSelectedDepartment] = useState<string>("all");
+  const [completedActions, setCompletedActions] = useState<CompletedActionMap>({});
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [modalState, setModalState] = useState<ModalState | null>(null);
+  const completionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const schoolOptions = useMemo(
     () =>
@@ -118,6 +123,21 @@ export default function CfoDashboardClient({
     }
   }, [departmentOptions, selectedDepartment]);
 
+  useEffect(() => {
+    return () => {
+      Object.values(completionTimers.current).forEach((timerId) => clearTimeout(timerId));
+      completionTimers.current = {};
+    };
+  }, []);
+
+  const clearCompletionTimer = (requestId: string) => {
+    const existing = completionTimers.current[requestId];
+    if (existing) {
+      clearTimeout(existing);
+      delete completionTimers.current[requestId];
+    }
+  };
+
   const filteredQueue = useMemo(() => {
     const schoolFiltered =
       selectedSchool === "all"
@@ -134,6 +154,11 @@ export default function CfoDashboardClient({
   const applySuccessfulAction = (requestId: string, action: CfoApprovalAction) => {
     const actedRow = queue.find((row) => row.id === requestId) || null;
 
+    setCompletedActions((previous) => ({
+      ...previous,
+      [requestId]: action,
+    }));
+
     if (actedRow) {
       setMetrics((previous) => ({
         ...previous,
@@ -146,7 +171,24 @@ export default function CfoDashboardClient({
       }));
     }
 
-    setQueue((previous) => previous.filter((row) => row.id !== requestId));
+    clearCompletionTimer(requestId);
+    if (action === "approve") {
+      return;
+    }
+
+    completionTimers.current[requestId] = setTimeout(() => {
+      setQueue((previous) => previous.filter((row) => row.id !== requestId));
+      setCompletedActions((previous) => {
+        if (!previous[requestId]) {
+          return previous;
+        }
+
+        const next = { ...previous };
+        delete next[requestId];
+        return next;
+      });
+      delete completionTimers.current[requestId];
+    }, ROW_COMPLETION_DISPLAY_MS);
   };
 
   const submitAction = async (params: {
@@ -339,6 +381,7 @@ export default function CfoDashboardClient({
 
       <CfoApprovalTable
         rows={filteredQueue}
+        completedActions={completedActions}
         activeRequestId={activeRequestId}
         onApprove={(requestId) => {
           void submitAction({ requestId, action: "approve" });
