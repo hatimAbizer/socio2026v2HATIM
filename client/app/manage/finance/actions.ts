@@ -201,8 +201,12 @@ async function logFinanceAudit(
   };
 
   const { error } = await supabase.from("finance_audit_log").insert(insertPayload);
-  if (error && !isMissingRelationError(error)) {
-    throw new Error(`Failed to write finance audit log: ${error.message}`);
+  if (error) {
+    if (isMissingRelationError(error)) {
+      console.warn("[finance/actions] finance_audit_log table missing — audit record not written:", error.message);
+    } else {
+      throw new Error(`Failed to write finance audit log: ${error.message}`);
+    }
   }
 }
 
@@ -339,7 +343,7 @@ export async function submitFinanceApprovalDecisionAction(input: {
 
     const { data: approvalRow, error: approvalError } = await supabase
       .from("approval_requests")
-      .select("id,request_id,event_id,entity_ref,status,approval_level")
+      .select("id,request_id,event_id,entity_ref,entity_type,status,approval_level")
       .eq("id", requestId)
       .maybeSingle();
 
@@ -464,6 +468,21 @@ export async function submitFinanceApprovalDecisionAction(input: {
 
     const eventId = normalizeText(approvalRow.event_id || approvalRow.entity_ref);
 
+    // When Finance/Accounts approves, trigger logistics approval rows (L5_*) so
+    // service role dashboards (IT, Venue, Catering, Stalls) receive their queue items.
+    let logisticsTriggerResult: { ok: boolean; message: string; generatedLevels: string[]; skippedLevels: string[] } = {
+      ok: false,
+      message: "Skipped (not an approve action).",
+      generatedLevels: [],
+      skippedLevels: [],
+    };
+
+    const entityType = normalizeText(approvalRow.entity_type).toUpperCase();
+    const isEventEntity = ["EVENT", "STANDALONE_EVENT", "FEST_CHILD_EVENT"].includes(entityType);
+    if (action === "approve" && eventId && isEventEntity) {
+      logisticsTriggerResult = await triggerLogisticsApprovals(eventId);
+    }
+
     await logFinanceAudit(supabase, {
       eventId: eventId || null,
       budgetId: null,
@@ -480,11 +499,20 @@ export async function submitFinanceApprovalDecisionAction(input: {
         request_id: requestIdentifier,
         step_code: stepCode,
         upstream_request_status: upstreamPayload?.request_status || null,
+        logistics_trigger_ok: logisticsTriggerResult.ok,
+        logistics_generated_levels: logisticsTriggerResult.generatedLevels,
+        logistics_skipped_levels: logisticsTriggerResult.skippedLevels,
       },
     });
 
     revalidatePath("/manage/finance");
     revalidatePath("/manage/cfo");
+    if (action === "approve") {
+      revalidatePath("/manage/it");
+      revalidatePath("/manage/venue");
+      revalidatePath("/manage/catering");
+      revalidatePath("/manage/stalls");
+    }
 
     if (action === "approve") {
       return success("L4 finance approval recorded successfully.");

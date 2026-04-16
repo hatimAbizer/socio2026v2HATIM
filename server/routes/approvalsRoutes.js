@@ -1993,19 +1993,31 @@ const ensureAccountsStepAfterCfoTransition = async ({ approvalRequest, approvalS
   });
 
   if (existingAccountsStep) {
+    const existingStepId = String(existingAccountsStep?.id || "").trim();
+    const existingStatus = String(existingAccountsStep?.status || "").trim().toUpperCase();
+
     const desiredStepCode = resolveFinanceStepCode(
       existingAccountsStep?.role_code || existingAccountsStep?.step_code
     );
     const currentStepCode = String(existingAccountsStep?.step_code || "").trim();
 
+    const patchFields = {};
+
     if (desiredStepCode && currentStepCode.toUpperCase() !== desiredStepCode) {
+      patchFields.step_code = desiredStepCode;
+    }
+
+    // If the accounts step was skipped (e.g. zero-budget path during Dean approval),
+    // reactivate it to WAITING so the promotion loop picks it up.
+    if (existingStatus === "SKIPPED") {
+      patchFields.status = "WAITING";
+    }
+
+    if (Object.keys(patchFields).length > 0) {
       await update(
         "approval_steps",
-        {
-          step_code: desiredStepCode,
-          updated_at: nowIso,
-        },
-        { id: String(existingAccountsStep?.id || "").trim() }
+        { ...patchFields, updated_at: nowIso },
+        { id: existingStepId }
       );
     }
 
@@ -2194,6 +2206,7 @@ const roleMatchesUserRecord = (userRow, roleCode) => {
   if (normalizedRoleCode === ROLE_CODES.SERVICE_STALLS) {
     return (
       isTruthyValue(userRow?.is_service_stalls) ||
+      isTruthyValue(userRow?.is_stalls_misc) ||
       ["service_stalls", "stalls", "stalls_service"].includes(normalizedUniversityRole)
     );
   }
@@ -3188,16 +3201,6 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
     const stepRoleCode = normalizeRoleCode(
       approvalStep.role_code || approvalStep.step_code
     );
-
-    if (
-      isMasterAdminRequest(req) &&
-      ![ROLE_CODES.HOD, ROLE_CODES.DEAN].includes(stepRoleCode)
-    ) {
-      return res.status(403).json({
-        error:
-          "Master admin can submit decisions only for HOD/Dean approval steps.",
-      });
-    }
 
     if (!(await ensureQueueAccess(req, res, stepRoleCode, approvalRequest))) {
       return;

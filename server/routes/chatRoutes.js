@@ -635,26 +635,10 @@ async function getGeminiReply({ message, history, fullSystemPrompt }) {
   throw lastError || new Error("GEMINI_UNAVAILABLE");
 }
 
-// Health check — no auth, no sensitive details.
-router.get("/health", (req, res) => {
-  const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
-  const hasGeminiKey = !!process.env.GEMINI_API_KEY;
-  const hasSupabaseUrl = !!process.env.SUPABASE_URL;
-  const hasSupabaseKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
-
+// Health check — requires auth, returns only operational status (no config details).
+router.get("/health", authenticateUser, (req, res) => {
   res.json({
     status: "ok",
-    services: {
-      ai: hasOpenAIKey || hasGeminiKey ? "configured" : "missing",
-      limits: {
-        daily_messages: CHAT_DAILY_LIMIT,
-      },
-      providers: {
-        openai: hasOpenAIKey ? "configured" : "missing",
-        gemini: hasGeminiKey ? "configured" : "missing",
-      },
-      database: hasSupabaseUrl && hasSupabaseKey ? "configured" : "missing",
-    },
     timestamp: new Date().toISOString(),
   });
 });

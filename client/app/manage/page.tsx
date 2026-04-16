@@ -619,13 +619,22 @@ const MappedFestCard = ({
   const isDraft =
     isBooleanLikeTrue(fest.is_draft) ||
     isDraftLifecycleStatus(lifecycleStatus);
-  const pendingApprovalLabel = getPendingApprovalLabel(
-    fest.workflow_status,
-    fest.lifecycle_status || fest.status
-  );
+  const festWorkflowStatusNorm = String(fest.workflow_status || "").trim().toLowerCase();
+  const festLifecycleStatusNorm = String(fest.status || fest.lifecycle_status || "").trim().toLowerCase();
+  // approvalTimeline.status comes directly from approval_requests (always fresh, no stale column risk)
+  // fest.status / workflow_status may lag if those columns weren't written due to schema gaps
+  const approvalTimelineStatus = String(approvalTimeline?.status || "").trim().toUpperCase();
+  const isFullyApproved =
+    festWorkflowStatusNorm === "fully_approved" ||
+    festLifecycleStatusNorm === "approved" ||
+    approvalTimelineStatus === "APPROVED";
+  const pendingApprovalLabel = isFullyApproved
+    ? null
+    : getPendingApprovalLabel(fest.workflow_status, fest.lifecycle_status || fest.status);
   const isApprovalPending = Boolean(pendingApprovalLabel);
   const isEditLocked = isApprovalPending;
   const showDraftState = isDraft && !isApprovalPending;
+  const isReadyToPublish = isFullyApproved && !isArchived;
   const festApprovalRequestId = String(fest.approval_request_id || "").trim() || null;
   const trackerButton = (
     <ApprovalTrackerButton
@@ -664,6 +673,8 @@ const MappedFestCard = ({
             className={`px-3 py-1.5 text-[10px] font-bold rounded-full tracking-wider shadow-sm flex items-center ${
               isEditLocked
                 ? "bg-amber-100 text-amber-800"
+                : isReadyToPublish
+                  ? "bg-green-100 text-green-700"
                 : showDraftState
                   ? "bg-slate-200 text-slate-800"
                 : isArchived
@@ -673,7 +684,7 @@ const MappedFestCard = ({
                     : "bg-white text-emerald-600"
             }`}
           >
-            {isEditLocked ? "APPROVAL PENDING" : showDraftState ? "DRAFT" : isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING"}
+            {isEditLocked ? "APPROVAL PENDING" : isReadyToPublish ? "READY TO PUBLISH" : showDraftState ? "DRAFT" : isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING"}
           </span>
         </div>
       </div>
@@ -690,6 +701,11 @@ const MappedFestCard = ({
         {isEditLocked && (
           <p className="text-xs font-semibold text-amber-700 mt-2">
             {pendingApprovalLabel}. Editing is locked until approval decision.
+          </p>
+        )}
+        {isReadyToPublish && (
+          <p className="text-xs font-semibold text-green-700 mt-2">
+            All approvals complete. Ready to publish.
           </p>
         )}
       </div>
@@ -786,9 +802,27 @@ const MappedEventCard = ({
   const isApprovalPending = Boolean(pendingApprovalLabel);
   const isEditLocked = isApprovalPending;
   const showDraftState = isDraft && !isApprovalPending;
-  const statusLabel = isEditLocked ? "APPROVAL PENDING" : showDraftState ? "DRAFT" : isArchived ? "ARCHIVED" : isPast ? "PAST" : "UPCOMING";
+  const eventWorkflowStatusNorm = String(event.workflow_status || "").trim().toLowerCase();
+  const eventLifecycleStatusNorm = String((event as any).status || (event as any).lifecycle_status || "").trim().toLowerCase();
+  const isReadyToPublish =
+    !isApprovalPending &&
+    !isArchived &&
+    (eventWorkflowStatusNorm === "fully_approved" || eventLifecycleStatusNorm === "approved");
+  const statusLabel = isEditLocked
+    ? "APPROVAL PENDING"
+    : isReadyToPublish
+    ? "READY TO PUBLISH"
+    : showDraftState
+    ? "DRAFT"
+    : isArchived
+    ? "ARCHIVED"
+    : isPast
+    ? "PAST"
+    : "UPCOMING";
   const statusClassName = isEditLocked
     ? "bg-amber-100 text-amber-800"
+    : isReadyToPublish
+    ? "bg-green-100 text-green-700"
     : showDraftState
       ? "bg-slate-200 text-slate-800"
     : isArchived
@@ -842,6 +876,11 @@ const MappedEventCard = ({
         {isEditLocked && (
           <p className="text-xs font-semibold text-amber-700">
             {pendingApprovalLabel}. Editing is locked until approval decision.
+          </p>
+        )}
+        {isReadyToPublish && (
+          <p className="text-xs font-semibold text-green-700">
+            All approvals complete. Ready to publish.
           </p>
         )}
         <div className="flex flex-wrap items-center gap-3">

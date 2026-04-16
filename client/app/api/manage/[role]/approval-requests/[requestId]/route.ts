@@ -93,16 +93,13 @@ export async function PATCH(
     }
 
     const isMasterAdmin = Boolean(userProfile.is_masteradmin);
-    if (isMasterAdmin) {
-      return jsonError(
-        403,
-        "Master admin can view and edit resources but cannot submit approval decisions."
-      );
-    }
+    const userRoleCodes: string[] = Array.isArray(userProfile.role_codes)
+      ? userProfile.role_codes.map((c: unknown) => String(c || "").trim().toUpperCase()).filter(Boolean)
+      : [];
 
     const canAccessRole =
       hasServiceRoleAccess(userProfile as Record<string, unknown>, roleConfig);
-    if (!canAccessRole) {
+    if (!isMasterAdmin && !canAccessRole) {
       return jsonError(403, `Only ${roleConfig.label} users can perform actions.`);
     }
 
@@ -162,11 +159,22 @@ export async function PATCH(
       return jsonError(409, "This request is no longer pending.");
     }
 
-    const serviceRoleCode = String(requestRow.service_role_code || "").trim().toUpperCase();
+    // REG-010: alias resolution so legacy/alternate role code spellings match
+    const SERVICE_ROLE_ALIASES: Record<string, string> = {
+      FINANCE: "FINANCE_OFFICER",
+      FINANCE_OFFICE: "FINANCE_OFFICER",
+    };
+
+    function resolveServiceRoleCode(code: string): string {
+      return SERVICE_ROLE_ALIASES[code] ?? code;
+    }
+
+    const rawServiceRoleCode = String(requestRow.service_role_code || "").trim().toUpperCase();
+    const serviceRoleCode = resolveServiceRoleCode(rawServiceRoleCode);
 
     const roleCodes = Array.isArray(roleConfig.roleCodes)
       ? roleConfig.roleCodes
-          .map((code) => String(code || "").trim().toUpperCase())
+          .map((code) => resolveServiceRoleCode(String(code || "").trim().toUpperCase()))
           .filter((code) => code.length > 0)
       : [];
 
@@ -174,6 +182,7 @@ export async function PATCH(
       return jsonError(500, "Role configuration is missing role code mappings.");
     }
 
+    // REG-014: validate the resolved service role code matches this handler's role
     if (!roleCodes.includes(serviceRoleCode)) {
       return jsonError(403, `This request is not assigned to ${roleConfig.label} queue.`);
     }

@@ -52,9 +52,13 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'http://127.0.0.1:3000'
 ];
 
+// NOTE: The old wildcard patterns (^https://.*\.vercel\.app$ and ^https://.*\.christuniversity\.in$)
+// were too broad — any subdomain on those domains would pass. Specific preview URL patterns
+// should be added via the ALLOWED_ORIGIN_PATTERNS environment variable on each deployment.
 const DEFAULT_ALLOWED_ORIGIN_PATTERNS = [
-  '^https://.*\\.vercel\\.app$',
-  '^https://.*\\.christuniversity\\.in$'
+  // Only specific christuniversity.in subdomains
+  '^https://socio\\.christuniversity\\.in$',
+  '^https://sociodev\\.christuniversity\\.in$',
 ];
 
 const parseCsvEnv = (value) =>

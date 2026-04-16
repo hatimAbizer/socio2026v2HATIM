@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, memo, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 
 const API_URL = "";
@@ -99,9 +100,10 @@ const NotificationSystemComponent: React.FC<NotificationSystemProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const { userData, session } = useAuth();
+  const router = useRouter();
 
   // OPTIMIZATION: Memoize fetchNotifications with useCallback
-  const fetchNotifications = useCallback(async (page = 1, append = false) => {
+  const fetchNotifications = useCallback(async (page = 1, append = false, signal?: AbortSignal) => {
     if (!session?.access_token || !userData?.email) return;
 
     setLoading(true);
@@ -113,6 +115,7 @@ const NotificationSystemComponent: React.FC<NotificationSystemProps> = ({
           headers: {
             Authorization: `Bearer ${session.access_token}`,
           },
+          signal,
         }
       );
 
@@ -147,6 +150,7 @@ const NotificationSystemComponent: React.FC<NotificationSystemProps> = ({
         setCurrentPage(page);
       }
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return; // expected on unmount
       console.error("Error fetching notifications:", error);
     } finally {
       setLoading(false);
@@ -160,12 +164,18 @@ const NotificationSystemComponent: React.FC<NotificationSystemProps> = ({
   }, [loading, hasMore, currentPage, fetchNotifications]);
 
   useEffect(() => {
-    if (userData?.email) {
-      fetchNotifications();
-      // Set up polling for new notifications every 30 seconds
-      const interval = setInterval(fetchNotifications, 30000);
-      return () => clearInterval(interval);
-    }
+    if (!userData?.email) return;
+
+    const controller = new AbortController();
+
+    const poll = () => fetchNotifications(1, false, controller.signal);
+    poll();
+    const interval = setInterval(poll, 30000);
+
+    return () => {
+      clearInterval(interval);
+      controller.abort(); // cancel any in-flight fetch on unmount
+    };
   }, [userData?.email, fetchNotifications]);
 
   // OPTIMIZATION: Memoize markAsRead with useCallback
@@ -296,12 +306,12 @@ const NotificationSystemComponent: React.FC<NotificationSystemProps> = ({
     setIsOpen(false);
 
     if (notification.actionUrl) {
-      window.location.href = notification.actionUrl;
+      router.push(notification.actionUrl);
     } else if (notification.eventId) {
       // Fallback: navigate using eventId directly
       // Check if it looks like a fest or event based on notification title
-      const isFest = notification.title?.toLowerCase().includes('fest');
-      window.location.href = isFest ? `/fest/${notification.eventId}` : `/event/${notification.eventId}`;
+      const isFest = notification.title?.toLowerCase().includes("fest");
+      router.push(isFest ? `/fest/${notification.eventId}` : `/event/${notification.eventId}`);
     }
   };
 

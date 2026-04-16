@@ -10,7 +10,7 @@ import {
   requireOwnership,
   optionalAuth
 } from "../middleware/authMiddleware.js";
-import { sendBroadcastNotification } from "./notificationRoutes.js";
+import { sendBroadcastNotification, sendUserNotifications } from "./notificationRoutes.js";
 import { pushFestToGated, isGatedEnabled } from "../utils/gatedSync.js";
 import { getFestTableForDatabase } from "../utils/festTableResolver.js";
 import { ROLE_CODES, hasAnyRoleCode } from "../utils/roleAccessService.js";
@@ -396,6 +396,95 @@ export const findActiveApprovalRequestForEntity = async ({ entityType, entityRef
     }
 
     throw error;
+  }
+};
+
+const getFestApprovalRoleLabel = (roleCode) => {
+  const normalized = String(roleCode || "").trim().toUpperCase();
+  if (normalized === ROLE_CODES.HOD) return "HOD";
+  if (normalized === ROLE_CODES.DEAN) return "Dean";
+  if (normalized === ROLE_CODES.CFO) return "CFO";
+  if (normalized === ROLE_CODES.ACCOUNTS || normalized === ROLE_CODES.FINANCE_OFFICER) return "Finance Officer";
+  return normalized || "Approver";
+};
+
+const getFestApprovalActionUrlForRole = (roleCode) => {
+  const normalized = String(roleCode || "").trim().toUpperCase();
+  if (normalized === ROLE_CODES.HOD) return "/manage/hod";
+  if (normalized === ROLE_CODES.DEAN) return "/manage/dean";
+  if (normalized === ROLE_CODES.CFO) return "/manage/cfo";
+  if (normalized === ROLE_CODES.ACCOUNTS || normalized === ROLE_CODES.FINANCE_OFFICER) return "/manage/finance";
+  return "/manage";
+};
+
+const notifyFestSubmittedForApproval = async ({ festRecord, approvalRequest, initiatedByEmail }) => {
+  const festId = String(festRecord?.fest_id || "").trim();
+  if (!festId || !approvalRequest?.id) {
+    return;
+  }
+
+  const festTitle = String(festRecord?.fest_title || festRecord?.title || "").trim() || "Fest";
+  const organizerEmail = String(
+    festRecord?.contact_email || festRecord?.created_by || approvalRequest?.requested_by_email || initiatedByEmail || ""
+  ).trim().toLowerCase();
+
+  const organizerActionUrl = `/approvals/organiser/${encodeURIComponent(festId)}`;
+
+  if (organizerEmail) {
+    await sendUserNotifications({
+      userEmails: [organizerEmail],
+      title: "Fest sent for approval",
+      message: `${festTitle} has been sent for approval. You will get updates as each step is reviewed.`,
+      type: "info",
+      event_id: festId,
+      event_title: festTitle,
+      action_url: organizerActionUrl,
+    });
+  }
+
+  let approvalSteps = [];
+  try {
+    approvalSteps = await queryAll("approval_steps", {
+      where: { approval_request_id: approvalRequest.id },
+      order: { column: "sequence_order", ascending: true },
+    });
+  } catch (_error) {
+    // approval_steps table may not exist yet — skip
+    return;
+  }
+
+  const uniqueRoleCodes = Array.from(
+    new Set(
+      (approvalSteps || [])
+        .map((step) => String(step?.role_code || "").trim().toUpperCase())
+        .filter(Boolean)
+    )
+  );
+
+  for (const roleCode of uniqueRoleCodes) {
+    const approver = await resolveRoleMatrixApprover({
+      roleCode,
+      department: festRecord?.organizing_dept || null,
+      school: festRecord?.organizing_school || null,
+      campus: festRecord?.campus_hosted_at || festRecord?.department_hosted_at || null,
+      excludeEmail: organizerEmail || undefined,
+    }).catch(() => null);
+
+    const approverEmail = String(approver?.email || "").trim().toLowerCase();
+    if (!approverEmail || approverEmail === organizerEmail) {
+      continue;
+    }
+
+    const roleLabel = getFestApprovalRoleLabel(roleCode);
+    await sendUserNotifications({
+      userEmails: [approverEmail],
+      title: `Approval required: ${festTitle}`,
+      message: `${festTitle} has been sent for ${roleLabel} approval. Please review it.`,
+      type: "warning",
+      event_id: festId,
+      event_title: festTitle,
+      action_url: getFestApprovalActionUrlForRole(roleCode),
+    });
   }
 };
 
@@ -1750,6 +1839,16 @@ router.post(
             createdFest = refreshedFest;
           }
         }
+
+        if (workflowApprovalRequest) {
+          notifyFestSubmittedForApproval({
+            festRecord: { ...(createdFest || {}), ...festPayload, fest_id },
+            approvalRequest: workflowApprovalRequest,
+            initiatedByEmail: req.userInfo?.email || null,
+          }).catch((notifError) => {
+            console.error("[FestApprovalNotify] Failed to dispatch fest approval notifications:", notifError);
+          });
+        }
       }
 
       // Grant organiser-student access to event heads with expiration dates
@@ -2287,6 +2386,14 @@ router.put(
               updatedFest = refreshedFest;
             }
           }
+
+          notifyFestSubmittedForApproval({
+            festRecord: { ...(updatedFest || {}), ...updatePayload, fest_id: festId },
+            approvalRequest: workflowApprovalRequest,
+            initiatedByEmail: req.userInfo?.email || null,
+          }).catch((notifError) => {
+            console.error("[FestApprovalNotify] Failed to dispatch fest approval notifications:", notifError);
+          });
         }
       } else if (isApprovedLifecyclePublishIntent) {
         const publishValidation = await validateFestApprovalChainForPublish({

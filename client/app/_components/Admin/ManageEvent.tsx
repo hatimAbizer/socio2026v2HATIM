@@ -729,6 +729,7 @@ export interface EventSubmitResult {
   message?: string;
   approvalState?: string | null;
   activationState?: string | null;
+  eventId?: string | null;
 }
 
 type EventSubmitAction = (
@@ -2346,6 +2347,7 @@ export default function EventForm({
     mode: EventWorkflowOutcome;
     message: string;
   } | null>(null);
+  const [publishedEventId, setPublishedEventId] = React.useState<string | null>(null);
 
   const applyServerFieldErrors = React.useCallback(
     (incoming: unknown) => {
@@ -2423,6 +2425,9 @@ export default function EventForm({
         mode: isApprovalPending ? "approval_pending" : "published",
         message: String(submitResult?.message || defaultPublishMessage),
       });
+
+      const resolvedEventId = String(submitResult?.eventId || "").trim() || null;
+      setPublishedEventId(resolvedEventId);
 
       setSuccessAction("publish");
       // Don't show modal yet — let the overlay finish its animation first
@@ -2537,13 +2542,24 @@ export default function EventForm({
   }, [pendingSuccess]);
 
   const handleNavigationToDashboard = () => {
+    const shouldGoToEvent =
+      publishFeedback?.mode === "published" &&
+      Boolean(publishedEventId) &&
+      !isEditMode;
+
     setModalVisible(false);
     setSuccessAction("publish");
     setWasDraftOnSubmit(false);
     setPublishFeedback(null);
+    setPublishedEventId(null);
+
     setTimeout(() => {
       setIsNavigating(true);
-      router.push("/manage");
+      if (shouldGoToEvent) {
+        router.push(`/event/${encodeURIComponent(publishedEventId!)}`);
+      } else {
+        router.push("/manage");
+      }
     }, 300);
   };
 
@@ -2829,7 +2845,7 @@ export default function EventForm({
                 {successAction === "draft"
                   ? "Draft Saved!"
                   : publishFeedback?.mode === "approval_pending"
-                  ? "Sent for Approval!"
+                  ? "Event Sent for Approval!"
                   : `Event ${
                       isEditMode && wasDraftOnSubmit ? "Published!" : isEditMode ? "Updated!" : "Published!"
                     }`}
@@ -2842,12 +2858,39 @@ export default function EventForm({
                       isEditMode && wasDraftOnSubmit ? "published" : isEditMode ? "updated" : "published"
                     }.`}
               </p>
-              <button
-                onClick={handleNavigationToDashboard}
-                className={primaryButtonClasses}
-              >
-                Back to Dashboard
-              </button>
+              {publishFeedback?.mode === "approval_pending" ? (
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <button
+                    onClick={() => {
+                      setModalVisible(false);
+                      setSuccessAction("publish");
+                      setWasDraftOnSubmit(false);
+                      setPublishFeedback(null);
+                      setPublishedEventId(null);
+                      setTimeout(() => {
+                        setIsNavigating(true);
+                        router.push("/");
+                      }, 300);
+                    }}
+                    className={`${primaryButtonClasses} flex-1`}
+                  >
+                    Homepage
+                  </button>
+                  <button
+                    onClick={handleNavigationToDashboard}
+                    className={`${primaryButtonClasses} flex-1`}
+                  >
+                    Manage Events
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleNavigationToDashboard}
+                  className={primaryButtonClasses}
+                >
+                  Back to Dashboard
+                </button>
+              )}
             </div>
           )}
           {showRegistrationsClosedModal && !isNavigating && !isModalOpen && (

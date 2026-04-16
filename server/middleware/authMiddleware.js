@@ -148,7 +148,7 @@ const resolveUserFromDatabase = async ({ authUserId, authEmail, authUser }) => {
             { id: userByEmail.id }
           );
           resolvedUser = Array.isArray(linkedRows) && linkedRows.length > 0 ? linkedRows[0] : userByEmail;
-          console.log(`[UserInfo] ✅ Linked existing user by email to auth_uuid: ${authEmail}`);
+          if (process.env.NODE_ENV !== "production") console.log("[UserInfo] ✅ Linked existing user by email to auth_uuid");
         } catch (linkError) {
           console.error("[UserInfo] Failed to link existing user by email:", linkError);
           resolvedUser =
@@ -180,19 +180,26 @@ const resolveUserFromDatabase = async ({ authUserId, authEmail, authUser }) => {
   };
 
   try {
-    const insertedRows = await insert("users", [createPayload]);
-    resolvedUser = Array.isArray(insertedRows) && insertedRows.length > 0 ? insertedRows[0] : null;
+    // Use upsert on email to avoid race condition on concurrent first-logins
+    const { data: upsertedUser, error: upsertError } = await supabase
+      .from("users")
+      .upsert(createPayload, { onConflict: "email", ignoreDuplicates: false })
+      .select()
+      .single();
+
+    if (upsertError) {
+      throw new Error(`User provisioning failed: ${upsertError.message}`);
+    }
+
+    resolvedUser = upsertedUser;
     if (resolvedUser) {
-      console.log(`[UserInfo] ✅ Auto-provisioned missing user for: ${authEmail}`);
+      if (process.env.NODE_ENV !== "production") {
+        console.log(`[UserInfo] ✅ Auto-provisioned missing user`);
+      }
       return resolvedUser;
     }
   } catch (createError) {
-    const duplicateConflictCode = String(createError?.code || "").toUpperCase();
-    if (duplicateConflictCode !== "23505") {
-      throw createError;
-    }
-
-    console.warn(`[UserInfo] Race while auto-provisioning user for ${authEmail}; retrying lookup.`);
+    throw createError;
   }
 
   return await queryOne("users", { where: { email: authEmail } });
@@ -361,7 +368,7 @@ export const getUserInfo = () => {
         return res.status(401).json({ error: 'User not authenticated' });
       }
 
-      console.log(`[UserInfo] 🔍 Fetching user info for UUID: ${req.userId}`);
+      if (process.env.NODE_ENV !== "production") console.log("[UserInfo] 🔍 Fetching user info");
       const authEmail = normalizeEmailAddress(req.user?.email);
       const user = await resolveUserFromDatabase({
         authUserId: req.userId,
@@ -374,7 +381,7 @@ export const getUserInfo = () => {
         return res.status(404).json({ error: 'User not found in database' });
       }
 
-      console.log(`[UserInfo] ✅ Found user: ${user.email}`);
+      if (process.env.NODE_ENV !== "production") console.log("[UserInfo] ✅ Found user");
       req.userInfo = await enrichUserInfoWithRoles(user);
       next();
     } catch (error) {
@@ -397,7 +404,7 @@ export const requireOrganiser = (req, res, next) => {
   const userIsMasterAdmin = isMasterAdminUser(req.userInfo);
   const roleCodes = Array.isArray(req.userInfo.role_codes) ? req.userInfo.role_codes : [];
 
-  console.log(`[ORGANISER CHECK] Checking user: ${req.userInfo.email}, is_organiser: ${req.userInfo.is_organiser}, role_codes: ${roleCodes.join(',')}`);
+  if (process.env.NODE_ENV !== "production") console.log("[ORGANISER CHECK] Checking user access");
   
   if (!userIsOrganiser && !userIsMasterAdmin) {
     console.warn(`[ORGANISER CHECK] ❌ User ${req.userInfo.email} is NOT an organiser. Access denied.`);
@@ -408,7 +415,7 @@ export const requireOrganiser = (req, res, next) => {
     });
   }
 
-  console.log(`[ORGANISER CHECK] ✅ User ${req.userInfo.email} has organiser-equivalent access. Proceeding.`);
+  if (process.env.NODE_ENV !== "production") console.log("[ORGANISER CHECK] ✅ User has organiser-equivalent access.");
   next();
 };
 
@@ -427,7 +434,7 @@ export const requireMasterAdmin = (req, res, next) => {
     });
   }
 
-  console.log(`[MasterAdmin] Access granted to ${req.userInfo.email}`);
+  if (process.env.NODE_ENV !== "production") console.log("[MasterAdmin] Access granted.");
   return next();
 };
 

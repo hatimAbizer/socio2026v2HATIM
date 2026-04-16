@@ -174,6 +174,21 @@ const isFestApprovedForChildEvent = (festRecord) => {
 
 const createTeacherApprovalRequestForChildEvent = async ({ eventRecord, userInfo }) => {
   try {
+    // Pre-check for an existing active approval request to avoid unhandled DB 23505
+    const existingRows = await queryAll("approval_requests", {
+      where: { entity_type: "FEST_CHILD_EVENT", entity_ref: eventRecord.event_id },
+      order: { column: "created_at", ascending: false },
+    }).catch(() => null);
+
+    const existingActive = (existingRows || []).find((row) => {
+      const st = String(row?.status || "").trim().toUpperCase();
+      return st === "UNDER_REVIEW" || st === "DRAFT" || st === "PENDING";
+    });
+
+    if (existingActive) {
+      return existingActive;
+    }
+
     const requestId = `APR-${eventRecord.event_id}-${Date.now()}`;
     const nowIso = new Date().toISOString();
     const isBudgetRelated = Number(eventRecord.registration_fee || 0) > 0;
@@ -213,7 +228,7 @@ const createTeacherApprovalRequestForChildEvent = async ({ eventRecord, userInfo
     await insert("approval_steps", [
       {
         approval_request_id: approvalRequest.id,
-        step_code: "ORGANIZER_TEACHER",
+        step_code: "ORGANIZER",
         role_code: ROLE_CODES.ORGANIZER_TEACHER,
         step_group: 1,
         sequence_order: 1,
@@ -1430,7 +1445,7 @@ if (debugRoutesEnabled) {
     checkRoleExpiration,
     async (req, res) => {
       try {
-        console.log("[DEBUG] User status request from:", req.userInfo.email);
+        if (process.env.NODE_ENV !== "production") console.log("[DEBUG] User status request from:", req.userInfo.email);
         
         return res.json({
           authenticated: true,
@@ -2404,15 +2419,16 @@ router.post(
       pdf: null,
     };
 
-    console.log("POST /api/events - Request received");
-    console.log("Content-Type:", req.headers['content-type']); // Log content type
-    
-    if (req.files) {
-      console.log("Files keys:", Object.keys(req.files));
-      if (req.files.eventImage) console.log("eventImage:", req.files.eventImage[0].originalname, req.files.eventImage[0].mimetype, req.files.eventImage[0].size);
-      if (req.files.bannerImage) console.log("bannerImage:", req.files.bannerImage[0].originalname, req.files.bannerImage[0].mimetype, req.files.bannerImage[0].size);
-    } else {
-      console.log("No files in req.files");
+    if (process.env.NODE_ENV !== "production") {
+      console.log("POST /api/events - Request received");
+      console.log("Content-Type:", req.headers['content-type']);
+      if (req.files) {
+        console.log("Files keys:", Object.keys(req.files));
+        if (req.files.eventImage) console.log("eventImage:", req.files.eventImage[0].originalname, req.files.eventImage[0].mimetype, req.files.eventImage[0].size);
+        if (req.files.bannerImage) console.log("bannerImage:", req.files.bannerImage[0].originalname, req.files.bannerImage[0].mimetype, req.files.bannerImage[0].size);
+      } else {
+        console.log("No files in req.files");
+      }
     }
 
     try {
@@ -2450,6 +2466,14 @@ router.post(
         asBoolean(save_as_draft);
       const shouldSaveAsDraft = shouldSaveAsDraftByInput || userIsOrganizerStudentOnly;
       const isStandaloneEvent = !normalizedFestId;
+
+      // Spec: Events must be created under an approved fest — standalone events are not permitted.
+      if (isStandaloneEvent) {
+        return res.status(400).json({
+          error: "Events must be created under an approved fest. Please create or select a fest first.",
+        });
+      }
+
       const shouldRemainDraftUntilApproval = shouldSaveAsDraft || isStandaloneEvent;
       const shouldArchiveOnCreate =
         asBoolean(is_archived) && !shouldSaveAsDraft && !userIsOrganizerStudentOnly;
@@ -2563,12 +2587,20 @@ router.post(
         });
       }
 
+      // Per-type file size enforcement (server-side, matching client Zod schema limits)
+      if (req.files?.bannerImage?.[0]?.size > 2 * 1024 * 1024) {
+        return res.status(400).json({ error: "Banner image must be 2 MB or less." });
+      }
+      if (req.files?.eventImage?.[0]?.size > 3 * 1024 * 1024) {
+        return res.status(400).json({ error: "Event image must be 3 MB or less." });
+      }
+
       // Validation
       if (!title || typeof title !== "string" || title.trim() === "") {
         return res.status(400).json({ error: "Title is required and must be a non-empty string." });
       }
 
-      console.log("✅ Title validation passed:", title);
+      if (process.env.NODE_ENV !== "production") console.log("✅ Title validation passed");
 
       // Generate slug-based ID from title
       let event_id = title
@@ -3306,46 +3338,47 @@ router.put(
       const event = req.resource; // Existing event from middleware
       const files = req.files;
       
-      // DEBUG: Log what we received
-      console.log("=== PUT EVENT RECEIVED ===");
-      console.log("req.body:", JSON.stringify(req.body, null, 2));
-      console.log("req.body.title:", req.body.title);
-      console.log("typeof req.body.title:", typeof req.body.title);
-      console.log("files:", files ? Object.keys(files) : "no files");
-      console.log("=== END ===");
-      
+      if (process.env.NODE_ENV !== "production") {
+        console.log("=== PUT EVENT RECEIVED ===");
+        console.log("req.body.title:", req.body.title);
+        console.log("files:", files ? Object.keys(files) : "no files");
+        console.log("=== END ===");
+      }
+
+      // Per-type file size enforcement (server-side, matching client Zod schema limits)
+      if (req.files?.bannerImage?.[0]?.size > 2 * 1024 * 1024) {
+        return res.status(400).json({ error: "Banner image must be 2 MB or less." });
+      }
+      if (req.files?.eventImage?.[0]?.size > 3 * 1024 * 1024) {
+        return res.status(400).json({ error: "Event image must be 3 MB or less." });
+      }
+
       const uploadedFilePaths = {
         image: event.event_image_url,
         banner: event.banner_url,
         pdf: event.pdf_url,
       };
 
-      console.log("📁 Initial file paths from existing event:");
-      console.log(`  image: ${uploadedFilePaths.image}`);
-      console.log(`  banner: ${uploadedFilePaths.banner}`);
-      console.log(`  pdf: ${uploadedFilePaths.pdf}`);
+      if (process.env.NODE_ENV !== "production") {
+        console.log("📁 Initial file paths from existing event:", uploadedFilePaths);
+      }
 
       // Handle file uploads if new files are provided
       try {
         if (files?.eventImage && files.eventImage[0]) {
-          console.log(`📤 Uploading new event image: ${files.eventImage[0].originalname}`);
           const result = await uploadFileToSupabase(files.eventImage[0], "event-images", eventId);
           if (result?.publicUrl) {
-            console.log(`✅ Event image uploaded successfully: ${result.publicUrl}`);
             uploadedFilePaths.image = result.publicUrl;
           } else {
             console.warn(`⚠️ Event image upload returned no URL - keeping existing image`);
           }
         } else if (req.body.removeImageFile === "true") {
-          console.log(`🗑️ Event image removal requested.`);
           uploadedFilePaths.image = null;
         }
 
         if (files?.bannerImage && files.bannerImage[0]) {
-          console.log(`📤 Uploading new banner image: ${files.bannerImage[0].originalname}`);
           const result = await uploadFileToSupabase(files.bannerImage[0], "event-banners", eventId);
           if (result?.publicUrl) {
-            console.log(`✅ Banner image uploaded successfully: ${result.publicUrl}`);
             uploadedFilePaths.banner = result.publicUrl;
           } else {
             console.warn(`⚠️ Banner image upload returned no URL - keeping existing banner`);
@@ -3403,7 +3436,18 @@ router.put(
       } = req.body;
 
       const userIsOrganizerStudentOnly = isOrganizerStudentOnlyUser(req.userInfo);
-      const normalizedFestReference = normalizeFestReference(fest_id ?? fest);
+      // Fall back to the existing event's fest_id if not provided in the update body.
+      // This preserves fest association and prevents accidental removal.
+      const normalizedFestReference =
+        normalizeFestReference(fest_id ?? fest) ||
+        normalizeFestReference(event?.fest_id ?? event?.fest);
+
+      // Spec: All events must be under an approved fest — reject if fest_id would be cleared.
+      if (!normalizedFestReference) {
+        return res.status(400).json({
+          error: "Events must be associated with an approved fest and cannot be made standalone.",
+        });
+      }
 
       const rawArchivePreference =
         is_archived !== undefined && is_archived !== null && String(is_archived).trim() !== ""

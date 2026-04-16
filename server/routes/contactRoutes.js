@@ -1,4 +1,5 @@
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { insert, queryAll } from "../config/database.js";
 import {
   authenticateUser,
@@ -10,22 +11,36 @@ import { ROLE_CODES } from "../utils/roleAccessService.js";
 
 const router = express.Router();
 
-router.post("/contact", async (req, res) => {
+const contactLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many contact requests. Please try again later." },
+});
+
+router.post("/contact", contactLimiter, async (req, res) => {
   const { name, email, subject, message, source } = req.body || {};
 
-  if (!name || !email || !subject || !message) {
-    return res.status(400).json({
-      success: false,
-      message: "Name, email, subject, and message are required."
-    });
+  if (!name || typeof name !== "string" || name.trim().length === 0 || name.length > 255) {
+    return res.status(400).json({ success: false, message: "Invalid name." });
+  }
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email)) || email.length > 255) {
+    return res.status(400).json({ success: false, message: "Invalid email address." });
+  }
+  if (!subject || typeof subject !== "string" || subject.trim().length === 0 || subject.length > 255) {
+    return res.status(400).json({ success: false, message: "Invalid subject." });
+  }
+  if (!message || typeof message !== "string" || message.trim().length === 0 || message.length > 5000) {
+    return res.status(400).json({ success: false, message: "Message must be between 1 and 5000 characters." });
   }
 
   const payload = {
     name: String(name).trim(),
-    email: String(email).trim(),
+    email: String(email).trim().toLowerCase(),
     subject: String(subject).trim(),
     message: String(message).trim(),
-    source: source ? String(source).trim() : "contact",
+    source: source ? String(source).trim().slice(0, 50) : "contact",
     status: "new",
     created_at: new Date().toISOString()
   };

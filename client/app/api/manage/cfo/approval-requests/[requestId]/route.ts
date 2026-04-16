@@ -38,8 +38,10 @@ function normalizeRoleCode(value: unknown): string {
   return ROLE_CODE_ALIASES[normalized] || normalized;
 }
 
+const CFO_ROLE_CODES = new Set(["CFO", "FINANCE_OFFICER"]);
+
 function isCfoRoleCode(value: unknown): boolean {
-  return normalizeRoleCode(value) === "CFO";
+  return CFO_ROLE_CODES.has(normalizeRoleCode(value));
 }
 
 function parseAction(value: unknown): DecisionAction | null {

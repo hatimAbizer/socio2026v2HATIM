@@ -5,7 +5,7 @@ import { hasAnyRoleCode } from "@/lib/roleDashboards";
 import { getCurrentUserProfileWithRoleCodes } from "@/lib/serverRoleProfile";
 import { fetchWorkflowApiWithFailover } from "@/lib/workflowApiClient";
 
-type DecisionAction = "approve" | "return";
+type DecisionAction = "approve" | "return" | "reject";
 
 type ApprovalRequestRow = {
   id?: string;
@@ -383,7 +383,10 @@ export async function PATCH(
         return jsonError(403, "This request does not belong to your department scope.");
       }
 
-      if (!campusScope || !allowedCampuses.includes(campusScope)) {
+      // Only enforce campus match when the request has a campus set.
+      // An event/fest with no campus_hosted_at is accessible to any HOD
+      // within the matching department scope.
+      if (campusScope && !allowedCampuses.includes(campusScope)) {
         return jsonError(403, "This request does not belong to your campus scope.");
       }
     }
@@ -439,7 +442,11 @@ export async function PATCH(
           },
           body: JSON.stringify({
             decision: action === "approve" ? "APPROVED" : "REJECTED",
-            comment: action === "return" ? `RETURN_FOR_REVISION: ${note}` : null,
+            comment: action === "return"
+              ? `RETURN_FOR_REVISION: ${note}`
+              : action === "reject"
+              ? note || null
+              : null,
           }),
         },
         20000

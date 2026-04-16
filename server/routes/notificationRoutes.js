@@ -75,6 +75,7 @@ export async function sendUserNotification({
         action_url: action_url || null,
         user_email: targetEmail,
         is_broadcast: false,
+        is_read: false,
         read: false,
       })
       .select()
@@ -220,7 +221,7 @@ function mapNotification(n, userStatus = null) {
   // For individual notifications, it's on the row itself
   const isRead = isBroadcast
     ? (userStatus?.is_read ?? false)
-    : (n.read ?? false);
+    : (n.is_read ?? n.read ?? false);
 
   return {
     id: n.id,
@@ -612,7 +613,7 @@ router.patch("/notifications/:id/read", async (req, res) => {
       // Individual → update the notification row directly
       const { error } = await supabase
         .from('notifications')
-        .update({ read: true })
+        .update({ is_read: true, read: true })
         .eq('id', id);
 
       if (error) throw error;
@@ -639,9 +640,9 @@ router.patch("/notifications/mark-read", async (req, res) => {
     // 1. Mark individual notifications as read
     await supabase
       .from('notifications')
-      .update({ read: true })
+      .update({ is_read: true, read: true })
       .eq('user_email', email)
-      .eq('read', false);
+      .eq('is_read', false);
 
     // 2. Handle broadcasts — upsert read status for every broadcast
     const { data: broadcasts } = await supabase

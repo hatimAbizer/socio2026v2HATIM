@@ -193,6 +193,7 @@ export async function middleware(req: NextRequest) {
   const isCfoManagementRoute = pathname.startsWith("/manage/cfo");
   const isStudentOrganiserManagementRoute = pathname.startsWith("/manage/student-organiser");
   const isFinanceManagementRoute = pathname.startsWith("/manage/finance");
+  const isOrganizerManagementRoute = pathname === "/manage/organizer" || pathname.startsWith("/manage/organizer/");
   const isVenueServiceRoute = pathname === "/manage/venue" || pathname.startsWith("/manage/venue/");
   const isItServiceRoute = pathname === "/manage/it" || pathname.startsWith("/manage/it/");
   const isCateringServiceRoute = pathname === "/manage/catering" || pathname.startsWith("/manage/catering/");
@@ -269,7 +270,7 @@ export async function middleware(req: NextRequest) {
       normalizedUniversityRole === "masteradmin" ||
       normalizedUniversityRole === "master_admin";
     const isOrganiser =
-      Boolean(userData?.is_organiser) || hasAnyRoleCode(resolvedUserData, ["ORGANIZER_TEACHER"]);
+      Boolean(userData?.is_organiser) || hasAnyRoleCode(resolvedUserData, ["ORGANIZER"]);
     const isHod =
       Boolean((userData as any)?.is_hod) ||
       hasAnyRoleCode(resolvedUserData, ["HOD"]);
@@ -284,7 +285,8 @@ export async function middleware(req: NextRequest) {
       hasAnyRoleCode(resolvedUserData, ["ORGANIZER_STUDENT"]);
     const isFinanceOfficer =
       Boolean((userData as any)?.is_finance_officer) ||
-      hasAnyRoleCode(resolvedUserData, ["ACCOUNTS"]);
+      Boolean((userData as any)?.is_finance_office) ||
+      hasAnyRoleCode(resolvedUserData, ["ACCOUNTS", "FINANCE_OFFICER"]);
     const hasServiceRole = SERVICE_ROLE_DASHBOARDS.some((roleConfig) =>
       hasServiceRoleAccess(resolvedUserData, roleConfig)
     );
@@ -340,6 +342,8 @@ export async function middleware(req: NextRequest) {
       normalizedUniversityRole === "stalls_service" ||
       normalizedUniversityRole === "stalls_misc" ||
       normalizedUniversityRole === "stalls";
+    const canAccessOrganizerManagementRoute =
+      isMasterAdmin || isOrganiser;
     const canAccessServiceRoleRoute = matchedServiceRoleRoute
       ? isMasterAdmin || hasServiceRoleAccess(resolvedUserData, matchedServiceRoleRoute)
       : true;
@@ -380,6 +384,10 @@ export async function middleware(req: NextRequest) {
       return redirect("/error");
     }
 
+    if (isOrganizerManagementRoute && (error || !userData || !canAccessOrganizerManagementRoute)) {
+      return redirect("/error");
+    }
+
     if (matchedServiceRoleRoute && (error || !userData || !canAccessServiceRoleRoute)) {
       return redirect("/error");
     }
@@ -390,6 +398,7 @@ export async function middleware(req: NextRequest) {
       !isCfoManagementRoute &&
       !isStudentOrganiserManagementRoute &&
       !isFinanceManagementRoute &&
+      !isOrganizerManagementRoute &&
       !matchedServiceRoleRoute &&
       isManagementRoute &&
       (error || !userData || !canManage)

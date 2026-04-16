@@ -679,16 +679,15 @@ router.post("/register", async (req, res) => {
       })();
     }
 
-    const newTotalParticipants = Math.max(
-      0,
-      (event.total_participants || 0) + participantCount
-    );
+    // Atomic increment to prevent race condition under concurrent registrations
+    const { error: incrementError } = await supabase.rpc("increment_event_participants", {
+      p_event_id: normalizedEventId,
+      p_count: participantCount,
+    });
 
-    await update(
-      "events",
-      { total_participants: newTotalParticipants },
-      { event_id: normalizedEventId }
-    );
+    if (incrementError) {
+      console.error("Failed to increment total_participants:", incrementError.message);
+    }
 
     // Send confirmation email with QR code (non-blocking)
     (async () => {

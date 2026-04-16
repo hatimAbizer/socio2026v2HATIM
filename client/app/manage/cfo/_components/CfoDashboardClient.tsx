@@ -197,6 +197,7 @@ export default function CfoDashboardClient({
     note?: string;
   }) => {
     const { requestId, action, note } = params;
+    const targetRequestId = requestId; // capture before async calls to prevent stale closure
     setActiveRequestId(requestId);
 
     try {
@@ -237,9 +238,11 @@ export default function CfoDashboardClient({
             : error.message
           : "Unable to update approval request.";
 
-      if (modalState && modalState.requestId === requestId) {
+      if (modalState && modalState.requestId === targetRequestId) {
         setModalState((previous) =>
-          previous ? { ...previous, errorMessage: message } : previous
+          previous?.requestId === targetRequestId
+            ? { ...previous, errorMessage: message }
+            : previous
         );
       } else {
         toast.error(message);

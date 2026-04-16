@@ -1,6 +1,6 @@
 import express from "express";
 import { authenticateUser, getUserInfo } from "../middleware/authMiddleware.js";
-import { insert, queryAll, queryOne, update } from "../config/database.js";
+import { insert, queryAll, queryOne, update, supabase } from "../config/database.js";
 import { ROLE_CODES, hasAnyRoleCode } from "../utils/roleAccessService.js";
 import {
   resolveDepartmentSchoolForApprovals,
@@ -1017,6 +1017,7 @@ router.post("/:eventId/organiser-action", async (req, res) => {
     const version = Number(event.workflow_version) || 1;
 
     if (action === "approved") {
+      const nowIso = new Date().toISOString();
       const updatedEvent = await updateEventWorkflow(eventId, EVENT_STATUS.ORGANISER_APPROVED, {
         rejected_at: null,
         rejected_by: null,
@@ -1032,6 +1033,37 @@ router.post("/:eventId/organiser-action", async (req, res) => {
         notes,
         version,
       });
+
+      // Resolve the ORGANIZER_TEACHER approval_step so recompute logic can advance the chain.
+      try {
+        const { data: arRows } = await supabase
+          .from("approval_requests")
+          .select("id,status")
+          .eq("entity_ref", eventId)
+          .in("entity_type", ["FEST_CHILD_EVENT", "EVENT"])
+          .in("status", ["UNDER_REVIEW", "PENDING", "DRAFT"]);
+
+        if (arRows && arRows.length > 0) {
+          const arId = arRows[0].id;
+
+          await supabase
+            .from("approval_steps")
+            .update({ status: "APPROVED", decided_at: nowIso })
+            .eq("approval_request_id", arId)
+            .eq("role_code", "ORGANIZER")
+            .eq("status", "PENDING");
+
+          // All steps for a child-event teacher-approval request are just this one step.
+          // Mark the request as APPROVED so downstream processing can proceed.
+          await supabase
+            .from("approval_requests")
+            .update({ status: "APPROVED", decided_at: nowIso })
+            .eq("id", arId);
+        }
+      } catch (_stepUpdateErr) {
+        // Non-fatal — the event itself was approved above; step sync failure is logged only.
+        console.warn("[EventApproval] organiser-action: approval_step update failed:", _stepUpdateErr?.message || _stepUpdateErr);
+      }
 
       const subOrganiserEmail = getEventOwnerEmail(event);
       if (subOrganiserEmail) {

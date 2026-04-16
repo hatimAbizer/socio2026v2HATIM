@@ -5,7 +5,7 @@ import { hasAnyRoleCode } from "@/lib/roleDashboards";
 import { getCurrentUserProfileWithRoleCodes } from "@/lib/serverRoleProfile";
 import { fetchWorkflowApiWithFailover } from "@/lib/workflowApiClient";
 
-type DecisionAction = "approve" | "return";
+type DecisionAction = "approve" | "return" | "reject";
 
 type ApprovalRequestRow = {
   id?: string;
@@ -435,6 +435,7 @@ export async function PATCH(
       return jsonError(400, "Revision description is required for return action.");
     }
 
+    let usedFallbackQuery = false;
     let approvalQuery = await supabase
       .from("approval_requests")
       .select("id,request_id,entity_type,entity_ref,status,organizing_dept,organizing_school,campus_hosted_at")
@@ -445,6 +446,7 @@ export async function PATCH(
       approvalQuery.error &&
       String(approvalQuery.error.message || "").toLowerCase().includes("organizing_school")
     ) {
+      usedFallbackQuery = true;
       approvalQuery = await supabase
         .from("approval_requests")
         .select("id,request_id,entity_type,entity_ref,status,organizing_dept,campus_hosted_at")
@@ -462,7 +464,12 @@ export async function PATCH(
       return jsonError(404, "Approval request not found.");
     }
 
-    const requestRow = approvalData as ApprovalRequestRow;
+    // If fallback query ran (organizing_school column missing), normalise it to null
+    // so downstream scope resolution doesn't read an undefined property
+    const requestRow: ApprovalRequestRow = {
+      ...(approvalData as ApprovalRequestRow),
+      organizing_school: usedFallbackQuery ? null : ((approvalData as ApprovalRequestRow).organizing_school ?? null),
+    };
     const requestStatus = String(requestRow.status || "").trim().toUpperCase();
     if (!["UNDER_REVIEW", "PENDING"].includes(requestStatus)) {
       return jsonError(409, "This request is no longer pending.");
@@ -488,7 +495,10 @@ export async function PATCH(
         return jsonError(403, "This request does not belong to your school scope.");
       }
 
-      if (!campusScope || !allowedCampuses.includes(campusScope)) {
+      // Only enforce campus match when the request has a campus set.
+      // An event/fest with no campus_hosted_at is accessible to any Dean
+      // within the matching school scope.
+      if (campusScope && !allowedCampuses.includes(campusScope)) {
         return jsonError(403, "This request does not belong to your campus scope.");
       }
     }
@@ -544,7 +554,11 @@ export async function PATCH(
           },
           body: JSON.stringify({
             decision: action === "approve" ? "APPROVED" : "REJECTED",
-            comment: action === "return" ? `RETURN_FOR_REVISION: ${note}` : null,
+            comment: action === "return"
+              ? `RETURN_FOR_REVISION: ${note}`
+              : action === "reject"
+              ? note || null
+              : null,
           }),
         },
         20000

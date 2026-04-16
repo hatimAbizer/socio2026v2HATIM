@@ -32,7 +32,7 @@ const ROLE_CODE_LABELS: Record<string, string> = {
   HOD: "HOD",
   DEAN: "Dean",
   CFO: "CFO",
-  ORGANIZER_TEACHER: "Organiser",
+  ORGANIZER: "Organiser",
   ORGANIZER_STUDENT: "Student Organizer",
   ORGANIZER_VOLUNTEER: "Volunteer",
   SUPPORT: "Support",

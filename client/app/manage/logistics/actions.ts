@@ -374,6 +374,25 @@ async function hasRowsForEventAcrossTables(
   return false;
 }
 
+function parseAdditionalRequests(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // ignore malformed JSON
+    }
+  }
+
+  return {};
+}
+
 function groupRowsByEventId(rows: Array<Record<string, unknown>>) {
   const rowsByEventId = new Map<string, Array<Record<string, unknown>>>();
 
@@ -607,12 +626,18 @@ function canTriggerLogisticsGeneration(
     return true;
   }
 
-  if (hasAnyRoleCode(profile, ["ACCOUNTS", "FINANCE_OFFICER", "CFO"])) {
+  if (hasAnyRoleCode(profile, ["ACCOUNTS", "FINANCE_OFFICER", "CFO", "ORGANIZER"])) {
     return true;
   }
 
   const role = normalizeUniversityRole(profile.university_role);
-  return role === "accounts" || role === "finance_officer" || role === "cfo";
+  return (
+    role === "accounts" ||
+    role === "finance_officer" ||
+    role === "cfo" ||
+    role === "organizer" ||
+    role === "organizer_teacher"
+  );
 }
 
 function computeRequestedServiceFlags(params: {
@@ -657,7 +682,7 @@ export async function triggerLogisticsApprovals(eventIdInput: string): Promise<L
   if (!canTriggerLogisticsGeneration(authContext.profile, authContext.isMasterAdmin)) {
     return {
       ok: false,
-      message: "Only Accounts/Finance/CFO/Master Admin can trigger logistics approvals.",
+      message: "Only Organizer Teachers, Accounts/Finance/CFO, or Master Admin can trigger logistics approvals.",
       eventId,
       generatedLevels: [],
       skippedLevels: [],
@@ -676,19 +701,29 @@ export async function triggerLogisticsApprovals(eventIdInput: string): Promise<L
     };
   }
 
-  // Phase 1 conditional checks:
-  // 1) Venue: only if venue_bookings rows exist.
-  // 2) IT: only if event_resources rows exist.
-  // 3) Catering: only if catering_plans rows exist.
-  // 4) Stalls: event flag requires_stalls=true or rows in stalls-related tables.
+  // Primary service detection: read from events.additional_requests JSON.
+  // The event form stores service selections as { it: { enabled }, venue: { enabled }, catering: { enabled }, stalls: { enabled } }.
+  // Fall back to dedicated service tables for backwards compatibility.
+  const additionalRequests = parseAdditionalRequests(eventRow.additional_requests);
+  const arIt = (additionalRequests.it as Record<string, unknown> | null | undefined) || {};
+  const arVenue = (additionalRequests.venue as Record<string, unknown> | null | undefined) || {};
+  const arCatering = (additionalRequests.catering as Record<string, unknown> | null | undefined) || {};
+  const arStalls = (additionalRequests.stalls as Record<string, unknown> | null | undefined) || {};
+
+  const hasItFromAr = toBoolean(arIt.enabled);
+  const hasVenueFromAr = toBoolean(arVenue.enabled);
+  const hasCateringFromAr = toBoolean(arCatering.enabled);
+  const hasStallsFromAr = toBoolean(arStalls.enabled);
+
+  // Secondary check: dedicated service tables (legacy / integration path).
   const [hasVenueRows, hasItRows, hasCateringRows, hasStallsRowsFromTable] = await Promise.all([
-    hasRowsForEvent(adminClient, "venue_bookings", eventId),
-    hasRowsForEvent(adminClient, "event_resources", eventId),
-    hasRowsForEvent(adminClient, "catering_plans", eventId),
-    hasRowsForEventAcrossTables(adminClient, ["stall_requests", "stall_plans", "stalls_requests"], eventId),
+    hasVenueFromAr ? Promise.resolve(true) : hasRowsForEvent(adminClient, "venue_bookings", eventId),
+    hasItFromAr ? Promise.resolve(true) : hasRowsForEvent(adminClient, "event_resources", eventId),
+    hasCateringFromAr ? Promise.resolve(true) : hasRowsForEvent(adminClient, "catering_plans", eventId),
+    hasStallsFromAr ? Promise.resolve(true) : hasRowsForEventAcrossTables(adminClient, ["stall_requests", "stall_plans", "stalls_requests"], eventId),
   ]);
 
-  const hasStallsRows = eventRequiresStalls(eventRow) || hasStallsRowsFromTable;
+  const hasStallsRows = hasStallsFromAr || eventRequiresStalls(eventRow) || hasStallsRowsFromTable;
   const requestedFlags = computeRequestedServiceFlags({
     hasVenueRows,
     hasItRows,

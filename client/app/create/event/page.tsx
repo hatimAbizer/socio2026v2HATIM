@@ -372,6 +372,19 @@ export default function CreateEventPage() {
         result
       );
 
+      // For teacher-created under-fest events that are not drafts and have no pending
+      // teacher-review step, trigger logistics approvals so service dashboards are populated.
+      const createdEventId = String(result?.event_id || result?.event?.event_id || "").trim();
+      const pendingTeacherReview = Boolean(result?.pending_teacher_review);
+      if (!saveAsDraft && isUnderFest && createdEventId && !pendingTeacherReview) {
+        fetch(`/api/events/${encodeURIComponent(createdEventId)}/trigger-logistics`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch((err) => {
+          console.warn("CreateEventPage: logistics trigger request failed silently:", err);
+        });
+      }
+
       const approvalState = String(
         result?.workflow?.approval_state || result?.event?.approval_state || ""
       )
@@ -395,6 +408,7 @@ export default function CreateEventPage() {
             : undefined,
         approvalState: approvalState || null,
         activationState: activationState || null,
+        eventId: createdEventId || null,
       };
     } catch (error: any) {
       console.error(
