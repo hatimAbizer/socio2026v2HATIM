@@ -18,6 +18,19 @@ type EventRow = {
   fest?: string | null;
 };
 
+type FestRow = {
+  fest_id?: string | null;
+  fest_title?: string | null;
+  opening_date?: string | null;
+  organizing_dept?: string | null;
+  organizing_school?: string | null;
+  contact_email?: string | null;
+  budget_amount?: number | string | null;
+  estimated_budget_amount?: number | string | null;
+  total_estimated_expense?: number | string | null;
+  custom_fields?: unknown;
+};
+
 type ApprovalRequestQueueRow = {
   id?: string | null;
   entity_type?: string | null;
@@ -137,6 +150,11 @@ function isEventEntityType(value: unknown): boolean {
   return ["EVENT", "STANDALONE_EVENT", "FEST_CHILD_EVENT"].includes(entityType);
 }
 
+function isSupportedFinanceEntityType(value: unknown): boolean {
+  const entityType = normalizeEntityType(value);
+  return entityType === "FEST" || isEventEntityType(entityType);
+}
+
 function isMissingRelationError(error: { code?: string | null; message?: string | null }) {
   const code = normalizeText(error?.code).toUpperCase();
   const message = normalizeLower(error?.message);
@@ -242,6 +260,107 @@ function getVendorName(row: GenericRow): string {
   }
 
   return "Vendor";
+}
+
+function parseJsonArraySafely(value: unknown): any[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function getFestBudgetAmount(festRow: FestRow | null | undefined): number {
+  const directBudget =
+    toNumber(festRow?.total_estimated_expense) ||
+    toNumber(festRow?.estimated_budget_amount) ||
+    toNumber(festRow?.budget_amount);
+
+  if (directBudget > 0) {
+    return directBudget;
+  }
+
+  const customFields = parseJsonArraySafely(festRow?.custom_fields);
+  const budgetSettings = customFields.find((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+
+    return String((entry as Record<string, unknown>).key || "") === "__budget_approval__";
+  }) as Record<string, unknown> | undefined;
+
+  const value =
+    budgetSettings &&
+    typeof budgetSettings.value === "object" &&
+    budgetSettings.value !== null &&
+    !Array.isArray(budgetSettings.value)
+      ? (budgetSettings.value as Record<string, unknown>)
+      : null;
+
+  const customBudget = toNumber(value?.amount);
+  return customBudget > 0 ? customBudget : 0;
+}
+
+async function fetchFestRowsWithFallback(supabase: any, festIds: string[]): Promise<FestRow[]> {
+  if (festIds.length === 0) {
+    return [];
+  }
+
+  const fullSelect =
+    "fest_id, fest_title, opening_date, organizing_dept, organizing_school, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense, custom_fields";
+  const minimalSelect =
+    "fest_id, fest_title, opening_date, organizing_dept, organizing_school, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense";
+
+  const { data: festsData, error: festsError } = await supabase
+    .from("fests")
+    .select(fullSelect)
+    .in("fest_id", festIds);
+
+  if (!festsError) {
+    return Array.isArray(festsData) ? (festsData as FestRow[]) : [];
+  }
+
+  if (isMissingColumnError(festsError, "custom_fields")) {
+    const { data: festsFallbackData, error: festsFallbackError } = await supabase
+      .from("fests")
+      .select(minimalSelect)
+      .in("fest_id", festIds);
+
+    if (!festsFallbackError) {
+      return Array.isArray(festsFallbackData) ? (festsFallbackData as FestRow[]) : [];
+    }
+  }
+
+  const { data: festData, error: festError } = await supabase
+    .from("fest")
+    .select(fullSelect)
+    .in("fest_id", festIds);
+
+  if (!festError) {
+    return Array.isArray(festData) ? (festData as FestRow[]) : [];
+  }
+
+  if (isMissingColumnError(festError, "custom_fields")) {
+    const { data: festFallbackData, error: festFallbackError } = await supabase
+      .from("fest")
+      .select(minimalSelect)
+      .in("fest_id", festIds);
+
+    if (!festFallbackError) {
+      return Array.isArray(festFallbackData) ? (festFallbackData as FestRow[]) : [];
+    }
+  }
+
+  throw new Error(`Failed to load fest details: ${festsError.message}`);
 }
 
 function mathChecksOut(
@@ -364,7 +483,7 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
   const pendingRequestRows = pendingSteps
     .map((row) => toSingleRecord(row.approval_requests))
     .filter((row): row is ApprovalRequestQueueRow => Boolean(row))
-    .filter((requestRow) => isEventEntityType(requestRow.entity_type));
+    .filter((requestRow) => isSupportedFinanceEntityType(requestRow.entity_type));
 
   const approvalRequestIds = Array.from(
     new Set(
@@ -377,6 +496,16 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
   const approvalEventIds = Array.from(
     new Set(
       pendingRequestRows
+        .filter((row) => normalizeEntityType(row.entity_type) !== "FEST")
+        .map((row) => normalizeText(row.entity_ref))
+        .filter((value) => value.length > 0)
+    )
+  );
+
+  const approvalFestIds = Array.from(
+    new Set(
+      pendingRequestRows
+        .filter((row) => normalizeEntityType(row.entity_type) === "FEST")
         .map((row) => normalizeText(row.entity_ref))
         .filter((value) => value.length > 0)
     )
@@ -409,8 +538,7 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
     const { data: approvalBudgetRowsData, error: approvalBudgetRowsError } = await supabase
       .from("event_budgets")
       .select("id,event_id,total_estimated_expense,total_actual_expense,advance_paid,settlement_status,finance_status")
-      .in("event_id", approvalEventIds)
-      .gt("total_estimated_expense", 0);
+      .in("event_id", approvalEventIds);
 
     if (approvalBudgetRowsError) {
       throw new Error(`Failed to load L4 queue budgets: ${approvalBudgetRowsError.message}`);
@@ -424,6 +552,16 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
       approvalBudgetRows
         .map((row) => [normalizeText(row.event_id), row] as const)
         .filter(([eventId]) => eventId.length > 0)
+    );
+  }
+
+  let approvalFestsById = new Map<string, FestRow>();
+  if (approvalFestIds.length > 0) {
+    const festRows = await fetchFestRowsWithFallback(supabase, approvalFestIds);
+    approvalFestsById = new Map(
+      festRows
+        .map((row) => [normalizeText(row.fest_id), row] as const)
+        .filter(([festId]) => festId.length > 0)
     );
   }
 
@@ -461,8 +599,14 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
 
   const organizerEmails = Array.from(
     new Set(
-      Array.from(approvalEventById.values())
-        .map((row) => normalizeLower(row.organizer_email))
+      [
+        ...Array.from(approvalEventById.values()).map((row) =>
+          normalizeLower(row.organizer_email)
+        ),
+        ...Array.from(approvalFestsById.values()).map((row) =>
+          normalizeLower(row.contact_email)
+        ),
+      ]
         .filter((email) => email.length > 0)
     )
   );
@@ -488,29 +632,42 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
 
   pendingSteps.forEach((stepRow) => {
     const requestRow = toSingleRecord(stepRow.approval_requests);
-    if (!requestRow || !isEventEntityType(requestRow.entity_type)) {
+    if (!requestRow || !isSupportedFinanceEntityType(requestRow.entity_type)) {
       return;
     }
 
+    const entityType = normalizeEntityType(requestRow.entity_type);
+    const isFestEntity = entityType === "FEST";
     const requestId = normalizeText(requestRow.id);
-    const eventId = normalizeText(requestRow.entity_ref);
-    if (!requestId || !eventId || approvalsByRequestId.has(requestId)) {
+    const entityId = normalizeText(requestRow.entity_ref);
+    if (!requestId || !entityId || approvalsByRequestId.has(requestId)) {
       return;
     }
 
-    const eventRow = approvalEventById.get(eventId);
-    const budgetRow = approvalBudgetsByEventId.get(eventId);
-    if (!budgetRow) {
+    const eventRow = !isFestEntity ? approvalEventById.get(entityId) || null : null;
+    const festRow = isFestEntity ? approvalFestsById.get(entityId) || null : null;
+
+    if (!isFestEntity && !eventRow) {
       return;
     }
 
-    const coordinatorEmail = normalizeLower(eventRow?.organizer_email);
+    const budgetRow = !isFestEntity
+      ? approvalBudgetsByEventId.get(entityId) || null
+      : null;
+
+    const coordinatorEmail = normalizeLower(
+      isFestEntity ? festRow?.contact_email : eventRow?.organizer_email
+    );
 
     approvalsByRequestId.set(requestId, {
       id: requestId,
-      eventId,
-      eventName: normalizeText(eventRow?.title) || "Untitled Event",
-      eventDate: normalizeText(eventRow?.event_date) || null,
+      eventId: entityId,
+      eventName: isFestEntity
+        ? normalizeText(festRow?.fest_title) || "Untitled Fest"
+        : normalizeText(eventRow?.title) || "Untitled Event",
+      eventDate: isFestEntity
+        ? normalizeText(festRow?.opening_date) || null
+        : normalizeText(eventRow?.event_date) || null,
       cfoApprovedAt: cfoApprovedAtByRequestId.get(requestId) || null,
       requestedAt:
         normalizeText(requestRow.submitted_at) ||
@@ -518,18 +675,20 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
         normalizeText(stepRow.created_at) ||
         null,
       departmentName:
-        normalizeText(eventRow?.organizing_dept) ||
+        normalizeText(isFestEntity ? festRow?.organizing_dept : eventRow?.organizing_dept) ||
         normalizeText(requestRow.organizing_dept) ||
         "Unknown Department",
       schoolName:
-        normalizeText(eventRow?.organizing_school) ||
+        normalizeText(isFestEntity ? festRow?.organizing_school : eventRow?.organizing_school) ||
         normalizeText(requestRow.organizing_school) ||
         "Unknown School",
       coordinatorName: deriveCoordinatorName(
         coordinatorEmail,
         coordinatorEmail ? organizerNames.get(coordinatorEmail) : null
       ),
-      totalEstimatedExpense: toNumber(budgetRow.total_estimated_expense),
+      totalEstimatedExpense: isFestEntity
+        ? getFestBudgetAmount(festRow)
+        : toNumber(budgetRow?.total_estimated_expense),
     });
   });
 

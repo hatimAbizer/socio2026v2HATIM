@@ -38,6 +38,20 @@ type EventJoinRow = {
   campus_hosted_at?: string | null;
 };
 
+type FestJoinRow = {
+  fest_id?: string | null;
+  fest_title?: string | null;
+  opening_date?: string | null;
+  organizing_dept?: string | null;
+  organizing_school?: string | null;
+  contact_email?: string | null;
+  budget_amount?: number | string | null;
+  estimated_budget_amount?: number | string | null;
+  total_estimated_expense?: number | string | null;
+  custom_fields?: unknown;
+  campus_hosted_at?: string | null;
+};
+
 type UserNameRow = {
   email?: string | null;
   name?: string | null;
@@ -116,6 +130,54 @@ function toTimestamp(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function parseJsonArraySafely(value: unknown): any[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function getFestBudgetAmount(festRow: FestJoinRow | null | undefined): number {
+  const directBudget =
+    toNumber(festRow?.total_estimated_expense) ||
+    toNumber(festRow?.estimated_budget_amount) ||
+    toNumber(festRow?.budget_amount);
+
+  if (directBudget > 0) {
+    return directBudget;
+  }
+
+  const customFields = parseJsonArraySafely(festRow?.custom_fields);
+  const budgetSettings = customFields.find((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+
+    return String((entry as Record<string, unknown>).key || "") === "__budget_approval__";
+  }) as Record<string, unknown> | undefined;
+
+  const value =
+    budgetSettings &&
+    typeof budgetSettings.value === "object" &&
+    budgetSettings.value !== null &&
+    !Array.isArray(budgetSettings.value)
+      ? (budgetSettings.value as Record<string, unknown>)
+      : null;
+
+  const customBudget = toNumber(value?.amount);
+  return customBudget > 0 ? customBudget : 0;
+}
+
 function getYearDateBounds(now: Date): { startDate: string; endDate: string } {
   const year = now.getUTCFullYear();
   return {
@@ -137,6 +199,11 @@ function normalizeEntityType(value: unknown): string {
 function isEventEntityType(value: unknown): boolean {
   const entityType = normalizeEntityType(value);
   return ["EVENT", "STANDALONE_EVENT", "FEST_CHILD_EVENT"].includes(entityType);
+}
+
+function isSupportedEntityType(value: unknown): boolean {
+  const entityType = normalizeEntityType(value);
+  return entityType === "FEST" || isEventEntityType(entityType);
 }
 
 function isMissingColumnError(
@@ -197,6 +264,59 @@ function resolveSchoolName(
   return directSchool || "Unknown School";
 }
 
+async function fetchFestRowsWithFallback(supabase: any, festIds: string[]): Promise<FestJoinRow[]> {
+  if (festIds.length === 0) {
+    return [];
+  }
+
+  const fullSelect =
+    "fest_id, fest_title, opening_date, organizing_dept, organizing_school, campus_hosted_at, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense, custom_fields";
+  const minimalSelect =
+    "fest_id, fest_title, opening_date, organizing_dept, organizing_school, campus_hosted_at, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense";
+
+  const { data: festsData, error: festsError } = await supabase
+    .from("fests")
+    .select(fullSelect)
+    .in("fest_id", festIds);
+
+  if (!festsError) {
+    return Array.isArray(festsData) ? (festsData as FestJoinRow[]) : [];
+  }
+
+  if (isMissingColumnError(festsError, "custom_fields")) {
+    const { data: festsFallbackData, error: festsFallbackError } = await supabase
+      .from("fests")
+      .select(minimalSelect)
+      .in("fest_id", festIds);
+
+    if (!festsFallbackError) {
+      return Array.isArray(festsFallbackData) ? (festsFallbackData as FestJoinRow[]) : [];
+    }
+  }
+
+  const { data: festData, error: festError } = await supabase
+    .from("fest")
+    .select(fullSelect)
+    .in("fest_id", festIds);
+
+  if (!festError) {
+    return Array.isArray(festData) ? (festData as FestJoinRow[]) : [];
+  }
+
+  if (isMissingColumnError(festError, "custom_fields")) {
+    const { data: festFallbackData, error: festFallbackError } = await supabase
+      .from("fest")
+      .select(minimalSelect)
+      .in("fest_id", festIds);
+
+    if (!festFallbackError) {
+      return Array.isArray(festFallbackData) ? (festFallbackData as FestJoinRow[]) : [];
+    }
+  }
+
+  throw new Error(`Failed to load fest details: ${festsError.message}`);
+}
+
 export async function fetchCfoDashboardData({
   supabase,
   campus,
@@ -211,8 +331,7 @@ export async function fetchCfoDashboardData({
 
   const { data: budgetData, error: budgetError } = await supabase
     .from("event_budgets")
-    .select("event_id,total_estimated_expense,total_actual_expense")
-    .gt("total_estimated_expense", 0);
+    .select("event_id,total_estimated_expense,total_actual_expense");
 
   if (budgetError) {
     throw new Error(`Failed to load CFO budget data: ${budgetError.message}`);
@@ -231,19 +350,6 @@ export async function fetchCfoDashboardData({
       budgetByEventId.set(eventId, row);
     }
   });
-
-  if (budgetByEventId.size === 0) {
-    return {
-      queue: [],
-      metrics: {
-        campusRequestedBudgetYtd: 0,
-        campusApprovedBudgetYtd: 0,
-        highValuePendingRequests: 0,
-        highValuePendingBudget: 0,
-        l2Threshold: normalizedThreshold,
-      },
-    };
-  }
 
   const pendingSelectWithSchool = `
     id,
@@ -312,11 +418,21 @@ export async function fetchCfoDashboardData({
   const pendingRequestRows = pendingSteps
     .map((row) => toSingleRecord(row.approval_requests))
     .filter((row): row is ApprovalRequestJoinRow => Boolean(row))
-    .filter((requestRow) => isEventEntityType(requestRow.entity_type));
+    .filter((requestRow) => isSupportedEntityType(requestRow.entity_type));
 
   const pendingEventIds = Array.from(
     new Set(
       pendingRequestRows
+        .filter((requestRow) => normalizeEntityType(requestRow.entity_type) !== "FEST")
+        .map((requestRow) => normalizeText(requestRow.entity_ref))
+        .filter((entityRef) => entityRef.length > 0)
+    )
+  );
+
+  const pendingFestIds = Array.from(
+    new Set(
+      pendingRequestRows
+        .filter((requestRow) => normalizeEntityType(requestRow.entity_type) === "FEST")
         .map((requestRow) => normalizeText(requestRow.entity_ref))
         .filter((entityRef) => entityRef.length > 0)
     )
@@ -329,8 +445,7 @@ export async function fetchCfoDashboardData({
       .select(
         "event_id,title,event_date,organizing_dept,organizing_school,organizer_email,fest_id,campus_hosted_at"
       )
-      .in("event_id", pendingEventIds)
-      .is("fest_id", null);
+      .in("event_id", pendingEventIds);
 
     if (normalizedCampus) {
       pendingEventsQuery = pendingEventsQuery.eq("campus_hosted_at", normalizedCampus);
@@ -353,9 +468,25 @@ export async function fetchCfoDashboardData({
     );
   }
 
+  let pendingFestsById = new Map<string, FestJoinRow>();
+  if (pendingFestIds.length > 0) {
+    const pendingFestRows = await fetchFestRowsWithFallback(supabase, pendingFestIds);
+    const scopedFestRows = normalizedCampus
+      ? pendingFestRows.filter(
+          (row) => normalizeText(row.campus_hosted_at) === normalizedCampus
+        )
+      : pendingFestRows;
+
+    pendingFestsById = new Map(
+      scopedFestRows
+        .map((row) => [normalizeText(row.fest_id), row] as const)
+        .filter(([festId]) => festId.length > 0)
+    );
+  }
+
   const departmentIdCandidates = Array.from(
     new Set(
-      Array.from(pendingEventsById.values())
+      [...Array.from(pendingEventsById.values()), ...Array.from(pendingFestsById.values())]
         .map((row) => normalizeText(row.organizing_dept))
         .filter((value) => value.length > 0)
     )
@@ -388,8 +519,14 @@ export async function fetchCfoDashboardData({
 
   const organizerEmails = Array.from(
     new Set(
-      Array.from(pendingEventsById.values())
-        .map((row) => normalizeText(row.organizer_email).toLowerCase())
+      [
+        ...Array.from(pendingEventsById.values()).map((row) =>
+          normalizeText(row.organizer_email).toLowerCase()
+        ),
+        ...Array.from(pendingFestsById.values()).map((row) =>
+          normalizeText(row.contact_email).toLowerCase()
+        ),
+      ]
         .filter((email) => email.length > 0)
     )
   );
@@ -414,51 +551,75 @@ export async function fetchCfoDashboardData({
   const queue: CfoApprovalQueueItem[] = pendingSteps
     .map((stepRow) => {
       const requestRow = toSingleRecord(stepRow.approval_requests);
-      if (!requestRow || !isEventEntityType(requestRow.entity_type)) {
+      if (!requestRow || !isSupportedEntityType(requestRow.entity_type)) {
         return null;
       }
 
-      const eventId = normalizeText(requestRow.entity_ref);
-      if (!eventId) {
+      const entityType = normalizeEntityType(requestRow.entity_type);
+      const entityRef = normalizeText(requestRow.entity_ref);
+      if (!entityRef) {
         return null;
       }
 
-      const eventRow = pendingEventsById.get(eventId);
-      if (!eventRow) {
+      const isFestEntity = entityType === "FEST";
+      const eventRow = !isFestEntity ? pendingEventsById.get(entityRef) || null : null;
+      const festRow = isFestEntity ? pendingFestsById.get(entityRef) || null : null;
+
+      if (!isFestEntity && !eventRow) {
         return null;
       }
 
-      const budgetRow = budgetByEventId.get(eventId);
-      if (!budgetRow) {
-        return null;
-      }
+      const budgetRow = !isFestEntity ? budgetByEventId.get(entityRef) || null : null;
 
-      const organizerEmail = normalizeText(eventRow.organizer_email).toLowerCase();
+      const organizerEmail = normalizeText(
+        isFestEntity ? festRow?.contact_email : eventRow?.organizer_email
+      ).toLowerCase();
       const departmentId =
-        normalizeText(eventRow.organizing_dept) || normalizeText(requestRow.organizing_dept);
+        normalizeText(isFestEntity ? festRow?.organizing_dept : eventRow?.organizing_dept) ||
+        normalizeText(requestRow.organizing_dept);
       const schoolId =
-        normalizeText(eventRow.organizing_school) || normalizeText(requestRow.organizing_school);
+        normalizeText(isFestEntity ? festRow?.organizing_school : eventRow?.organizing_school) ||
+        normalizeText(requestRow.organizing_school);
+
       const departmentLookup = departmentById.get(departmentId) || null;
+      const fallbackEventRow: EventJoinRow = {
+        organizing_dept: departmentId,
+        organizing_school: schoolId,
+      };
+
+      const schoolName = isFestEntity
+        ? schoolId || normalizeText(departmentLookup?.school) || "Unknown School"
+        : resolveSchoolName(eventRow || fallbackEventRow, departmentLookup);
+
+      const departmentName = isFestEntity
+        ? normalizeText(departmentLookup?.department_name) || departmentId || "Unknown Department"
+        : resolveDepartmentName(eventRow || fallbackEventRow, departmentLookup);
 
       return {
         id: normalizeText(requestRow.id),
-        eventId,
-        eventName: normalizeText(eventRow.title) || "Untitled Event",
-        totalBudget: toNumber(budgetRow.total_estimated_expense),
+        eventId: entityRef,
+        eventName: isFestEntity
+          ? normalizeText(festRow?.fest_title) || "Untitled Fest"
+          : normalizeText(eventRow?.title) || "Untitled Event",
+        totalBudget: isFestEntity
+          ? getFestBudgetAmount(festRow)
+          : toNumber(budgetRow?.total_estimated_expense),
         coordinatorName: deriveCoordinatorName(
           organizerEmail,
           organizerEmail ? userNamesByEmail.get(organizerEmail) : null
         ),
-        eventDate: normalizeText(eventRow.event_date) || null,
+        eventDate: isFestEntity
+          ? normalizeText(festRow?.opening_date) || null
+          : normalizeText(eventRow?.event_date) || null,
         requestedAt:
           normalizeText(requestRow.submitted_at) ||
           normalizeText(requestRow.created_at) ||
           normalizeText(stepRow.created_at) ||
           null,
-        schoolId: schoolId || resolveSchoolName(eventRow, departmentLookup),
-        schoolName: resolveSchoolName(eventRow, departmentLookup),
+        schoolId: schoolId || schoolName,
+        schoolName,
         departmentId,
-        departmentName: resolveDepartmentName(eventRow, departmentLookup),
+        departmentName,
       };
     })
     .filter(
@@ -541,7 +702,7 @@ export async function fetchCfoDashboardData({
 
     const requestId = normalizeText(requestRow.id);
     const eventId = normalizeText(requestRow.entity_ref);
-    if (!requestId || !eventId || !budgetByEventId.has(eventId)) {
+    if (!requestId || !eventId) {
       return;
     }
 
@@ -570,7 +731,6 @@ export async function fetchCfoDashboardData({
       .from("events")
       .select("event_id,event_date,fest_id,campus_hosted_at")
       .in("event_id", ytdEventIds)
-      .is("fest_id", null)
       .gte("event_date", startDate)
       .lte("event_date", endDate);
 

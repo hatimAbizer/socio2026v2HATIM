@@ -46,7 +46,7 @@ export default function CfoApprovalTable({
       <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center">
         <h3 className="text-lg font-semibold text-slate-800">No pending L3 approvals</h3>
         <p className="mt-2 text-sm text-slate-600">
-          No high-value standalone requests are waiting for CFO approval in this filter.
+          No requests are waiting for CFO approval in this filter.
         </p>
       </div>
     );

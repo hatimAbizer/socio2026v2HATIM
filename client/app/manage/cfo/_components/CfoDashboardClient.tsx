@@ -281,7 +281,7 @@ export default function CfoDashboardClient({
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Pending L3 Queue</h2>
             <p className="mt-1 text-sm text-slate-600">
-              Includes standalone events only (approved-fest bypass applied).
+              Includes dean-approved requests pending CFO budget review.
             </p>
           </div>
 

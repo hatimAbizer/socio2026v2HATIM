@@ -17,6 +17,18 @@ export default function CreateEventPage() {
   const validateEmail = (value: unknown): boolean =>
     EMAIL_REGEX.test(normalizeEmail(value));
 
+  const parseJsonSafely = (value: string): any | null => {
+    if (!value) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  };
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const supabase = useMemo(() => {
@@ -26,8 +38,6 @@ export default function CreateEventPage() {
 
     return createBrowserClient(supabaseUrl, supabaseAnonKey);
   }, [supabaseAnonKey, supabaseUrl]);
-
-  const API_URL = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/api\/?$/, "");
 
   const submitEvent = async (
     dataFromHookForm: EventFormData,
@@ -307,14 +317,13 @@ export default function CreateEventPage() {
       }
     }
     console.log("=== END FORM DATA ===");
-    console.log(`CreateEventPage: API_URL is: ${API_URL}`);
-
     try {
-      console.log(`CreateEventPage: Initiating fetch to ${API_URL}/api/events`);
-      const response = await fetch(`${API_URL}/api/events`, {
+      console.log("CreateEventPage: Initiating fetch to /api/events");
+      const response = await fetch("/api/events", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
+          Accept: "application/json",
         },
         body: formData,
       });
@@ -325,31 +334,26 @@ export default function CreateEventPage() {
         response.ok
       );
 
+      const rawResponseBody = await response.text();
+      const parsedResponseBody = parseJsonSafely(rawResponseBody);
+
       if (!response.ok) {
-        const responseText = await response.text();
-        let errorData: any = {};
-
-        if (responseText) {
-          try {
-            errorData = JSON.parse(responseText);
-          } catch {
-            console.error(
-              "CreateEventPage: Failed to parse error response JSON. Raw text:",
-              responseText
-            );
-            errorData = {
-              error: "Failed to parse error response from server.",
-              details: `Status: ${response.status}, StatusText: ${response.statusText}. Response body: ${responseText}`,
-            };
-          }
-        }
-
-        console.error("CreateEventPage: API Error Data:", errorData);
+        const errorData =
+          parsedResponseBody && typeof parsedResponseBody === "object"
+            ? parsedResponseBody
+            : {};
+        console.error("CreateEventPage: API Error Data:", {
+          ...errorData,
+          status: response.status,
+          statusText: response.statusText,
+          rawBody: rawResponseBody,
+        });
         const message =
           errorData.error ||
           errorData.message ||
           (typeof errorData.details === "string" ? errorData.details : null) ||
           errorData.detail ||
+          (rawResponseBody.trim() ? rawResponseBody.trim() : null) ||
           `Server error: ${response.status} ${response.statusText}`;
         const wrappedError = new Error(message);
         (wrappedError as any).fieldErrors =
@@ -359,7 +363,10 @@ export default function CreateEventPage() {
         throw wrappedError;
       }
 
-      const result = await response.json();
+      const result =
+        parsedResponseBody && typeof parsedResponseBody === "object"
+          ? parsedResponseBody
+          : {};
       console.log(
         `CreateEventPage: Event ${saveAsDraft ? "draft saved" : "created"} successfully via API:`,
         result
