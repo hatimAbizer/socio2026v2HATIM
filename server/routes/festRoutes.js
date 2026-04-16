@@ -769,6 +769,13 @@ const toFestSlugCandidate = (value) =>
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
 
+const EVENT_FEST_SELECT_CANDIDATES = [
+  "event_id, fest, fest_id, organizing_dept, event_date, created_at, is_archived, created_by, organizer_email, organiser_email",
+  "event_id, fest, fest_id, organizing_dept, event_date, created_at, is_archived, created_by, organizer_email",
+  "event_id, fest, fest_id, organizing_dept, event_date, created_at, is_archived, created_by",
+  "event_id, fest_id, organizing_dept, event_date, created_at, is_archived",
+];
+
 const getMergedFestsFromCandidates = async (queryOptions, primaryTable) => {
   const tables = resolveFestTableCandidates(primaryTable);
   const festById = new Map();
@@ -870,6 +877,48 @@ const getFestByIdFromCandidates = async (festId, primaryTable) => {
       }
 
       throw error;
+    }
+  }
+
+  // Final fallback: derive fest metadata from events when canonical fest tables
+  // do not contain a row for the requested reference.
+  let eventRows = [];
+  for (const selectClause of EVENT_FEST_SELECT_CANDIDATES) {
+    try {
+      eventRows = await queryAll("events", { select: selectClause });
+      break;
+    } catch (error) {
+      if (isMissingRelationError(error)) {
+        eventRows = [];
+        break;
+      }
+
+      if (isMissingColumnError(error)) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  if (Array.isArray(eventRows) && eventRows.length > 0) {
+    const derivedFests = deriveFestsFromEvents(eventRows, {});
+    const matchedDerivedFest = (derivedFests || []).find((row) => {
+      const festIdKey = normalizeFestKey(row?.fest_id);
+      const festIdSlug = toFestSlugCandidate(row?.fest_id);
+      const festTitleKey = normalizeFestKey(row?.fest_title);
+      const festTitleSlug = toFestSlugCandidate(row?.fest_title);
+
+      return (
+        normalizedInput === festIdKey ||
+        normalizedInput === festTitleKey ||
+        normalizedInputSlug === festIdSlug ||
+        normalizedInputSlug === festTitleSlug
+      );
+    });
+
+    if (matchedDerivedFest) {
+      return matchedDerivedFest;
     }
   }
 

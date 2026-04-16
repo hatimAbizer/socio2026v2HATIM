@@ -55,6 +55,93 @@ interface FestDetails {
   faqs?: { question: string; answer: string }[];
 }
 
+const toFestSlugCandidate = (value: unknown): string => {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^\w-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+};
+
+const festReferenceMatches = (reference: unknown, candidate: unknown): boolean => {
+  const refKey = String(reference || "").trim().toLowerCase();
+  const candidateKey = String(candidate || "").trim().toLowerCase();
+
+  if (!refKey || !candidateKey) {
+    return false;
+  }
+
+  if (refKey === candidateKey) {
+    return true;
+  }
+
+  return toFestSlugCandidate(refKey) === toFestSlugCandidate(candidateKey);
+};
+
+function buildFestDetailsFromEvents(
+  events: EventWithFlexibleFest[],
+  festReference: string
+): FestDetails | null {
+  const matchedEvents = (events || []).filter((event) => {
+    return (
+      festReferenceMatches(festReference, event?.fest_id) ||
+      festReferenceMatches(festReference, (event as any)?.fest) ||
+      festReferenceMatches(festReference, event?.fest_title)
+    );
+  });
+
+  if (matchedEvents.length === 0) {
+    return null;
+  }
+
+  const firstEvent = matchedEvents[0];
+  const title =
+    String(
+      firstEvent?.fest_title || (firstEvent as any)?.fest || firstEvent?.fest_id || festReference
+    ).trim() || "Untitled Fest";
+  const resolvedFestId =
+    String(firstEvent?.fest_id || (firstEvent as any)?.fest || festReference).trim() ||
+    festReference;
+
+  const sortableDates = matchedEvents
+    .map((event) => {
+      const rawDate = String((event as any)?.event_date || "").trim();
+      const parsedTime = new Date(rawDate).getTime();
+      return {
+        rawDate,
+        parsedTime,
+      };
+    })
+    .filter((entry) => entry.rawDate.length > 0 && Number.isFinite(entry.parsedTime))
+    .sort((a, b) => a.parsedTime - b.parsedTime);
+
+  const openingDate = sortableDates.length > 0 ? formatDateFull(sortableDates[0].rawDate) : "TBD";
+  const closingDate =
+    sortableDates.length > 0
+      ? formatDateFull(sortableDates[sortableDates.length - 1].rawDate)
+      : openingDate;
+
+  return {
+    id: resolvedFestId,
+    title,
+    description: "Fest details are being synced. Showing information derived from linked events.",
+    openingDate,
+    closingDate,
+    contactEmail:
+      String((firstEvent as any)?.organizer_email || (firstEvent as any)?.organiser_email || "").trim() ||
+      "N/A",
+    contactPhone: "N/A",
+    department: String((firstEvent as any)?.organizing_dept || "").trim() || undefined,
+    venue: String((firstEvent as any)?.venue || "").trim() || undefined,
+    timeline: [],
+    sponsors: [],
+    socialLinks: [],
+    faqs: [],
+  };
+}
+
 const buildTeamSizeTag = (event: ContextFetchedEvent): string | null => {
   const maxRaw = Number(
     event.participants_per_team ?? (event as any).max_participants ?? 1
@@ -201,65 +288,106 @@ const FestPage = () => {
     setErrorFestDetails(null);
 
     const API_URL = process.env.NEXT_PUBLIC_API_URL!.replace(/\/api\/?$/, "");
+    let didCancel = false;
 
-    fetch(`${API_URL}/api/fests/${festIdSlug}`, {
-      headers: session?.access_token
-        ? {
-            Authorization: `Bearer ${session.access_token}`,
-          }
-        : undefined,
-      cache: "no-store",
-    })
-      .then((res) => {
-        if (!res.ok) {
-          if (res.status === 403) {
+    const loadFestDetails = async () => {
+      try {
+        const festResponse = await fetch(`${API_URL}/api/fests/${festIdSlug}`, {
+          headers: session?.access_token
+            ? {
+                Authorization: `Bearer ${session.access_token}`,
+              }
+            : undefined,
+          cache: "no-store",
+        });
+
+        if (!festResponse.ok) {
+          if (festResponse.status === 403) {
             throw new Error("This fest is archived and not available");
           }
-          if (res.status === 404) {
+
+          if (festResponse.status === 404) {
+            const eventsResponse = await fetch(`${API_URL}/api/events`, {
+              cache: "no-store",
+            });
+
+            if (eventsResponse.ok) {
+              const payload = await eventsResponse.json().catch(() => null);
+              const events = Array.isArray(payload?.events)
+                ? (payload.events as EventWithFlexibleFest[])
+                : [];
+              const fallbackFestDetails = buildFestDetailsFromEvents(events, festIdSlug);
+
+              if (fallbackFestDetails) {
+                if (!didCancel) {
+                  setFestDetails(fallbackFestDetails);
+                  setErrorFestDetails(null);
+                  setLoadingFestDetails(false);
+                }
+                return;
+              }
+            }
+
             throw new Error(`Fest with ID '${festIdSlug}' not found.`);
           }
-          throw new Error(`Failed to fetch fest data (status: ${res.status})`);
+
+          throw new Error(`Failed to fetch fest data (status: ${festResponse.status})`);
         }
-        return res.json();
-      })
-      .then((data: { fest: FestDataFromAPI }) => {
-        if (data.fest) {
-          const apiFest = data.fest;
 
-          if (apiFest.is_archived && !isAdminOrOrganizer) {
-            throw new Error("This fest is archived and not available");
-          }
-
-          setFestDetails({
-            id: apiFest.fest_id,
-            title: apiFest.fest_title,
-            description: apiFest.description,
-            openingDate: formatDateFull(apiFest.opening_date),
-            closingDate: formatDateFull(apiFest.closing_date),
-            contactEmail: apiFest.contact_email || "N/A",
-            contactPhone: apiFest.contact_phone || "N/A",
-            department: apiFest.organizing_dept,
-            imageUrl: apiFest.fest_image_url,
-            venue: apiFest.venue,
-            status: apiFest.status,
-            registrationDeadline: apiFest.registration_deadline ? formatDateFull(apiFest.registration_deadline) : undefined,
-            timeline: apiFest.timeline || [],
-            sponsors: apiFest.sponsors || [],
-            socialLinks: apiFest.social_links || [],
-            faqs: apiFest.faqs || [],
-          });
-        } else {
+        const data = (await festResponse.json()) as { fest: FestDataFromAPI };
+        if (!data.fest) {
           throw new Error("Fest data not found in API response.");
         }
+
+        const apiFest = data.fest;
+
+        if (apiFest.is_archived && !isAdminOrOrganizer) {
+          throw new Error("This fest is archived and not available");
+        }
+
+        if (didCancel) {
+          return;
+        }
+
+        setFestDetails({
+          id: apiFest.fest_id,
+          title: apiFest.fest_title,
+          description: apiFest.description,
+          openingDate: formatDateFull(apiFest.opening_date),
+          closingDate: formatDateFull(apiFest.closing_date),
+          contactEmail: apiFest.contact_email || "N/A",
+          contactPhone: apiFest.contact_phone || "N/A",
+          department: apiFest.organizing_dept,
+          imageUrl: apiFest.fest_image_url,
+          venue: apiFest.venue,
+          status: apiFest.status,
+          registrationDeadline: apiFest.registration_deadline
+            ? formatDateFull(apiFest.registration_deadline)
+            : undefined,
+          timeline: apiFest.timeline || [],
+          sponsors: apiFest.sponsors || [],
+          socialLinks: apiFest.social_links || [],
+          faqs: apiFest.faqs || [],
+        });
         setLoadingFestDetails(false);
-      })
-      .catch((err) => {
+      } catch (err: any) {
+        if (didCancel) {
+          return;
+        }
+
         console.error("Error fetching fest details:", err);
         setErrorFestDetails(
-          err.message || "An error occurred while fetching fest details."
+          err?.message || "An error occurred while fetching fest details."
         );
         setLoadingFestDetails(false);
-      });
+      }
+    };
+
+    void loadFestDetails();
+
+    return () => {
+      didCancel = true;
+    };
   }, [festIdSlug, authIsLoading, isAdminOrOrganizer, session?.access_token]);
 
   useEffect(() => {
