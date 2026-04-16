@@ -1,6 +1,10 @@
 import { revalidateTag } from "next/cache";
 import { NextRequest, NextResponse } from "next/server";
 
+function normalizeApiBase(value: unknown): string {
+  return String(value || "").trim().replace(/\/+$/, "").replace(/\/api\/?$/i, "");
+}
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ eventId: string }> }
@@ -18,8 +22,12 @@ export async function PATCH(
     }
 
     // Call the backend Express server
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    const backendUrl = apiUrl.replace(/\/api\/?$/, "");
+    const configuredBackendBase = normalizeApiBase(process.env.NEXT_PUBLIC_API_URL);
+    const requestOrigin = normalizeApiBase(request.nextUrl.origin);
+    const backendUrl =
+      configuredBackendBase && configuredBackendBase !== requestOrigin
+        ? configuredBackendBase
+        : "http://localhost:8000";
     const response = await fetch(`${backendUrl}/api/events/${eventId}/archive`, {
       method: "PATCH",
       headers: {

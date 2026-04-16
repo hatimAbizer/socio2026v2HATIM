@@ -13,6 +13,16 @@ import { FileText, Wrench } from "lucide-react";
 import ServiceRequests from "@/app/_components/ServiceRequests";
 import toast from "react-hot-toast";
 
+const parseJsonSafely = (value: string): any | null => {
+  if (!value) return null;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
 const PENDING_WORKFLOW_STATUS_REGEX = /^pending_level_([1-4])$/;
 const APPROVAL_LEVEL_LABEL_BY_NUMBER: Record<number, string> = {
   1: "Level 1 (HOD)",
@@ -62,7 +72,6 @@ export default function EditEventPage() {
     EMAIL_REGEX.test(normalizeEmail(value));
 
   const { session, userData, isLoading: authIsLoading } = useAuth();
-  const API_URL = process.env.NEXT_PUBLIC_API_URL!.replace(/\/api\/?$/, "");
 
   const [initialData, setInitialData] = useState<Partial<EventFormData>>();
   const [existingImageFileUrl, setExistingImageFileUrl] = useState<
@@ -133,23 +142,26 @@ export default function EditEventPage() {
       setErrorMessage(null);
       let response: Response | undefined = undefined;
       try {
+        const eventApiPath = `/api/events/${encodeURIComponent(eventIdSlug)}`;
         response = await fetch(
-          `${API_URL}/api/events/${eventIdSlug}`
+          eventApiPath,
+          {
+            headers: session?.access_token
+              ? {
+                  Authorization: `Bearer ${session.access_token}`,
+                }
+              : undefined,
+            cache: "no-store",
+          }
         );
 
         // Try to clone the response to read text, as .json() consumes the body
         const responseText = await response.clone().text();
 
         if (!response.ok) {
-          let errorData;
-          try {
-            errorData = JSON.parse(responseText); // Use the cloned text
-          } catch (parseError) {
-            // If JSON parsing fails, use the raw text or a generic message
-            errorData = {
-              error: responseText || `HTTP error! status: ${response.status}`,
-            };
-          }
+          const errorData = parseJsonSafely(responseText) || {
+            error: responseText || `HTTP error! status: ${response.status}`,
+          };
           throw new Error(
             errorData.error ||
               errorData.detail ||
@@ -157,7 +169,10 @@ export default function EditEventPage() {
           );
         }
 
-        const parsedResponse = JSON.parse(responseText); // Use the cloned text again for actual data
+        const parsedResponse = parseJsonSafely(responseText);
+        if (!parsedResponse || typeof parsedResponse !== "object") {
+          throw new Error("Event endpoint returned an invalid response.");
+        }
         const data = parsedResponse.event;
 
         if (data) {
@@ -593,7 +608,8 @@ export default function EditEventPage() {
 
     setIsArchiveUpdating(true);
     try {
-      const response = await fetch(`${API_URL}/api/events/${eventIdSlug}/archive`, {
+      const archiveApiPath = `/api/events/${encodeURIComponent(eventIdSlug)}/archive`;
+      const response = await fetch(archiveApiPath, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -894,8 +910,10 @@ export default function EditEventPage() {
         throw new Error("Authentication token not found.");
       }
 
+      const eventApiPath = `/api/events/${encodeURIComponent(eventIdSlug)}`;
+
       response = await fetch(
-        `${API_URL}/api/events/${eventIdSlug}`,
+        eventApiPath,
         {
           method: "PUT",
           body: payload,
