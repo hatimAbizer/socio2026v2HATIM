@@ -3,7 +3,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
-import { resolveBackendApiBase } from "@/lib/backendApi";
+import { fetchWorkflowApiWithFailover } from "@/lib/workflowApiClient";
 import { hasAnyRoleCode } from "@/lib/roleDashboards";
 import { getCurrentUserProfileWithRoleCodes } from "@/lib/serverRoleProfile";
 import { triggerLogisticsApprovals } from "../logistics/actions";
@@ -58,6 +58,26 @@ function parseApprovalAction(value: unknown): FinanceApprovalAction | null {
   }
 
   return null;
+}
+
+const ROLE_CODE_ALIASES: Record<string, string> = {
+  L4_ACCOUNTS: "ACCOUNTS",
+  FINANCE: "FINANCE_OFFICER",
+  FINANCE_OFFICE: "FINANCE_OFFICER",
+};
+
+function normalizeRoleCode(value: unknown): string {
+  const normalized = normalizeText(value).toUpperCase();
+  if (!normalized) {
+    return "";
+  }
+
+  return ROLE_CODE_ALIASES[normalized] || normalized;
+}
+
+function isFinanceRoleCode(value: unknown): boolean {
+  const normalized = normalizeRoleCode(value);
+  return normalized === "ACCOUNTS" || normalized === "FINANCE_OFFICER";
 }
 
 function isMissingRelationError(error: { code?: string | null; message?: string | null }) {
@@ -130,7 +150,12 @@ async function resolveFinanceSession() {
   const profileRecord = profile as Record<string, unknown>;
   const isMasterAdmin = Boolean(profileRecord.is_masteradmin);
   const isFinanceOfficer =
-    hasAnyRoleCode(profileRecord, ["ACCOUNTS", "FINANCE_OFFICER", "FINANCE"]) ||
+    hasAnyRoleCode(profileRecord, [
+      "ACCOUNTS",
+      "FINANCE_OFFICER",
+      "FINANCE",
+      "FINANCE_OFFICE",
+    ]) ||
     Boolean(profileRecord.is_finance_officer) ||
     Boolean(profileRecord.is_finance_office);
   if (!isFinanceOfficer && !isMasterAdmin) {
@@ -332,48 +357,39 @@ export async function submitFinanceApprovalDecisionAction(input: {
     }
 
     const approvalRequestDbId = normalizeText(approvalRow.id);
-    const requestIdentifier = normalizeText(approvalRow.request_id);
+    const requestIdentifier = normalizeText(approvalRow.request_id || approvalRequestDbId);
 
     if (!approvalRequestDbId || !requestIdentifier) {
       return fail("Approval request is missing workflow identifiers.");
     }
 
-    const { data: pendingStepRow, error: pendingStepError } = await supabase
+    const { data: pendingStepRowsData, error: pendingStepError } = await supabase
       .from("approval_steps")
-      .select("step_code,status")
+      .select("id,step_code,role_code,status,sequence_order")
       .eq("approval_request_id", approvalRequestDbId)
-      .in("role_code", ["ACCOUNTS", "FINANCE_OFFICER", "FINANCE"])
       .eq("status", "PENDING")
-      .order("sequence_order", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+      .order("sequence_order", { ascending: true });
 
     if (pendingStepError) {
       return fail(`Failed to load pending Accounts step: ${pendingStepError.message}`);
     }
 
-    let resolvedPendingStep = pendingStepRow as Record<string, unknown> | null;
+    const pendingSteps = Array.isArray(pendingStepRowsData)
+      ? (pendingStepRowsData as Array<Record<string, unknown>>)
+      : [];
 
-    if (!resolvedPendingStep) {
-      const { data: fallbackStepRow, error: fallbackStepError } = await supabase
-        .from("approval_steps")
-        .select("step_code,status")
-        .eq("approval_request_id", approvalRequestDbId)
-        .in("step_code", ["ACCOUNTS", "L4_ACCOUNTS", "FINANCE", "L4_FINANCE", "FINANCE_OFFICER"])
-        .eq("status", "PENDING")
-        .order("sequence_order", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      if (fallbackStepError) {
-        return fail(`Failed to load pending Accounts step: ${fallbackStepError.message}`);
-      }
-
-      resolvedPendingStep = (fallbackStepRow as Record<string, unknown> | null) || null;
+    const activePendingStep = pendingSteps[0] || null;
+    if (!activePendingStep) {
+      return fail("No pending approval step exists for this request.");
     }
 
-    if (!resolvedPendingStep) {
-      return fail("No pending Accounts step exists for this request.");
+    const activeRoleCode = normalizeRoleCode(
+      activePendingStep.role_code || activePendingStep.step_code
+    );
+    if (!isFinanceRoleCode(activeRoleCode)) {
+      return fail(
+        `Current active step is ${activeRoleCode || "UNKNOWN"}, not Finance/Accounts.`
+      );
     }
 
     const comments =
@@ -385,7 +401,9 @@ export async function submitFinanceApprovalDecisionAction(input: {
 
     const decision = action === "approve" ? "APPROVED" : "REJECTED";
 
-    const stepCode = normalizeText(resolvedPendingStep.step_code);
+    const stepCode = normalizeText(
+      activePendingStep.step_code || activePendingStep.role_code
+    );
     if (!stepCode) {
       return fail("Approval request is missing step identifiers.");
     }
@@ -399,26 +417,32 @@ export async function submitFinanceApprovalDecisionAction(input: {
       return fail("Authentication session is unavailable. Please sign in again.");
     }
 
-    const apiBaseUrl = resolveBackendApiBase();
-    if (!apiBaseUrl) {
-      return fail("BACKEND_API_URL is not configured for workflow decisions.");
-    }
-
-    const upstreamResponse = await fetch(
-      `${apiBaseUrl}/api/approvals/requests/${encodeURIComponent(requestIdentifier)}/steps/${encodeURIComponent(stepCode)}/decision`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
+    let upstreamResponse: Response;
+    try {
+      const upstreamResult = await fetchWorkflowApiWithFailover(
+        `/api/approvals/requests/${encodeURIComponent(requestIdentifier)}/steps/${encodeURIComponent(stepCode)}/decision`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            decision,
+            comment: comments,
+          }),
         },
-        body: JSON.stringify({
-          decision,
-          comment: comments,
-        }),
-        cache: "no-store",
+        20000
+      );
+
+      upstreamResponse = upstreamResult.response;
+    } catch (error: any) {
+      if (error?.name === "AbortError") {
+        return fail("Approval service timeout. Please try again.");
       }
-    );
+
+      return fail("Unable to reach approval service. Please try again.");
+    }
 
     let upstreamPayload: any = null;
     let upstreamText: string | null = null;

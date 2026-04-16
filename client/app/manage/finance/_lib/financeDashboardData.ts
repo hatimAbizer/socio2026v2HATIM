@@ -47,6 +47,8 @@ type ApprovalStepQueueRow = {
   status?: string | null;
   created_at?: string | null;
   step_code?: string | null;
+  role_code?: string | null;
+  sequence_order?: number | string | null;
   approval_request_id?: string | null;
   decided_at?: string | null;
   approval_requests?: ApprovalRequestQueueRow[] | ApprovalRequestQueueRow | null;
@@ -143,6 +145,63 @@ function toSingleRecord<T>(value: T[] | T | null | undefined): T | null {
 
 function normalizeEntityType(value: unknown): string {
   return normalizeText(value).toUpperCase();
+}
+
+const ROLE_CODE_ALIASES: Record<string, string> = {
+  L4_ACCOUNTS: "ACCOUNTS",
+  FINANCE: "FINANCE_OFFICER",
+  FINANCE_OFFICE: "FINANCE_OFFICER",
+};
+
+const FINANCE_STEP_CODE_SET = new Set([
+  "ACCOUNTS",
+  "L4_ACCOUNTS",
+  "FINANCE",
+  "L4_FINANCE",
+  "FINANCE_OFFICER",
+  "FINANCE_OFFICE",
+  "L4_FINANCE_OFFICE",
+]);
+
+function normalizeRoleCode(value: unknown): string {
+  const normalized = normalizeText(value).toUpperCase();
+  if (!normalized) {
+    return "";
+  }
+
+  return ROLE_CODE_ALIASES[normalized] || normalized;
+}
+
+function isFinanceRoleCode(value: unknown): boolean {
+  const normalized = normalizeRoleCode(value);
+  return normalized === "ACCOUNTS" || normalized === "FINANCE_OFFICER";
+}
+
+function isFinanceStepCode(value: unknown): boolean {
+  const normalized = normalizeText(value).toUpperCase();
+  return normalized.length > 0 && FINANCE_STEP_CODE_SET.has(normalized);
+}
+
+function isCfoRoleCode(value: unknown): boolean {
+  return normalizeRoleCode(value) === "CFO";
+}
+
+function toTimestamp(value: unknown): number {
+  if (!value) {
+    return 0;
+  }
+
+  const parsed = new Date(String(value)).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function resolveApprovalRequestIdFromStep(stepRow: ApprovalStepQueueRow): string {
+  const directRequestId = normalizeText(stepRow.approval_request_id);
+  if (directRequestId) {
+    return directRequestId;
+  }
+
+  return normalizeText(toSingleRecord(stepRow.approval_requests)?.id);
 }
 
 function isEventEntityType(value: unknown): boolean {
@@ -422,6 +481,9 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
     id,
     status,
     step_code,
+    role_code,
+    sequence_order,
+    approval_request_id,
     created_at,
     approval_requests!inner (
       id,
@@ -438,6 +500,9 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
     id,
     status,
     step_code,
+    role_code,
+    sequence_order,
+    approval_request_id,
     created_at,
     approval_requests!inner (
       id,
@@ -452,8 +517,6 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
   let pendingQueryResult = await supabase
     .from("approval_steps")
     .select(pendingSelectWithSchool)
-    .in("role_code", ["ACCOUNTS", "FINANCE_OFFICER", "FINANCE"])
-    .in("step_code", ["ACCOUNTS", "L4_ACCOUNTS", "FINANCE", "L4_FINANCE", "FINANCE_OFFICER"])
     .eq("status", "PENDING")
     .order("created_at", { ascending: true });
 
@@ -464,8 +527,6 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
     pendingQueryResult = await supabase
       .from("approval_steps")
       .select(pendingSelectLegacy)
-      .in("role_code", ["ACCOUNTS", "FINANCE_OFFICER", "FINANCE"])
-      .in("step_code", ["ACCOUNTS", "L4_ACCOUNTS", "FINANCE", "L4_FINANCE", "FINANCE_OFFICER"])
       .eq("status", "PENDING")
       .order("created_at", { ascending: true });
   }
@@ -480,7 +541,71 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
     ? (pendingStepsData as ApprovalStepQueueRow[])
     : [];
 
-  const pendingRequestRows = pendingSteps
+  const financePendingSteps = pendingSteps.filter((stepRow) => {
+    const roleCode = normalizeRoleCode(stepRow.role_code || stepRow.step_code);
+    return isFinanceRoleCode(roleCode) || isFinanceStepCode(stepRow.step_code);
+  });
+
+  const activePendingStepByRequestId = new Map<
+    string,
+    { stepId: string; sequenceOrder: number; createdAtTs: number; roleCode: string }
+  >();
+
+  pendingSteps.forEach((stepRow) => {
+    const requestId = resolveApprovalRequestIdFromStep(stepRow);
+    const stepId = normalizeText(stepRow.id);
+    if (!requestId || !stepId) {
+      return;
+    }
+
+    const rowSequenceOrder = toNumber(stepRow.sequence_order);
+    const normalizedSequenceOrder =
+      Number.isFinite(rowSequenceOrder) && rowSequenceOrder > 0
+        ? rowSequenceOrder
+        : Number.MAX_SAFE_INTEGER;
+    const rowCreatedAtTs = toTimestamp(stepRow.created_at);
+
+    const existing = activePendingStepByRequestId.get(requestId);
+    if (!existing) {
+      activePendingStepByRequestId.set(requestId, {
+        stepId,
+        sequenceOrder: normalizedSequenceOrder,
+        createdAtTs: rowCreatedAtTs,
+        roleCode: normalizeRoleCode(stepRow.role_code || stepRow.step_code),
+      });
+      return;
+    }
+
+    const hasLowerSequence = normalizedSequenceOrder < existing.sequenceOrder;
+    const hasEarlierTimestamp =
+      normalizedSequenceOrder === existing.sequenceOrder && rowCreatedAtTs < existing.createdAtTs;
+
+    if (hasLowerSequence || hasEarlierTimestamp) {
+      activePendingStepByRequestId.set(requestId, {
+        stepId,
+        sequenceOrder: normalizedSequenceOrder,
+        createdAtTs: rowCreatedAtTs,
+        roleCode: normalizeRoleCode(stepRow.role_code || stepRow.step_code),
+      });
+    }
+  });
+
+  const actionableFinancePendingSteps = financePendingSteps.filter((stepRow) => {
+    const requestId = resolveApprovalRequestIdFromStep(stepRow);
+    const stepId = normalizeText(stepRow.id);
+    if (!requestId || !stepId) {
+      return false;
+    }
+
+    const activeStep = activePendingStepByRequestId.get(requestId);
+    if (!activeStep || activeStep.stepId !== stepId) {
+      return false;
+    }
+
+    return isFinanceRoleCode(activeStep.roleCode);
+  });
+
+  const pendingRequestRows = actionableFinancePendingSteps
     .map((row) => toSingleRecord(row.approval_requests))
     .filter((row): row is ApprovalRequestQueueRow => Boolean(row))
     .filter((requestRow) => isSupportedFinanceEntityType(requestRow.entity_type));
@@ -569,10 +694,8 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
   if (approvalRequestIds.length > 0) {
     const { data: cfoStepRowsData, error: cfoStepRowsError } = await supabase
       .from("approval_steps")
-      .select("approval_request_id,status,decided_at,created_at")
+      .select("approval_request_id,status,decided_at,created_at,step_code,role_code")
       .in("approval_request_id", approvalRequestIds)
-      .eq("role_code", "CFO")
-      .in("step_code", ["CFO", "L3_CFO"])
       .eq("status", "APPROVED")
       .order("decided_at", { ascending: false });
 
@@ -585,6 +708,10 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
       : [];
 
     cfoStepRows.forEach((stepRow) => {
+      if (!isCfoRoleCode(stepRow.role_code || stepRow.step_code)) {
+        return;
+      }
+
       const requestId = normalizeText(stepRow.approval_request_id);
       if (!requestId || cfoApprovedAtByRequestId.has(requestId)) {
         return;
@@ -630,7 +757,7 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
 
   const approvalsByRequestId = new Map<string, FinanceL4ApprovalItem>();
 
-  pendingSteps.forEach((stepRow) => {
+  actionableFinancePendingSteps.forEach((stepRow) => {
     const requestRow = toSingleRecord(stepRow.approval_requests);
     if (!requestRow || !isSupportedFinanceEntityType(requestRow.entity_type)) {
       return;

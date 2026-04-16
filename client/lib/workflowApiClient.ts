@@ -34,6 +34,45 @@ function shouldRetryWithNextOrigin(statusCode: number): boolean {
   return RETRYABLE_STATUS_CODES.has(statusCode);
 }
 
+function prioritizeKnownWorkflowOrigins(): string[] {
+  const deploymentHost = String(
+    process.env.VERCEL_URL || process.env.NEXT_PUBLIC_VERCEL_URL || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  if (deploymentHost.includes("sociodev")) {
+    return [
+      "https://sociodevserver.vercel.app",
+      "https://socioserver-snowy.vercel.app",
+    ];
+  }
+
+  return [...KNOWN_WORKFLOW_API_ORIGINS];
+}
+
+function resolvePreferredOriginFromDeploymentHost(): string {
+  const deploymentHost = String(
+    process.env.VERCEL_URL || process.env.NEXT_PUBLIC_VERCEL_URL || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  if (!deploymentHost) {
+    return "";
+  }
+
+  if (deploymentHost.includes("sociodev")) {
+    return "https://sociodevserver.vercel.app";
+  }
+
+  if (deploymentHost.includes("socio") || deploymentHost.includes("withsocio")) {
+    return "https://socioserver-snowy.vercel.app";
+  }
+
+  return "";
+}
+
 async function fetchWithTimeout(
   url: string,
   options: RequestInit,
@@ -65,6 +104,11 @@ export function resolveWorkflowApiOrigins(): string[] {
 
   const uniqueOrigins = new Set<string>();
 
+  const preferredOrigin = normalizeApiOrigin(resolvePreferredOriginFromDeploymentHost());
+  if (preferredOrigin.length > 0) {
+    uniqueOrigins.add(preferredOrigin);
+  }
+
   envOrigins
     .filter((origin) => origin.length > 0)
     .forEach((origin) => uniqueOrigins.add(origin));
@@ -76,7 +120,7 @@ export function resolveWorkflowApiOrigins(): string[] {
       .forEach((origin) => uniqueOrigins.add(origin));
   }
 
-  KNOWN_WORKFLOW_API_ORIGINS
+  prioritizeKnownWorkflowOrigins()
     .map((origin) => normalizeApiOrigin(origin))
     .filter((origin) => origin.length > 0)
     .forEach((origin) => uniqueOrigins.add(origin));
