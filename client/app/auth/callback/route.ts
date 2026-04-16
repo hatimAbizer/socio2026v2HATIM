@@ -2,11 +2,8 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { resolveBackendApiBase } from "@/lib/backendApi";
 
-const API_URL = String(process.env.NEXT_PUBLIC_API_URL || "")
-  .trim()
-  .replace(/\/+$/, "")
-  .replace(/(\/api)+$/i, "");
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL;
 
 const isLocalOrigin = (value?: string | null) =>
@@ -35,8 +32,13 @@ const getOrganizationType = (email: string): 'christ_member' | 'outsider' => {
 };
 
 // Create or update user in database (server-side for speed)
-async function createUserInDatabase(user: any) {
+async function createUserInDatabase(user: any, backendBase: string | null) {
   try {
+    if (!backendBase) {
+      console.warn("Skipping background user create: backend API base is not configured.");
+      return;
+    }
+
     const orgType = getOrganizationType(user.email);
 
     let fullName = user.user_metadata?.full_name || user.user_metadata?.name || "";
@@ -82,7 +84,7 @@ async function createUserInDatabase(user: any) {
     };
 
     // Send user creation request asynchronously - don't block redirect
-    fetch(`${API_URL}/api/users`, {
+    fetch(`${backendBase}/api/users`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user: payload }),
@@ -106,6 +108,7 @@ async function createUserInDatabase(user: any) {
 
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url);
+  const backendApiBase = resolveBackendApiBase({ requestOrigin: requestUrl.origin }) || null;
 
   // Robust origin detection: 
   // 1. First choice: Environment variable
@@ -180,7 +183,7 @@ export async function GET(request: NextRequest) {
 
     // Create/update user in database asynchronously (don't wait to avoid slow redirects)
     // If it fails, user will be created on next page load via AuthContext
-    createUserInDatabase(session.user).catch(err =>
+    createUserInDatabase(session.user, backendApiBase).catch(err =>
       console.error("Background user creation failed:", err)
     );
 

@@ -57,6 +57,8 @@ const normalizeApiOrigin = (value: string | undefined | null): string => {
 };
 
 const getApiOrigins = (): string[] => {
+  const browserOrigin =
+    typeof window !== "undefined" ? normalizeApiOrigin(window.location.origin) : "";
   const configuredOrigin = normalizeApiOrigin(process.env.NEXT_PUBLIC_API_URL);
   const fallbackEnvOrigin = normalizeApiOrigin(process.env.NEXT_PUBLIC_API_FALLBACK_URL);
   const localOriginCandidate =
@@ -67,6 +69,7 @@ const getApiOrigins = (): string[] => {
 
   return Array.from(
     new Set([
+      browserOrigin,
       configuredOrigin,
       fallbackEnvOrigin,
       localOriginCandidate,

@@ -4,6 +4,7 @@ import { createServerClient } from "@supabase/ssr";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 
+import { resolveBackendApiBase } from "@/lib/backendApi";
 import { hasAnyRoleCode } from "@/lib/roleDashboards";
 import { getCurrentUserProfileWithRoleCodes } from "@/lib/serverRoleProfile";
 
@@ -177,9 +178,9 @@ export async function processCfoApprovalAction(input: {
       return fail("Authentication session is unavailable. Please sign in again.");
     }
 
-    const apiBaseUrl = String(process.env.NEXT_PUBLIC_API_URL || "").replace(/\/api\/?$/, "");
+    const apiBaseUrl = resolveBackendApiBase();
     if (!apiBaseUrl) {
-      return fail("NEXT_PUBLIC_API_URL is not configured for workflow decisions.");
+      return fail("BACKEND_API_URL is not configured for workflow decisions.");
     }
 
     const upstreamResponse = await fetch(

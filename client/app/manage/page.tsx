@@ -117,10 +117,7 @@ const EVENT_STATUS_FILTER_OPTIONS: Array<{ value: StatusFilter; label: string }>
   { value: "archived", label: "Archived" },
 ];
 
-const API_URL = String(process.env.NEXT_PUBLIC_API_URL || "")
-  .trim()
-  .replace(/\/+$/, "")
-  .replace(/(\/api)+$/i, "");
+const API_URL = "";
 const API_ORIGIN_FALLBACKS = [
   "https://socioserver-snowy.vercel.app",
   "https://sociodevserver.vercel.app",
@@ -1025,12 +1022,12 @@ export default function ManageDashboard() {
       }
     };
 
-    addOrigin(API_URL);
-    API_ORIGIN_FALLBACKS.forEach((origin) => addOrigin(origin));
-
     if (typeof window !== "undefined") {
       addOrigin(window.location.origin);
     }
+
+    addOrigin(API_URL);
+    API_ORIGIN_FALLBACKS.forEach((origin) => addOrigin(origin));
 
     return Array.from(originSet);
   }, []);
@@ -1776,8 +1773,7 @@ export default function ManageDashboard() {
   const handleGenerateReport = async () => {
     setIsGenerating(true);
     try {
-      const reportApiBase = API_URL || "";
-      const response = await fetch(`${reportApiBase}/api/report/data`, {
+      const response = await fetch(`/api/report/data`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

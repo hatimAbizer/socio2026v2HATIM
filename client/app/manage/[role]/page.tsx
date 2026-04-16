@@ -8,6 +8,7 @@ import {
   getServiceRoleConfigBySlug,
   hasServiceRoleAccess,
 } from "@/lib/roleDashboards";
+import { resolveBackendApiBase } from "@/lib/backendApi";
 import { getCurrentUserProfileWithRoleCodes } from "@/lib/serverRoleProfile";
 
 export const dynamic = "force-dynamic";
@@ -55,9 +56,9 @@ async function fetchServiceRoleDashboardData({
   serviceRoleCode: string;
   accessToken: string;
 }): Promise<{ queue: HodApprovalQueueItem[]; metrics: { deptBudgetUsedYtd: number; pendingL1Approvals: number } }> {
-  const apiBaseUrl = String(process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "").replace(/\/api\/?$/, "");
+  const apiBaseUrl = resolveBackendApiBase();
   if (!apiBaseUrl) {
-    throw new Error("NEXT_PUBLIC_API_URL is not configured for workflow queue fetch.");
+    throw new Error("BACKEND_API_URL is not configured for workflow queue fetch.");
   }
 
   const queueResponse = await fetch(
