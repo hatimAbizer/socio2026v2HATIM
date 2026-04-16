@@ -212,7 +212,7 @@ export async function fetchCfoDashboardData({
   const { data: budgetData, error: budgetError } = await supabase
     .from("event_budgets")
     .select("event_id,total_estimated_expense,total_actual_expense")
-    .gt("total_estimated_expense", normalizedThreshold);
+    .gt("total_estimated_expense", 0);
 
   if (budgetError) {
     throw new Error(`Failed to load CFO budget data: ${budgetError.message}`);
@@ -465,7 +465,8 @@ export async function fetchCfoDashboardData({
       (row): row is CfoApprovalQueueItem => Boolean(row && row.id.length > 0 && row.eventId.length > 0)
     );
 
-  const highValuePendingBudget = queue.reduce((sum, row) => sum + row.totalBudget, 0);
+  const highValueQueue = queue.filter((row) => row.totalBudget > normalizedThreshold);
+  const highValuePendingBudget = highValueQueue.reduce((sum, row) => sum + row.totalBudget, 0);
 
   const ytdSelectWithSchool = `
     id,
@@ -616,7 +617,7 @@ export async function fetchCfoDashboardData({
     metrics: {
       campusRequestedBudgetYtd: ytdTotals.requested,
       campusApprovedBudgetYtd: ytdTotals.approved,
-      highValuePendingRequests: queue.length,
+      highValuePendingRequests: highValueQueue.length,
       highValuePendingBudget,
       l2Threshold: normalizedThreshold,
     },

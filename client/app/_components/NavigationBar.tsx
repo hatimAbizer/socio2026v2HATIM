@@ -4,7 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import Logo from "@/app/logo.svg";
 import { useAuth } from "@/context/AuthContext";
-import { NotificationSystem } from "./NotificationSystem";
+import NotificationBell from "./NotificationBell";
 import TermsConsentModal from "./TermsConsentModal";
 import {
   getAccessibleServiceRoleDashboards,
@@ -584,7 +584,7 @@ function NavigationBar() {
             ) : session ? (
               userData && isManagementUser ? (
                 <div className="flex gap-2 sm:gap-4 items-center md:flex-nowrap justify-end">
-                  <NotificationSystem />
+                  <NotificationBell />
                   {!isDesktopCompact &&
                     inlineRoleDashboardLinks.map((item) => (
                       <Link
@@ -675,7 +675,7 @@ function NavigationBar() {
                 </div>
               ) : (
                 <div className="flex gap-2 sm:gap-4 items-center md:flex-nowrap justify-end">
-                  {userData && <NotificationSystem />}
+                  {userData && <NotificationBell />}
                   <Link href="/profile">
   <div className="flex items-center gap-2 lg:gap-4 min-w-0">
     {/* CHANGED: USERNAME IS HIDDEN ON SMALLER WIDTHS, LONG NAMES DON’T PUSH AVATAR OUTSIDE, AVATAR ALWAYS STAYS VISIBLE */}

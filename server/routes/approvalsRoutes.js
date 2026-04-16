@@ -129,12 +129,6 @@ const DEPT_APPROVAL_ROLE_CODES = new Set([
   ROLE_CODES.ORGANIZER_TEACHER,
 ]);
 
-const FINANCE_APPROVAL_ROLE_CODES = new Set([
-  ROLE_CODES.CFO,
-  ROLE_CODES.ACCOUNTS,
-  ROLE_CODES.FINANCE_OFFICER,
-]);
-
 const WORKFLOW_STATUS_BY_ROLE_CODE = {
   [ROLE_CODES.HOD]: "pending_hod",
   [ROLE_CODES.DEAN]: "pending_dean",
@@ -2213,9 +2207,21 @@ const resolveRoleRecipientEmails = async ({
   );
 
   try {
-    const userRows = await queryAll("users", {
+    let userRows = await queryAll("users", {
       select:
         "email,campus,school,school_id,department,department_id,university_role,is_hod,is_dean,is_cfo,is_finance_office,is_finance_officer,is_service_it,is_service_venue,is_service_catering,is_service_stalls,is_organiser_student,is_organiser",
+    }).catch(async (error) => {
+      if (
+        !isMissingColumnError(error, "is_finance_officer") &&
+        !isMissingColumnError(error, "is_finance_office")
+      ) {
+        throw error;
+      }
+
+      return queryAll("users", {
+        select:
+          "email,campus,school,school_id,department,department_id,university_role,is_hod,is_dean,is_cfo,is_finance_office,is_service_it,is_service_venue,is_service_catering,is_service_stalls,is_organiser_student,is_organiser",
+      });
     });
 
     const recipients = new Set();
@@ -2277,6 +2283,7 @@ const notifyNextApprovalStageRole = async ({
   approvalRequest,
   currentApprovalStep,
   nextPendingStep,
+  actorEmail,
 }) => {
   if (!nextPendingStep) {
     return;
@@ -2299,7 +2306,7 @@ const notifyNextApprovalStageRole = async ({
     campusScope: approvalRequest?.campus_hosted_at,
     schoolScope: approvalRequest?.organizing_school,
     departmentScope: approvalRequest?.organizing_dept,
-    excludeEmails: [approvalRequest?.requested_by_email],
+    excludeEmails: [approvalRequest?.requested_by_email, actorEmail],
   });
 
   if (recipientEmails.length === 0) {
@@ -3187,6 +3194,36 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
       decidedByEmail: req.userInfo?.email || null,
       comment,
     });
+
+    const nextPendingStep =
+      decision === "APPROVED" && requestStatus === "UNDER_REVIEW"
+        ? await getActivePendingStepForRequest(approvalRequest.id)
+        : null;
+
+    if (nextPendingStep) {
+      notifyNextApprovalStageRole({
+        approvalRequest,
+        currentApprovalStep: approvalStep,
+        nextPendingStep,
+        actorEmail: req.userInfo?.email || null,
+      }).catch((notificationError) => {
+        console.error(
+          "[ApprovalNotify] Failed to dispatch next-stage role notification:",
+          notificationError
+        );
+      });
+    }
+
+    if (decision === "APPROVED") {
+      notifyLogisticsAndStudentOrganiserHandoff({
+        approvalRequest,
+      }).catch((notificationError) => {
+        console.error(
+          "[ApprovalNotify] Failed to dispatch logistics/student organiser handoff notifications:",
+          notificationError
+        );
+      });
+    }
 
     notifyDecisionToOrganizer({
       approvalRequest,

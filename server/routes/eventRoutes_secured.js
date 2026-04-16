@@ -241,7 +241,8 @@ const normalizeWorkflowStatus = (value, fallback = "") => {
 const WORKFLOW_PHASE = Object.freeze({
   DRAFT: "draft",
   DEPT_APPROVAL: "dept_approval",
-  FINANCE_APPROVAL: "finance_approval",
+  FINANCE_APPROVAL_CFO: "finance_approval_cfo",
+  FINANCE_APPROVAL_ACCOUNTS: "finance_approval_accounts",
   LOGISTICS_APPROVAL: "logistics_approval",
   APPROVED: "approved",
 });
@@ -259,8 +260,12 @@ const resolveWorkflowPhaseFromWorkflowStatus = (workflowStatus) => {
     return WORKFLOW_PHASE.DEPT_APPROVAL;
   }
 
-  if (["pending_cfo", "pending_accounts"].includes(normalizedStatus)) {
-    return WORKFLOW_PHASE.FINANCE_APPROVAL;
+  if (normalizedStatus === "pending_cfo") {
+    return WORKFLOW_PHASE.FINANCE_APPROVAL_CFO;
+  }
+
+  if (normalizedStatus === "pending_accounts") {
+    return WORKFLOW_PHASE.FINANCE_APPROVAL_ACCOUNTS;
   }
 
   if (["auto_approved", "fully_approved", "live"].includes(normalizedStatus)) {
@@ -561,36 +566,6 @@ const resolveStandaloneApprovalPreferences = (
   };
 };
 
-const DEFAULT_CAMPUS_L3_THRESHOLD = 25000;
-
-const getCampusBudgetThreshold = (campusValue) => {
-  const rawMap =
-    process.env.MODULE11_CAMPUS_L3_THRESHOLDS_JSON ||
-    process.env.CAMPUS_L3_THRESHOLDS_JSON ||
-    "";
-
-  const normalizedCampus = normalizeSingleStringField(campusValue || "").toLowerCase();
-  if (!rawMap || !normalizedCampus) {
-    return DEFAULT_CAMPUS_L3_THRESHOLD;
-  }
-
-  try {
-    const parsed = JSON.parse(rawMap);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return DEFAULT_CAMPUS_L3_THRESHOLD;
-    }
-
-    const matchedValue = Number(parsed[normalizedCampus] ?? parsed[campusValue]);
-    if (!Number.isFinite(matchedValue) || matchedValue <= 0) {
-      return DEFAULT_CAMPUS_L3_THRESHOLD;
-    }
-
-    return matchedValue;
-  } catch {
-    return DEFAULT_CAMPUS_L3_THRESHOLD;
-  }
-};
-
 const getStandaloneBudgetAmount = ({ payload = {}, parsedRegistrationFee = null }) => {
   const directAmount = Number(
     payload?.budget_amount ||
@@ -616,7 +591,6 @@ const getStandaloneBudgetAmount = ({ payload = {}, parsedRegistrationFee = null 
 };
 
 const getStandaloneBudgetApprovalPlan = ({
-  campusHostedAt,
   isBudgetRelated,
   budgetAmount,
 }) => {
@@ -637,12 +611,10 @@ const getStandaloneBudgetApprovalPlan = ({
     };
   }
 
-  const threshold = getCampusBudgetThreshold(campusHostedAt);
-  const requiresCfo = normalizedAmount > threshold;
   return {
-    requiresCfo,
+    requiresCfo: true,
     requiresAccounts: true,
-    workflowStatus: requiresCfo ? "pending_cfo" : "pending_accounts",
+    workflowStatus: "pending_cfo",
   };
 };
 
