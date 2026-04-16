@@ -1,8 +1,8 @@
 export type ServiceRoleSlug =
   | "it"
   | "venue"
-  | "catering-vendors"
-  | "stalls-misc";
+  | "catering"
+  | "stalls";
 
 export interface ServiceRoleDashboardConfig {
   slug: ServiceRoleSlug;
@@ -28,13 +28,14 @@ export const SERVICE_ROLE_DASHBOARDS: ServiceRoleDashboardConfig[] = [
     userFlagKeys: ["is_venue", "is_venue_manager", "is_service_venue"],
   },
   {
-    slug: "catering-vendors",
-    label: "Catering Vendors",
+    slug: "catering",
+    label: "Catering",
     roleCodes: ["SERVICE_CATERING"],
     aliases: [
       "catering vendors",
       "catering vendor",
       "catering",
+      "catering-vendors",
       "cateringvendors",
     ],
     userFlagKeys: [
@@ -45,10 +46,10 @@ export const SERVICE_ROLE_DASHBOARDS: ServiceRoleDashboardConfig[] = [
     ],
   },
   {
-    slug: "stalls-misc",
-    label: "Stalls/Misc",
+    slug: "stalls",
+    label: "Stalls",
     roleCodes: ["SERVICE_STALLS"],
-    aliases: ["stalls misc", "stall misc", "stalls", "stallsmisc"],
+    aliases: ["stalls misc", "stall misc", "stalls", "stallsmisc", "stalls-misc"],
     userFlagKeys: [
       "is_stalls_misc",
       "is_stall_misc",
@@ -182,10 +183,35 @@ export function hasRoleAlias(rawRole: unknown, aliases: string[]): boolean {
 export function getServiceRoleConfigBySlug(
   slug: string | null | undefined
 ): ServiceRoleDashboardConfig | null {
-  const normalizedSlug = String(slug || "").trim().toLowerCase();
+  const normalizedSlug = String(slug || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-");
+
+  if (!normalizedSlug) {
+    return null;
+  }
+
   return (
-    SERVICE_ROLE_DASHBOARDS.find((roleConfig) => roleConfig.slug === normalizedSlug) ||
-    null
+    SERVICE_ROLE_DASHBOARDS.find((roleConfig) => {
+      const slugToken = String(roleConfig.slug || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_]+/g, "-");
+
+      if (slugToken === normalizedSlug) {
+        return true;
+      }
+
+      return roleConfig.aliases.some((alias) => {
+        const aliasToken = String(alias || "")
+          .trim()
+          .toLowerCase()
+          .replace(/[\s_]+/g, "-");
+
+        return aliasToken === normalizedSlug;
+      });
+    }) || null
   );
 }
 

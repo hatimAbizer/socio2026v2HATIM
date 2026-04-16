@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { hasAnyRoleCode } from "@/lib/roleDashboards";
 import { getCurrentUserProfileWithRoleCodes } from "@/lib/serverRoleProfile";
+import { triggerLogisticsApprovals } from "../logistics/actions";
 
 import { FinanceActionResult, FinanceApprovalAction } from "./types";
 
@@ -229,6 +230,19 @@ export async function processAccountsApprovalAction(input: {
     const pendingServiceRequests = toNumber(payload.pending_service_requests);
     const workflowPhase = normalizeText(payload.workflow_phase) || "logistics_approval";
 
+    // Keep Module 11 logistics routing strictly conditional at L5 approval level.
+    // The SQL RPC still manages service_requests for legacy compatibility, while
+    // this server action creates dedicated approval_requests (L5_*) only when the
+    // coordinator actually requested the corresponding logistics service.
+    const logisticsTriggerResult = eventId
+      ? await triggerLogisticsApprovals(eventId)
+      : {
+          ok: false,
+          message: "Event id unavailable for logistics trigger.",
+          generatedLevels: [],
+          skippedLevels: [],
+        };
+
     await logFinanceAudit(supabase, {
       eventId: eventId || null,
       budgetId: null,
@@ -241,6 +255,10 @@ export async function processAccountsApprovalAction(input: {
         promoted_queued_requests: promotedQueuedRequests,
         pending_service_requests: pendingServiceRequests,
         workflow_phase: workflowPhase,
+        conditional_l5_triggered: logisticsTriggerResult.ok,
+        conditional_l5_generated_levels: logisticsTriggerResult.generatedLevels,
+        conditional_l5_skipped_levels: logisticsTriggerResult.skippedLevels,
+        conditional_l5_message: logisticsTriggerResult.message,
       },
     });
 

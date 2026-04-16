@@ -30,6 +30,14 @@ function normalizeRoleCode(value: unknown): string {
   return String(value || "").trim().toUpperCase();
 }
 
+function normalizeUniversityRole(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .trim();
+}
+
 function getActiveRoleCodesFromAssignments(
   assignments: Array<Record<string, unknown>>,
   nowDate: Date = new Date()
@@ -185,6 +193,10 @@ export async function middleware(req: NextRequest) {
   const isCfoManagementRoute = pathname.startsWith("/manage/cfo");
   const isStudentOrganiserManagementRoute = pathname.startsWith("/manage/student-organiser");
   const isFinanceManagementRoute = pathname.startsWith("/manage/finance");
+  const isVenueServiceRoute = pathname === "/manage/venue" || pathname.startsWith("/manage/venue/");
+  const isItServiceRoute = pathname === "/manage/it" || pathname.startsWith("/manage/it/");
+  const isCateringServiceRoute = pathname === "/manage/catering" || pathname.startsWith("/manage/catering/");
+  const isStallsServiceRoute = pathname === "/manage/stalls" || pathname.startsWith("/manage/stalls/");
   const matchedServiceRoleRoute = SERVICE_ROLE_DASHBOARDS.find((roleConfig) => {
     const basePath = `/manage/${roleConfig.slug}`;
     return pathname === basePath || pathname.startsWith(`${basePath}/`);
@@ -244,8 +256,18 @@ export async function middleware(req: NextRequest) {
       normalizedUserData,
       roleAssignments
     );
+    const userDataForRoleChecks =
+      (resolvedUserData as Record<string, unknown> | null) ||
+      (userData as Record<string, unknown> | null) ||
+      null;
+    const normalizedUniversityRole = normalizeUniversityRole(
+      userDataForRoleChecks?.university_role
+    );
     const isMasterAdmin =
-      Boolean(userData?.is_masteradmin) || hasAnyRoleCode(resolvedUserData, ["MASTER_ADMIN"]);
+      Boolean(userData?.is_masteradmin) ||
+      hasAnyRoleCode(resolvedUserData, ["MASTER_ADMIN"]) ||
+      normalizedUniversityRole === "masteradmin" ||
+      normalizedUniversityRole === "master_admin";
     const isOrganiser =
       Boolean(userData?.is_organiser) || hasAnyRoleCode(resolvedUserData, ["ORGANIZER_TEACHER"]);
     const isHod =
@@ -285,6 +307,39 @@ export async function middleware(req: NextRequest) {
       isMasterAdmin || isStudentOrganiser;
     const canAccessFinanceRoute =
       isMasterAdmin || isFinanceOfficer;
+    const canAccessVenueServiceRouteStrict =
+      isMasterAdmin ||
+      hasAnyRoleCode(userDataForRoleChecks, ["SERVICE_VENUE"]) ||
+      Boolean(userDataForRoleChecks?.is_service_venue) ||
+      Boolean(userDataForRoleChecks?.is_venue_manager) ||
+      normalizedUniversityRole === "service_venue" ||
+      normalizedUniversityRole === "venue_manager";
+    const canAccessItServiceRouteStrict =
+      isMasterAdmin ||
+      hasAnyRoleCode(userDataForRoleChecks, ["SERVICE_IT"]) ||
+      Boolean(userDataForRoleChecks?.is_service_it) ||
+      Boolean(userDataForRoleChecks?.is_it_service) ||
+      normalizedUniversityRole === "service_it" ||
+      normalizedUniversityRole === "it_service" ||
+      normalizedUniversityRole === "it";
+    const canAccessCateringServiceRouteStrict =
+      isMasterAdmin ||
+      hasAnyRoleCode(userDataForRoleChecks, ["SERVICE_CATERING"]) ||
+      Boolean(userDataForRoleChecks?.is_service_catering) ||
+      Boolean(userDataForRoleChecks?.is_catering) ||
+      normalizedUniversityRole === "service_catering" ||
+      normalizedUniversityRole === "catering_service" ||
+      normalizedUniversityRole === "catering_vendors";
+    const canAccessStallsServiceRouteStrict =
+      isMasterAdmin ||
+      hasAnyRoleCode(userDataForRoleChecks, ["SERVICE_STALLS"]) ||
+      Boolean(userDataForRoleChecks?.is_service_stalls) ||
+      Boolean(userDataForRoleChecks?.is_stalls_misc) ||
+      Boolean(userDataForRoleChecks?.is_stalls) ||
+      normalizedUniversityRole === "service_stalls" ||
+      normalizedUniversityRole === "stalls_service" ||
+      normalizedUniversityRole === "stalls_misc" ||
+      normalizedUniversityRole === "stalls";
     const canAccessServiceRoleRoute = matchedServiceRoleRoute
       ? isMasterAdmin || hasServiceRoleAccess(resolvedUserData, matchedServiceRoleRoute)
       : true;
@@ -306,6 +361,22 @@ export async function middleware(req: NextRequest) {
     }
 
     if (isFinanceManagementRoute && (error || !userData || !canAccessFinanceRoute)) {
+      return redirect("/error");
+    }
+
+    if (isVenueServiceRoute && (error || !userData || !canAccessVenueServiceRouteStrict)) {
+      return redirect("/error");
+    }
+
+    if (isItServiceRoute && (error || !userData || !canAccessItServiceRouteStrict)) {
+      return redirect("/error");
+    }
+
+    if (isCateringServiceRoute && (error || !userData || !canAccessCateringServiceRouteStrict)) {
+      return redirect("/error");
+    }
+
+    if (isStallsServiceRoute && (error || !userData || !canAccessStallsServiceRouteStrict)) {
       return redirect("/error");
     }
 

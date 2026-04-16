@@ -199,10 +199,10 @@ function NavigationBar() {
         links.push({ name: "Student Organiser Dashboard", href: "/manage/student-organiser", variant: "brand" });
         links.push({ name: "Volunteer Dashboard", href: "/execution/volunteer", variant: "neutral" });
         links = links.concat([
-          { name: "Stalls/Misc Dashboard", href: "/manage/stalls-misc", variant: "neutral" },
+          { name: "Stalls Dashboard", href: "/manage/stalls", variant: "neutral" },
           { name: "IT Dashboard", href: "/manage/it", variant: "neutral" },
           { name: "Venue Dashboard", href: "/manage/venue", variant: "neutral" },
-          { name: "Catering Vendors Dashboard", href: "/manage/catering-vendors", variant: "neutral" },
+          { name: "Catering Dashboard", href: "/manage/catering", variant: "neutral" },
         ]);
         links.push({ name: "Support Dashboard", href: "/support/inbox", variant: "neutral" });
       } else {
