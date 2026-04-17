@@ -200,7 +200,7 @@ export default function CreateEventPage() {
       !isUnderFest && Boolean(dataFromHookForm.provideClaims);
     const parsedBudgetAmount = Number(dataFromHookForm.budgetAmount || 0);
     const normalizedBudgetAmount =
-      !isUnderFest && needsBudgetApproval && Number.isFinite(parsedBudgetAmount) && parsedBudgetAmount > 0
+      !isUnderFest && Number.isFinite(parsedBudgetAmount) && parsedBudgetAmount > 0
         ? parsedBudgetAmount
         : 0;
 

@@ -3582,7 +3582,7 @@ router.put(
         budgetAmount: standaloneBudgetAmount,
       });
       const standaloneBudgetAmountForPersistence =
-        !normalizedFestReference && isStandaloneBudgetRelated ? standaloneBudgetAmount : 0;
+        !normalizedFestReference ? standaloneBudgetAmount : 0;
       const standaloneApprovalFallback = resolveStandaloneApprovalPreferences(
         {
           needs_hod_dean_approval:

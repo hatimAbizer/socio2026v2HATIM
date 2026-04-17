@@ -784,7 +784,6 @@ export default function EditEventPage() {
     const parsedBudgetAmount = Number(formData.budgetAmount || 0);
     const normalizedBudgetAmount =
       !isUnderFest &&
-      needsBudgetApproval &&
       Number.isFinite(parsedBudgetAmount) &&
       parsedBudgetAmount > 0
         ? parsedBudgetAmount

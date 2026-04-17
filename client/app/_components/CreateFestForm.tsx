@@ -2100,9 +2100,7 @@ function CreateFestForm(props?: CreateFestProps) {
           maxParticipants: String(normalizedTeamMax),
         }
       );
-      const normalizedBudgetAmount = requiresBudgetApproval
-        ? toPositiveNumber(budgetAmount)
-        : 0;
+      const normalizedBudgetAmount = toPositiveNumber(budgetAmount);
       const customFieldsWithBudgetAndTeam = upsertBudgetSettingsInCustomFields(
         customFieldsWithTeamSettings,
         {
