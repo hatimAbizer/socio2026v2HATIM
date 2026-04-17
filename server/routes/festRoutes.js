@@ -511,34 +511,18 @@ export const createFestApprovalRequest = async ({
     department: departmentScope,
     school: schoolScope,
     campus: campusScope,
-  });
-
-  if (!hodApprover?.email) {
-    const routingError = new Error(
-      `No active HOD assignee is mapped for department '${departmentScope || "Unknown"}'. Contact admin.`
-    );
-    routingError.statusCode = 400;
-    throw routingError;
-  }
+  }).catch(() => null);
 
   const deanApprover = await resolveRoleMatrixApprover({
     roleCode: ROLE_CODES.DEAN,
     department: departmentScope,
     school: schoolScope,
     campus: campusScope,
-    excludeEmail: hodApprover.email,
-  });
+    excludeEmail: hodApprover?.email || undefined,
+  }).catch(() => null);
 
-  if (!deanApprover?.email) {
-    const routingError = new Error(
-      `No active Dean assignee is mapped for department '${departmentScope || "Unknown"}'. Contact admin.`
-    );
-    routingError.statusCode = 400;
-    throw routingError;
-  }
-
-  const primaryRoleCode = ROLE_CODES.HOD;
-  const primaryStepCode = "HOD";
+  const primaryRoleCode = hodApprover?.email ? ROLE_CODES.HOD : (deanApprover?.email ? ROLE_CODES.DEAN : ROLE_CODES.HOD);
+  const primaryStepCode = hodApprover?.email ? "HOD" : (deanApprover?.email ? "DEAN" : "HOD");
 
   const existingRequest = await findActiveApprovalRequestForEntity({
     entityType: "FEST",
@@ -584,34 +568,53 @@ export const createFestApprovalRequest = async ({
       return null;
     }
 
-    const approvalSteps = [
-      {
+    let nextSequence = 1;
+    const approvalSteps = [];
+
+    if (hodApprover?.email) {
+      approvalSteps.push({
+        approval_request_id: approvalRequest.id,
+        step_code: "HOD",
+        role_code: ROLE_CODES.HOD,
+        step_group: nextSequence,
+        sequence_order: nextSequence++,
+        required_count: 1,
+        status: "PENDING",
+      });
+    }
+
+    if (deanApprover?.email) {
+      approvalSteps.push({
+        approval_request_id: approvalRequest.id,
+        step_code: "DEAN",
+        role_code: ROLE_CODES.DEAN,
+        step_group: nextSequence,
+        sequence_order: nextSequence++,
+        required_count: 1,
+        status: approvalSteps.length === 0 ? "PENDING" : "WAITING",
+      });
+    }
+
+    if (approvalSteps.length === 0) {
+      // No dept approvers — add a placeholder HOD step that will activate when one is assigned
+      approvalSteps.push({
         approval_request_id: approvalRequest.id,
         step_code: "HOD",
         role_code: ROLE_CODES.HOD,
         step_group: 1,
-        sequence_order: 1,
+        sequence_order: nextSequence++,
         required_count: 1,
         status: "PENDING",
-      },
-      {
-        approval_request_id: approvalRequest.id,
-        step_code: "DEAN",
-        role_code: ROLE_CODES.DEAN,
-        step_group: 2,
-        sequence_order: 2,
-        required_count: 1,
-        status: "WAITING",
-      },
-    ];
+      });
+    }
 
     if (Boolean(isBudgetRelated)) {
       approvalSteps.push({
         approval_request_id: approvalRequest.id,
         step_code: "CFO",
         role_code: ROLE_CODES.CFO,
-        step_group: 3,
-        sequence_order: 3,
+        step_group: nextSequence,
+        sequence_order: nextSequence++,
         required_count: 1,
         status: "WAITING",
       });
@@ -620,8 +623,8 @@ export const createFestApprovalRequest = async ({
         approval_request_id: approvalRequest.id,
         step_code: "ACCOUNTS",
         role_code: ROLE_CODES.ACCOUNTS,
-        step_group: 4,
-        sequence_order: 4,
+        step_group: nextSequence,
+        sequence_order: nextSequence++,
         required_count: 1,
         status: "WAITING",
       });

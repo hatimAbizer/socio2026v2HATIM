@@ -1218,26 +1218,47 @@ async function syncRoleAssignment(
     return;
   }
 
-  const insertResult = await adminClient.from("user_role_assignments").insert({
+  const deptScopeValue = normalizeNullableText(params.departmentScope);
+  const deptIdForFk = isUuidLike(deptScopeValue) ? deptScopeValue : null;
+
+  const insertPayload: Record<string, unknown> = {
     user_id: params.userId,
     role_code: params.roleCode,
-    department_scope: normalizeNullableText(params.departmentScope),
+    department_scope: deptScopeValue,
     school_scope: normalizeNullableText(params.schoolScope),
     campus_scope: normalizeNullableText(params.campusScope),
     is_active: true,
     valid_from: nowIso,
     assigned_by: params.assignedBy,
     assigned_reason: params.assignedReason || "Master Admin role matrix update",
-  });
+  };
+  if (deptIdForFk) {
+    insertPayload.department_id = deptIdForFk;
+  }
 
-  if (insertResult.error) {
+  // Retry loop: remove failing columns and retry once
+  let attempt = 0;
+  while (attempt < 2) {
+    const insertResult = await adminClient.from("user_role_assignments").insert(insertPayload);
+    if (!insertResult.error) return;
+
     const message = String(insertResult.error.message || "").toLowerCase();
-    if (
-      isMissingRelationError(insertResult.error) ||
-      isMissingColumnError(insertResult.error) ||
-      message.includes("foreign key") ||
-      message.includes("violates")
-    ) {
+    if (isMissingRelationError(insertResult.error)) return;
+
+    // Remove specific failing column and retry once
+    const missingCol = parseMissingColumnName(insertResult.error);
+    if (missingCol && Object.prototype.hasOwnProperty.call(insertPayload, missingCol)) {
+      delete insertPayload[missingCol];
+      attempt++;
+      continue;
+    }
+
+    if (isMissingColumnError(insertResult.error) || message.includes("foreign key") || message.includes("violates")) {
+      if ("department_id" in insertPayload) {
+        delete insertPayload.department_id;
+        attempt++;
+        continue;
+      }
       return;
     }
 
@@ -2018,20 +2039,31 @@ export async function assignRoleMatrixEntry(
     }
 
     if (roleValue === "dean") {
-      const { data, error } = await adminClient
-        .from("departments_courses")
+      // Try canonical departments table first, fall back to departments_courses
+      const { data: deptData, error: deptError } = await adminClient
+        .from("departments")
         .select("id")
         .eq("school", scopeValue)
         .limit(1);
 
-      if (error) {
-        if (!(isMissingRelationError(error) || isMissingColumnError(error))) {
-          return { ok: false, error: error.message || "Failed to validate the selected school." };
-        }
-      }
+      if (!deptError && Array.isArray(deptData) && deptData.length > 0) {
+        // School exists in canonical departments table
+      } else {
+        const { data, error } = await adminClient
+          .from("departments_courses")
+          .select("id")
+          .eq("school", scopeValue)
+          .limit(1);
 
-      if (!error && (!Array.isArray(data) || data.length === 0)) {
-        return { ok: false, error: "Selected school does not exist." };
+        if (error) {
+          if (!(isMissingRelationError(error) || isMissingColumnError(error))) {
+            return { ok: false, error: error.message || "Failed to validate the selected school." };
+          }
+        }
+
+        if (!error && (!Array.isArray(data) || data.length === 0)) {
+          return { ok: false, error: "Selected school does not exist." };
+        }
       }
     }
 

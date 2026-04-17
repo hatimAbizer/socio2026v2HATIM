@@ -7,6 +7,10 @@ import { toast } from "sonner";
 import ApprovalDecisionModal from "../../hod/_components/ApprovalDecisionModal";
 import CfoApprovalTable from "./CfoApprovalTable";
 import { CfoApprovalAction, CfoApprovalQueueItem, CfoDashboardMetrics } from "../types";
+import {
+  actionBadgeProps,
+  usePersistedDecisions,
+} from "../../_shared/usePersistedDecisions";
 
 interface CfoDashboardClientProps {
   campusName: string;
@@ -78,6 +82,16 @@ function getProgressWidthClass(percent: number): string {
   return "w-0";
 }
 
+function formatDecidedAt(isoString: string): string {
+  return new Date(isoString).toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export default function CfoDashboardClient({
   campusName,
   initialQueue,
@@ -93,6 +107,9 @@ export default function CfoDashboardClient({
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [modalState, setModalState] = useState<ModalState | null>(null);
   const completionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  const { decisions: persistedDecisions, saveDecision } =
+    usePersistedDecisions<CfoApprovalAction>("socio_decisions_cfo");
 
   const schoolOptions = useMemo(
     () =>
@@ -112,6 +129,14 @@ export default function CfoDashboardClient({
       .filter((name) => name.trim().length > 0)
       .sort((left, right) => left.localeCompare(right));
   }, [queue, selectedSchool]);
+
+  const recentlyDecided = useMemo(() => {
+    const queueIds = new Set(queue.map((r) => r.id));
+    return Object.values(persistedDecisions)
+      .filter((d) => !queueIds.has(d.requestId))
+      .sort((a, b) => new Date(b.decidedAt).getTime() - new Date(a.decidedAt).getTime())
+      .slice(0, 20);
+  }, [queue, persistedDecisions]);
 
   useEffect(() => {
     if (selectedDepartment === "all") {
@@ -153,6 +178,16 @@ export default function CfoDashboardClient({
 
   const applySuccessfulAction = (requestId: string, action: CfoApprovalAction) => {
     const actedRow = queue.find((row) => row.id === requestId) || null;
+
+    if (actedRow) {
+      saveDecision({
+        requestId,
+        eventName: actedRow.eventName,
+        entityType: "event",
+        action,
+        decidedAt: new Date().toISOString(),
+      });
+    }
 
     setCompletedActions((previous) => ({
       ...previous,
@@ -197,7 +232,7 @@ export default function CfoDashboardClient({
     note?: string;
   }) => {
     const { requestId, action, note } = params;
-    const targetRequestId = requestId; // capture before async calls to prevent stale closure
+    const targetRequestId = requestId;
     setActiveRequestId(requestId);
 
     try {
@@ -396,6 +431,53 @@ export default function CfoDashboardClient({
           openDecisionModal(requestId, "return");
         }}
       />
+
+      {recentlyDecided.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Recently Decided</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Actions taken by you in the past 30 days.
+          </p>
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Event / Fest
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Decided At
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {recentlyDecided.map((d) => {
+                  const badge = actionBadgeProps(d.action);
+                  return (
+                    <tr key={d.requestId} className="hover:bg-slate-50/60">
+                      <td className="px-4 py-3">
+                        <p className="text-sm font-medium text-slate-800">{d.eventName}</p>
+                        <p className="text-xs text-slate-500 capitalize">{d.entityType}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${badge.className}`}>
+                          {badge.label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-600">
+                        {formatDecidedAt(d.decidedAt)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <ApprovalDecisionModal
         isOpen={Boolean(modalState)}

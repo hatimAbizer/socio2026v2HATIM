@@ -39,6 +39,7 @@ import {
 import { DynamicCustomFieldBuilder, CustomField } from "@/app/_components/UI/DynamicCustomFieldBuilder";
 
 import { useAuth } from "@/context/AuthContext";
+import SmartBudgetEstimator from "@/app/_components/Admin/SmartBudgetEstimator";
 import LoadingIndicator from "@/app/_components/UI/LoadingIndicator";
 import PublishingOverlay from "@/app/_components/UI/PublishingOverlay";
 import {
@@ -752,6 +753,8 @@ interface EventFormProps {
   onToggleArchive?: () => void;
   lifecycleStatus?: string | null;
   isBudgetLocked?: boolean;
+  /** Stable event ID (slug) — required to persist budget line items. */
+  eventId?: string | null;
 }
 
 const baseButtonClasses =
@@ -1478,6 +1481,7 @@ export default function EventForm({
   onToggleArchive,
   lifecycleStatus,
   isBudgetLocked = false,
+  eventId,
 }: EventFormProps) {
   const [fetchedFests, setFetchedFests] = useState<FestOption[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState(fallbackDepartmentOptions);
@@ -1487,9 +1491,10 @@ export default function EventForm({
     fetch("/api/departments")
       .then((r) => r.ok ? r.json() : null)
       .then((json) => {
-        const rows: { id: string; name: string; school: string }[] = Array.isArray(json?.departments) ? json.departments : [];
+        const rows: { id: string; name: string; code: string | null; school: string }[] = Array.isArray(json?.departments) ? json.departments : [];
         if (rows.length === 0) return;
-        setDepartmentOptions(rows.map((d) => ({ value: d.id, label: d.name })));
+        // Use code slug as value (backward-compat with existing department_access arrays)
+        setDepartmentOptions(rows.map((d) => ({ value: d.code || d.id, label: d.name })));
         const seen = new Set<string>();
         const schools: { value: string; label: string }[] = [];
         rows.forEach((d) => {
@@ -1903,7 +1908,7 @@ export default function EventForm({
     control,
     name: "budgetAmount",
   });
-  const [budgetUnlocked, setBudgetUnlocked] = useState(false);
+  const [budgetUnlocked, setBudgetUnlocked] = useState(!isEditMode);
   const watchedItEnabled = useWatch({
     control,
     name: "additionalRequests.it.enabled",
@@ -4074,8 +4079,8 @@ export default function EventForm({
                     tabIndex={-1}
                     className="space-y-4"
                   >
-                    {/* Note box — always visible */}
-                    {isBudgetLocked ? (
+                    {/* Note box — edit mode only */}
+                    {isEditMode && (isBudgetLocked ? (
                       <div className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-900">
                         <p className="font-semibold text-base mb-1">⚠ Editing budget will restart the approval chain</p>
                         <p className="text-amber-800">
@@ -4117,7 +4122,7 @@ export default function EventForm({
                           </button>
                         )}
                       </div>
-                    )}
+                    ))}
 
                     {/* Budget inputs — locked until unlocked */}
                     <div className={`space-y-4 ${!budgetUnlocked ? "opacity-50 pointer-events-none select-none" : ""}`}>
@@ -4182,7 +4187,7 @@ export default function EventForm({
                     )}
 
                     {Boolean(watchedProvideClaims) && (
-                      <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 sm:p-6">
+                      <div className="mt-4">
                         <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                           <p className="font-semibold">CFO approval required</p>
                           <p className="mt-1">
@@ -4192,42 +4197,22 @@ export default function EventForm({
                             To remove CFO from approvals, set Funding required to No on this page.
                           </p>
                         </div>
-                        <label
-                          htmlFor="budgetAmount"
-                          className="block text-sm font-semibold text-gray-700"
-                        >
-                          Budget amount
-                        </label>
-                        <p className="mt-1 text-xs text-gray-500">
-                          Enter the single budget amount for this standalone event.
-                        </p>
-                        <Controller
-                          name="budgetAmount"
-                          control={control}
-                          render={({ field }) => (
-                            <input
-                              id="budgetAmount"
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={field.value || ""}
-                              onChange={(event) => field.onChange(event.target.value)}
-                              className="mt-3 w-full max-w-sm rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#154CB3]"
-                              placeholder="Enter amount"
-                            />
-                          )}
+                        <SmartBudgetEstimator
+                          entityId={eventId ?? ""}
+                          entityType="event"
+                          mode="embedded"
+                          onTotalChange={(total) =>
+                            setValue("budgetAmount", total > 0 ? String(total) : "", {
+                              shouldDirty: true,
+                              shouldValidate: true,
+                            })
+                          }
                         />
-
                         {errors.budgetAmount && (
                           <p className="text-red-500 text-xs mt-2">
                             {errors.budgetAmount.message}
                           </p>
                         )}
-
-                        <p className="mt-3 text-sm font-semibold text-[#063168]">
-                          Entered amount: ₹
-                          {Number(toPositiveNumber(watchedBudgetAmount) || 0).toLocaleString("en-IN")}
-                        </p>
                       </div>
                     )}
                     </div>

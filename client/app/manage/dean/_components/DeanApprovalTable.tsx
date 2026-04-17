@@ -1,6 +1,7 @@
 "use client";
 
 import { DeanApprovalAction, DeanApprovalQueueItem } from "../types";
+import { SpinnerIcon } from "../../_shared/usePersistedDecisions";
 
 interface DeanApprovalTableProps {
   rows: DeanApprovalQueueItem[];
@@ -8,6 +9,7 @@ interface DeanApprovalTableProps {
   activeRequestId: string | null;
   onApprove: (requestId: string) => void;
   onReturn: (requestId: string) => void;
+  onDecline: (requestId: string) => void;
 }
 
 const currencyFormatter = new Intl.NumberFormat("en-IN", {
@@ -39,6 +41,7 @@ export default function DeanApprovalTable({
   activeRequestId,
   onApprove,
   onReturn,
+  onDecline,
 }: DeanApprovalTableProps) {
   if (rows.length === 0) {
     return (
@@ -109,10 +112,16 @@ export default function DeanApprovalTable({
                         className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
                           completedAction === "approve"
                             ? "bg-emerald-100 text-emerald-800"
+                            : completedAction === "decline"
+                            ? "bg-red-100 text-red-800"
                             : "bg-amber-100 text-amber-800"
                         }`}
                       >
-                        {completedAction === "approve" ? "Approved" : "Returned for Revision"}
+                        {completedAction === "approve"
+                          ? "Approved"
+                          : completedAction === "decline"
+                          ? "Declined"
+                          : "Sent Back for Revision"}
                       </span>
                     ) : (
                       <div className="flex flex-wrap gap-2">
@@ -120,21 +129,31 @@ export default function DeanApprovalTable({
                           type="button"
                           onClick={() => onApprove(row.id)}
                           disabled={isWorking}
-                          className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
                         >
+                          {isWorking ? <SpinnerIcon /> : null}
                           Approve
                         </button>
                         <button
                           type="button"
                           onClick={() => onReturn(row.id)}
                           disabled={isWorking}
-                          className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          Return for Revision
+                          {isWorking ? <SpinnerIcon /> : null}
+                          Send Back
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDecline(row.id)}
+                          disabled={isWorking}
+                          className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isWorking ? <SpinnerIcon /> : null}
+                          Decline
                         </button>
                       </div>
                     )}
-                    {isWorking ? <p className="mt-2 text-xs text-slate-500">Processing...</p> : null}
                   </td>
                 </tr>
               );

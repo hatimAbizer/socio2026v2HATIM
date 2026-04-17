@@ -7,6 +7,10 @@ import { toast } from "sonner";
 import ApprovalDecisionModal from "./ApprovalDecisionModal";
 import HodApprovalTable from "./HodApprovalTable";
 import { HodApprovalAction, HodApprovalQueueItem, HodDashboardMetrics } from "../types";
+import {
+  actionBadgeProps,
+  usePersistedDecisions,
+} from "../../_shared/usePersistedDecisions";
 
 interface HodDashboardClientProps {
   departmentName: string;
@@ -29,6 +33,7 @@ type ModalState = {
   eventName: string;
   note: string;
   errorMessage: string | null;
+  mode: "return" | "decline";
 };
 
 type CompletedActionMap = Record<string, HodApprovalAction>;
@@ -71,7 +76,21 @@ function decisionMessage(
     return decisionMessages?.approve || "Approval recorded";
   }
 
+  if (action === "decline") {
+    return "Request declined";
+  }
+
   return decisionMessages?.return || "Request returned for revision";
+}
+
+function formatDecidedAt(isoString: string): string {
+  return new Date(isoString).toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export default function HodDashboardClient({
@@ -95,10 +114,21 @@ export default function HodDashboardClient({
   const [modalState, setModalState] = useState<ModalState | null>(null);
   const completionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
+  const { decisions: persistedDecisions, saveDecision } =
+    usePersistedDecisions<HodApprovalAction>("socio_decisions_hod");
+
   const headerSubtitle = useMemo(
     () => `Department Scope: ${departmentName || "My Department"}`,
     [departmentName]
   );
+
+  const recentlyDecided = useMemo(() => {
+    const queueIds = new Set(queue.map((r) => r.id));
+    return Object.values(persistedDecisions)
+      .filter((d) => !queueIds.has(d.requestId))
+      .sort((a, b) => new Date(b.decidedAt).getTime() - new Date(a.decidedAt).getTime())
+      .slice(0, 20);
+  }, [queue, persistedDecisions]);
 
   useEffect(() => {
     return () => {
@@ -116,6 +146,18 @@ export default function HodDashboardClient({
   };
 
   const applySuccessfulAction = (requestId: string, action: HodApprovalAction) => {
+    const row = queue.find((r) => r.id === requestId);
+
+    if (row) {
+      saveDecision({
+        requestId,
+        eventName: row.eventName,
+        entityType: row.entityType,
+        action,
+        decidedAt: new Date().toISOString(),
+      });
+    }
+
     setCompletedActions((previous) => ({
       ...previous,
       [requestId]: action,
@@ -128,7 +170,7 @@ export default function HodDashboardClient({
 
     clearCompletionTimer(requestId);
     completionTimers.current[requestId] = setTimeout(() => {
-      setQueue((previous) => previous.filter((row) => row.id !== requestId));
+      setQueue((previous) => previous.filter((r) => r.id !== requestId));
       setCompletedActions((previous) => {
         if (!previous[requestId]) {
           return previous;
@@ -159,7 +201,7 @@ export default function HodDashboardClient({
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            action,
+            action: action === "decline" ? "reject" : action,
             note: note?.trim() || null,
           }),
         },
@@ -194,7 +236,7 @@ export default function HodDashboardClient({
     }
   };
 
-  const openDecisionModal = (requestId: string) => {
+  const openDecisionModal = (requestId: string, mode: "return" | "decline" = "return") => {
     const row = queue.find((item) => item.id === requestId);
     if (!row) {
       return;
@@ -205,6 +247,7 @@ export default function HodDashboardClient({
       eventName: row.eventName,
       note: "",
       errorMessage: null,
+      mode,
     });
   };
 
@@ -240,13 +283,72 @@ export default function HodDashboardClient({
           void submitAction({ requestId, action: "approve" });
         }}
         onReturn={(requestId) => {
-          openDecisionModal(requestId);
+          openDecisionModal(requestId, "return");
+        }}
+        onDecline={(requestId) => {
+          openDecisionModal(requestId, "decline");
         }}
       />
 
+      {recentlyDecided.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Recently Decided</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Actions taken by you in the past 30 days.
+          </p>
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Event / Fest
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Decided At
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {recentlyDecided.map((d) => {
+                  const badge = actionBadgeProps(d.action);
+                  return (
+                    <tr key={d.requestId} className="hover:bg-slate-50/60">
+                      <td className="px-4 py-3">
+                        <p className="text-sm font-medium text-slate-800">{d.eventName}</p>
+                        <p className="text-xs text-slate-500 capitalize">{d.entityType}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${badge.className}`}>
+                          {badge.label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-600">
+                        {formatDecidedAt(d.decidedAt)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Volunteers — placeholder for future implementation */}
+      <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Volunteers</h2>
+        <p className="mt-2 text-sm text-slate-500">
+          Volunteer assignments and tracking for your department will appear here.
+          This section is under development — data and fields will be added in a future update.
+        </p>
+      </div>
+
       <ApprovalDecisionModal
         isOpen={Boolean(modalState)}
-        mode="return"
+        mode={modalState?.mode === "decline" ? "reject" : "return"}
         eventName={modalState?.eventName || ""}
         note={modalState?.note || ""}
         minCharacters={NOTE_MIN_CHARS}
@@ -268,19 +370,14 @@ export default function HodDashboardClient({
           const trimmedNote = modalState.note.trim();
           if (trimmedNote.length < NOTE_MIN_CHARS) {
             setModalState((previous) =>
-              previous
-                ? {
-                    ...previous,
-                    errorMessage: "Revision description is required.",
-                  }
-                : previous
+              previous ? { ...previous, errorMessage: "A note is required." } : previous
             );
             return;
           }
 
           void submitAction({
             requestId: modalState.requestId,
-            action: "return",
+            action: modalState.mode === "decline" ? "decline" : "return",
             note: trimmedNote,
           });
         }}

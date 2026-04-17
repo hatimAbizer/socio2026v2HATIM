@@ -976,76 +976,140 @@ router.post("/:eventId/submit", async (req, res) => {
         excludeEmail: ownerEmail,
       });
 
-      if (!hod?.email) {
-        return res.status(400).json({
-          error: "Unable to route approval. No HOD assigned for this department/campus.",
+      const hodAvailable = hod?.email && normalizeEmail(hod.email) !== ownerEmail;
+
+      if (hodAvailable) {
+        const updatedEvent = await updateEventWorkflow(eventId, EVENT_STATUS.PENDING_HOD, {
+          event_context: EVENT_CONTEXT.STANDALONE,
+          created_by_subhead: false,
+          workflow_version: nextVersion,
+          rejected_at: null,
+          rejected_by: null,
+          rejection_reason: null,
         });
-      }
 
-      if (normalizeEmail(hod.email) === ownerEmail) {
-        return res.status(400).json({
-          error: "Approver cannot approve their own submission.",
+        await logApprovalAction({
+          entityId: eventId,
+          step: "hod_review",
+          action: "submitted",
+          actorEmail: requesterEmail,
+          actorRole: "organizer",
+          notes: null,
+          version: nextVersion,
         });
-      }
 
-      const updatedEvent = await updateEventWorkflow(eventId, EVENT_STATUS.PENDING_HOD, {
-        event_context: EVENT_CONTEXT.STANDALONE,
-        created_by_subhead: false,
-        workflow_version: nextVersion,
-        rejected_at: null,
-        rejected_by: null,
-        rejection_reason: null,
-      });
+        const eventTitle = normalizeText(event.title) || eventId;
+        const approvalLink = buildHodDeanLink(eventId);
 
-      await logApprovalAction({
-        entityId: eventId,
-        step: "hod_review",
-        action: "submitted",
-        actorEmail: requesterEmail,
-        actorRole: "organizer",
-        notes: null,
-        version: nextVersion,
-      });
-
-      const eventTitle = normalizeText(event.title) || eventId;
-      const approvalLink = buildHodDeanLink(eventId);
-
-      sendUserNotifications({
-        userEmails: [hod.email],
-        title: `Approval required: ${eventTitle}`,
-        message: `${eventTitle} has been submitted and is awaiting your HOD approval.`,
-        type: "warning",
-        event_id: eventId,
-        event_title: eventTitle,
-        action_url: approvalLink,
-      }).catch((err) => {
-        console.error("[EventApproval] HOD notification failed:", err);
-      });
-
-      if (ownerEmail) {
         sendUserNotifications({
-          userEmails: [ownerEmail],
-          title: "Event sent for approval",
-          message: `${eventTitle} has been sent for HOD approval. You will get updates as each step is reviewed.`,
-          type: "info",
+          userEmails: [hod.email],
+          title: `Approval required: ${eventTitle}`,
+          message: `${eventTitle} has been submitted and is awaiting your HOD approval.`,
+          type: "warning",
           event_id: eventId,
           event_title: eventTitle,
           action_url: approvalLink,
         }).catch((err) => {
-          console.error("[EventApproval] organizer notification failed:", err);
+          console.error("[EventApproval] HOD notification failed:", err);
+        });
+
+        if (ownerEmail) {
+          sendUserNotifications({
+            userEmails: [ownerEmail],
+            title: "Event sent for approval",
+            message: `${eventTitle} has been sent for HOD approval. You will get updates as each step is reviewed.`,
+            type: "info",
+            event_id: eventId,
+            event_title: eventTitle,
+            action_url: approvalLink,
+          }).catch((err) => {
+            console.error("[EventApproval] organizer notification failed:", err);
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          status: EVENT_STATUS.PENDING_HOD,
+          routed_to: {
+            role: "hod",
+            name: hod.name || null,
+            email: hod.email,
+          },
+          event: updatedEvent,
         });
       }
 
-      return res.status(200).json({
-        success: true,
-        status: EVENT_STATUS.PENDING_HOD,
-        routed_to: {
-          role: "hod",
-          name: hod.name || null,
-          email: hod.email,
-        },
-        event: updatedEvent,
+      // No HOD assigned — try routing directly to Dean
+      const school = await resolveSchoolForEvent(event);
+      const dean = await findApprover({
+        roleCode: ROLE_CODES.DEAN,
+        school,
+        campus: event.campus_hosted_at,
+        excludeEmail: ownerEmail,
       });
+
+      if (dean?.email && normalizeEmail(dean.email) !== ownerEmail) {
+        const updatedEvent = await updateEventWorkflow(eventId, EVENT_STATUS.PENDING_DEAN, {
+          event_context: EVENT_CONTEXT.STANDALONE,
+          created_by_subhead: false,
+          workflow_version: nextVersion,
+          rejected_at: null,
+          rejected_by: null,
+          rejection_reason: null,
+        });
+
+        await logApprovalAction({
+          entityId: eventId,
+          step: "dean_review",
+          action: "submitted",
+          actorEmail: requesterEmail,
+          actorRole: "organizer",
+          notes: "No HOD assigned; routed directly to Dean.",
+          version: nextVersion,
+        });
+
+        const eventTitle = normalizeText(event.title) || eventId;
+        const approvalLink = buildHodDeanLink(eventId);
+
+        sendUserNotifications({
+          userEmails: [dean.email],
+          title: `Approval required: ${eventTitle}`,
+          message: `${eventTitle} has been submitted and is awaiting your Dean approval (no HOD is currently assigned for this department).`,
+          type: "warning",
+          event_id: eventId,
+          event_title: eventTitle,
+          action_url: approvalLink,
+        }).catch((err) => {
+          console.error("[EventApproval] Dean notification failed:", err);
+        });
+
+        if (ownerEmail) {
+          sendUserNotifications({
+            userEmails: [ownerEmail],
+            title: "Event sent for approval",
+            message: `${eventTitle} has been sent for Dean approval. You will get updates as each step is reviewed.`,
+            type: "info",
+            event_id: eventId,
+            event_title: eventTitle,
+            action_url: approvalLink,
+          }).catch((err) => {
+            console.error("[EventApproval] organizer notification failed:", err);
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          status: EVENT_STATUS.PENDING_DEAN,
+          routed_to: {
+            role: "dean",
+            name: dean.name || null,
+            email: dean.email,
+          },
+          event: updatedEvent,
+        });
+      }
+
+      // No HOD or Dean — fall through to budget routing below
     }
 
     const budgetRouting = await routeStandaloneBudgetStep({

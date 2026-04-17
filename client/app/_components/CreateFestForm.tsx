@@ -21,6 +21,7 @@ import {
   resolvePublishActionMode,
 } from "./PublishActionButton";
 import { buildServerApiUrl } from "../../lib/apiBase";
+import SmartBudgetEstimator from "@/app/_components/Admin/SmartBudgetEstimator";
 const ALLOWED_FEST_IMAGE_TYPES = [
   "image/jpeg",
   "image/png",
@@ -837,8 +838,8 @@ function DepartmentAndCategoryInputs({
     fetch("/api/departments")
       .then((r) => r.ok ? r.json() : null)
       .then((json) => {
-        const rows: { id: string; name: string }[] = Array.isArray(json?.departments) ? json.departments : [];
-        if (rows.length > 0) setDepartments(rows.map((d) => ({ value: d.id, label: d.name })));
+        const rows: { id: string; name: string; code: string | null }[] = Array.isArray(json?.departments) ? json.departments : [];
+        if (rows.length > 0) setDepartments(rows.map((d) => ({ value: d.code || d.id, label: d.name })));
       })
       .catch(() => {});
   }, []);
@@ -1153,7 +1154,7 @@ function CreateFestForm(props?: CreateFestProps) {
   const [requiresBudgetApproval, setRequiresBudgetApproval] = useState(
     initialBudgetSettings?.requiresBudgetApproval ?? false
   );
-  const [budgetUnlocked, setBudgetUnlocked] = useState(false);
+  const [budgetUnlocked, setBudgetUnlocked] = useState(!isEditMode && !pathname.startsWith("/edit/fest"));
   const [requiresHodApproval, setRequiresHodApproval] = useState(true);
   const [requiresDeanApproval, setRequiresDeanApproval] = useState(true);
   const [budgetAmount, setBudgetAmount] = useState(
@@ -1168,9 +1169,9 @@ function CreateFestForm(props?: CreateFestProps) {
     fetch("/api/departments")
       .then((r) => r.ok ? r.json() : null)
       .then((json) => {
-        const rows: { id: string; name: string; school: string }[] = Array.isArray(json?.departments) ? json.departments : [];
+        const rows: { id: string; name: string; code: string | null; school: string }[] = Array.isArray(json?.departments) ? json.departments : [];
         if (rows.length === 0) return;
-        setFestDepartmentOptions(rows.map((d) => ({ value: d.id, label: d.name })));
+        setFestDepartmentOptions(rows.map((d) => ({ value: d.code || d.id, label: d.name })));
         const seen = new Set<string>();
         const schools: { value: string; label: string }[] = [];
         rows.forEach((d) => {
@@ -4063,8 +4064,8 @@ function CreateFestForm(props?: CreateFestProps) {
 
                 {creationStep === "budget" && (
                   <div className="space-y-6">
-                    {/* Note box — always visible, never locked */}
-                    {isBudgetLocked ? (
+                    {/* Note box — edit mode only */}
+                    {finalIsEditMode && (isBudgetLocked ? (
                       <div className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-900">
                         <p className="font-semibold text-base mb-1">⚠ Editing budget will restart the approval chain</p>
                         <p className="text-amber-800">
@@ -4107,7 +4108,7 @@ function CreateFestForm(props?: CreateFestProps) {
                           </button>
                         )}
                       </div>
-                    )}
+                    ))}
 
                     {/* Budget inputs — locked until unlocked */}
                     <div className={`space-y-4 ${!budgetUnlocked ? "opacity-50 pointer-events-none select-none" : ""}`}>
@@ -4154,30 +4155,14 @@ function CreateFestForm(props?: CreateFestProps) {
                       </div>
 
                       {requiresBudgetApproval && (
-                        <div className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-6">
-                          <label htmlFor="festBudgetAmount" className="block text-sm font-semibold text-gray-700">
-                            Budget amount
-                          </label>
-                          <p className="mt-1 text-xs text-gray-500">
-                            Enter the total amount required for approval.
-                          </p>
-                          <div className="mt-3 max-w-sm">
-                            <input
-                              id="festBudgetAmount"
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={budgetAmount}
-                              onChange={(e) => setBudgetAmount(e.target.value)}
-                              className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#154CB3]"
-                              placeholder="Enter amount"
-                            />
-                          </div>
-                          <p className="mt-3 text-sm font-semibold text-[#063168]">
-                            Entered amount: ₹
-                            {Number(toPositiveNumber(budgetAmount) || 0).toLocaleString("en-IN")}
-                          </p>
-                        </div>
+                        <SmartBudgetEstimator
+                          entityId={festIdFromPath ?? ""}
+                          entityType="fest"
+                          mode="embedded"
+                          onTotalChange={(total) =>
+                            setBudgetAmount(total > 0 ? String(total) : "")
+                          }
+                        />
                       )}
                     </div>
                   </div>

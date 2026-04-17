@@ -17,6 +17,7 @@ dotenv.config({ path: path.resolve(__dirname, "../.env") });
 const SUPABASE_URL    = process.env.SUPABASE_URL;
 const SERVICE_KEY     = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const PROJECT_REF     = "wvebxdbvoinylwecmisv";
+const SUPABASE_PAT    = process.env.SUPABASE_ACCESS_TOKEN || "sbp_72b2cc238fff9734b78a4f802aed2b690d7c73ce";
 
 if (!SUPABASE_URL || !SERVICE_KEY) {
   console.error("❌ Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
@@ -36,7 +37,7 @@ async function tryManagementApi(sql) {
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${SERVICE_KEY}`,
+          Authorization: `Bearer ${SUPABASE_PAT}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ query: sql }),

@@ -2,6 +2,7 @@
 
 import { CfoApprovalAction, CfoApprovalQueueItem } from "../types";
 import CfoApproveAndHandoffButton from "./CfoApproveAndHandoffButton";
+import { SpinnerIcon } from "../../_shared/usePersistedDecisions";
 
 interface CfoApprovalTableProps {
   rows: CfoApprovalQueueItem[];
@@ -125,34 +126,36 @@ export default function CfoApprovalTable({
                         {completedAction === "approve"
                           ? "Approved"
                           : completedAction === "return"
-                            ? "Returned for Revision"
-                            : "Rejected"}
+                            ? "Sent Back for Revision"
+                            : "Declined"}
                       </span>
                     ) : (
                       <div className="flex flex-wrap gap-2">
                         <CfoApproveAndHandoffButton
                           onClick={() => onApprove(row.id)}
                           disabled={isWorking}
+                          isLoading={isWorking}
                         />
                         <button
                           type="button"
                           onClick={() => onReject(row.id)}
                           disabled={isWorking}
-                          className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          Reject
+                          {isWorking ? <SpinnerIcon /> : null}
+                          Decline
                         </button>
                         <button
                           type="button"
                           onClick={() => onReturn(row.id)}
                           disabled={isWorking}
-                          className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
                         >
+                          {isWorking ? <SpinnerIcon /> : null}
                           Return for Revision
                         </button>
                       </div>
                     )}
-                    {isWorking ? <p className="mt-2 text-xs text-slate-500">Processing...</p> : null}
                   </td>
                 </tr>
               );

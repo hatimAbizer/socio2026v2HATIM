@@ -140,7 +140,7 @@ async function resolveSchoolScopeCandidatesFromDepartment(
 }
 
 function parseAction(value: unknown): DecisionAction | null {
-  if (value === "approve" || value === "return") {
+  if (value === "approve" || value === "return" || value === "reject") {
     return value;
   }
 
@@ -428,11 +428,11 @@ export async function PATCH(
     const note = typeof body?.note === "string" ? body.note.trim() : "";
 
     if (!action) {
-      return jsonError(400, "Invalid action. Expected approve or return.");
+      return jsonError(400, "Invalid action. Expected approve, return, or reject.");
     }
 
-    if (action === "return" && note.length === 0) {
-      return jsonError(400, "Revision description is required for return action.");
+    if ((action === "return" || action === "reject") && note.length === 0) {
+      return jsonError(400, "A note is required for this action.");
     }
 
     let usedFallbackQuery = false;
@@ -617,6 +617,8 @@ export async function PATCH(
       message:
         action === "approve"
           ? "Approval request approved successfully."
+          : action === "reject"
+          ? "Request declined."
           : "Approval request returned for revision.",
       data: upstreamPayload,
     });

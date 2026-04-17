@@ -15,4 +15,4 @@ export interface HodDashboardMetrics {
   pendingL1Approvals: number;
 }
 
-export type HodApprovalAction = "approve" | "return";
+export type HodApprovalAction = "approve" | "return" | "decline";

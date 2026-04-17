@@ -16,8 +16,13 @@ import {
   FinanceDashboardData,
   FinanceSettlementItem,
 } from "../types";
+import {
+  actionBadgeProps,
+  SpinnerIcon,
+  usePersistedDecisions,
+} from "../../_shared/usePersistedDecisions";
 
-type FinanceTab = "approvals" | "advances" | "settlements";
+type FinanceTab = "approvals" | "advances" | "settlements" | "recent";
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-IN", {
@@ -57,15 +62,32 @@ export default function FinanceDashboardClient({
   const [advanceAmounts, setAdvanceAmounts] = useState<Record<string, string>>({});
   const [advanceNotes, setAdvanceNotes] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<string>("");
+  const [activeDecisionId, setActiveDecisionId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  const { decisions: persistedDecisions, saveDecision } =
+    usePersistedDecisions<FinanceApprovalAction>("socio_decisions_finance");
+
+  const pendingApprovalIds = useMemo(
+    () => new Set(initialData.approvals.map((a) => a.id)),
+    [initialData.approvals]
+  );
+
+  const recentlyDecided = useMemo(() => {
+    return Object.values(persistedDecisions)
+      .filter((d) => !pendingApprovalIds.has(d.requestId))
+      .sort((a, b) => new Date(b.decidedAt).getTime() - new Date(a.decidedAt).getTime())
+      .slice(0, 20);
+  }, [persistedDecisions, pendingApprovalIds]);
 
   const tabs = useMemo(
     () => [
       { key: "approvals" as const, label: "Budget Approvals (L4)", count: initialData.approvals.length },
       { key: "advances" as const, label: "Vendor Advances", count: initialData.advances.length },
       { key: "settlements" as const, label: "Final Settlements", count: initialData.settlements.length },
+      { key: "recent" as const, label: "Recently Decided", count: recentlyDecided.length },
     ],
-    [initialData.approvals.length, initialData.advances.length, initialData.settlements.length]
+    [initialData.approvals.length, initialData.advances.length, initialData.settlements.length, recentlyDecided.length]
   );
 
   const setFeedbackMessage = (message: string) => {
@@ -74,6 +96,9 @@ export default function FinanceDashboardClient({
 
   const submitDecision = (requestId: string, action: FinanceApprovalAction) => {
     const note = (decisionNotes[requestId] || "").trim();
+    const item = initialData.approvals.find((a) => a.id === requestId);
+
+    setActiveDecisionId(requestId);
 
     startTransition(async () => {
       const result = await submitFinanceApprovalDecisionAction({
@@ -83,7 +108,18 @@ export default function FinanceDashboardClient({
       });
 
       setFeedbackMessage(result.message);
+      setActiveDecisionId(null);
+
       if (result.ok) {
+        if (item) {
+          saveDecision({
+            requestId,
+            eventName: item.eventName,
+            entityType: "event",
+            action,
+            decidedAt: new Date().toISOString(),
+          });
+        }
         setDecisionNotes((previous) => ({ ...previous, [requestId]: "" }));
         router.refresh();
       }
@@ -214,6 +250,8 @@ export default function FinanceDashboardClient({
 
                 {initialData.approvals.map((item) => {
                   const noteValue = decisionNotes[item.id] || "";
+                  const isThisItemWorking = activeDecisionId === item.id && isPending;
+
                   return (
                     <tr key={item.id} className="align-top">
                       <td className="px-4 py-4">
@@ -248,21 +286,24 @@ export default function FinanceDashboardClient({
                           <AccountsApproveAndRouteButton
                             onClick={() => submitDecision(item.id, "approve")}
                             disabled={isPending}
+                            isLoading={isThisItemWorking}
                           />
                           <button
                             type="button"
                             onClick={() => submitDecision(item.id, "return")}
                             disabled={isPending}
-                            className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
                           >
+                            {isThisItemWorking ? <SpinnerIcon /> : null}
                             Return
                           </button>
                           <button
                             type="button"
                             onClick={() => submitDecision(item.id, "reject")}
                             disabled={isPending}
-                            className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
                           >
+                            {isThisItemWorking ? <SpinnerIcon /> : null}
                             Reject
                           </button>
                         </div>
@@ -367,8 +408,9 @@ export default function FinanceDashboardClient({
                             type="button"
                             onClick={() => recordAdvance(item)}
                             disabled={isPending}
-                            className="rounded-lg bg-[#154CB3] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#124099] disabled:opacity-50"
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-[#154CB3] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#124099] disabled:opacity-50"
                           >
+                            {isPending ? <SpinnerIcon /> : null}
                             Record Advance Paid
                           </button>
                         </div>
@@ -434,8 +476,9 @@ export default function FinanceDashboardClient({
                   type="button"
                   onClick={() => closeSettlement(item)}
                   disabled={isPending || !item.allDocumentsVerified || !item.mathChecksOut}
-                  className="mt-4 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
+                  {isPending ? <SpinnerIcon /> : null}
                   Close & Settle Event
                 </button>
               </div>
@@ -480,12 +523,13 @@ export default function FinanceDashboardClient({
                             toggleDocumentVerification(document.id, document.eventId, !document.financeVerified)
                           }
                           disabled={isPending}
-                          className={`rounded-md px-2 py-1 text-xs font-semibold text-white ${
+                          className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-white ${
                             document.financeVerified
                               ? "bg-rose-600 hover:bg-rose-700"
                               : "bg-emerald-600 hover:bg-emerald-700"
                           } disabled:opacity-50`}
                         >
+                          {isPending ? <SpinnerIcon /> : null}
                           {document.financeVerified ? "Unverify Document" : "Verify Document"}
                         </button>
                       </div>
@@ -495,6 +539,55 @@ export default function FinanceDashboardClient({
               </div>
             </article>
           ))}
+        </div>
+      )}
+
+      {activeTab === "recent" && (
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          {recentlyDecided.length === 0 ? (
+            <div className="p-10 text-center text-sm text-slate-500">
+              No decisions recorded in the past 30 days.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Event / Fest
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Status
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Decided At
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {recentlyDecided.map((d) => {
+                    const badge = actionBadgeProps(d.action);
+                    return (
+                      <tr key={d.requestId} className="hover:bg-slate-50/60">
+                        <td className="px-4 py-3">
+                          <p className="text-sm font-medium text-slate-800">{d.eventName}</p>
+                          <p className="text-xs text-slate-500 capitalize">{d.entityType}</p>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${badge.className}`}>
+                            {badge.label}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-slate-600">
+                          {formatDate(d.decidedAt)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </section>

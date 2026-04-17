@@ -1,6 +1,7 @@
 "use client";
 
 import { HodApprovalAction, HodApprovalQueueItem } from "../types";
+import { SpinnerIcon } from "../../_shared/usePersistedDecisions";
 
 interface HodApprovalTableProps {
   rows: HodApprovalQueueItem[];
@@ -8,6 +9,7 @@ interface HodApprovalTableProps {
   activeRequestId: string | null;
   onApprove: (requestId: string) => void;
   onReturn: (requestId: string) => void;
+  onDecline: (requestId: string) => void;
   emptyStateTitle?: string;
   emptyStateDescription?: string;
   eventDetailBasePath?: string;
@@ -42,6 +44,7 @@ export default function HodApprovalTable({
   activeRequestId,
   onApprove,
   onReturn,
+  onDecline,
   emptyStateTitle = "No pending L1 approvals",
   emptyStateDescription =
     "You are all caught up for event and fest approvals in your department.",
@@ -112,10 +115,16 @@ export default function HodApprovalTable({
                         className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
                           completedAction === "approve"
                             ? "bg-emerald-100 text-emerald-800"
+                            : completedAction === "decline"
+                            ? "bg-red-100 text-red-800"
                             : "bg-amber-100 text-amber-800"
                         }`}
                       >
-                        {completedAction === "approve" ? "Approved" : "Returned for Revision"}
+                        {completedAction === "approve"
+                          ? "Approved"
+                          : completedAction === "decline"
+                          ? "Declined"
+                          : "Sent Back for Revision"}
                       </span>
                     ) : (
                       <div className="flex flex-wrap gap-2">
@@ -123,21 +132,31 @@ export default function HodApprovalTable({
                           type="button"
                           onClick={() => onApprove(row.id)}
                           disabled={isWorking}
-                          className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
                         >
+                          {isWorking ? <SpinnerIcon /> : null}
                           Approve
                         </button>
                         <button
                           type="button"
                           onClick={() => onReturn(row.id)}
                           disabled={isWorking}
-                          className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          Return for Revision
+                          {isWorking ? <SpinnerIcon /> : null}
+                          Send Back
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDecline(row.id)}
+                          disabled={isWorking}
+                          className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isWorking ? <SpinnerIcon /> : null}
+                          Decline
                         </button>
                       </div>
                     )}
-                    {isWorking ? <p className="mt-2 text-xs text-slate-500">Processing...</p> : null}
                   </td>
                 </tr>
               );

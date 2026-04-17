@@ -12,6 +12,10 @@ import {
   DeanDashboardMetrics,
   DeanDepartmentBudgetKpi,
 } from "../types";
+import {
+  actionBadgeProps,
+  usePersistedDecisions,
+} from "../../_shared/usePersistedDecisions";
 
 interface DeanDashboardClientProps {
   schoolName: string;
@@ -26,6 +30,7 @@ type ModalState = {
   eventName: string;
   note: string;
   errorMessage: string | null;
+  mode: "return" | "decline";
 };
 
 type CompletedActionMap = Record<string, DeanApprovalAction>;
@@ -62,6 +67,10 @@ function decisionMessage(action: DeanApprovalAction): string {
     return "Approval recorded";
   }
 
+  if (action === "decline") {
+    return "Request declined";
+  }
+
   return "Request returned for revision";
 }
 
@@ -78,6 +87,16 @@ function getProgressWidthClass(percent: number): string {
   if (percent >= 10) return "w-2/12";
   if (percent > 0) return "w-1/12";
   return "w-0";
+}
+
+function formatDecidedAt(isoString: string): string {
+  return new Date(isoString).toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export default function DeanDashboardClient({
@@ -100,6 +119,9 @@ export default function DeanDashboardClient({
   const [modalState, setModalState] = useState<ModalState | null>(null);
   const completionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
+  const { decisions: persistedDecisions, saveDecision } =
+    usePersistedDecisions<DeanApprovalAction>("socio_decisions_dean");
+
   const departmentOptions = useMemo(
     () =>
       Array.from(new Set(queue.map((item) => item.departmentName)))
@@ -115,6 +137,14 @@ export default function DeanDashboardClient({
 
     return queue.filter((item) => item.departmentName === selectedDepartment);
   }, [queue, selectedDepartment]);
+
+  const recentlyDecided = useMemo(() => {
+    const queueIds = new Set(queue.map((r) => r.id));
+    return Object.values(persistedDecisions)
+      .filter((d) => !queueIds.has(d.requestId))
+      .sort((a, b) => new Date(b.decidedAt).getTime() - new Date(a.decidedAt).getTime())
+      .slice(0, 20);
+  }, [queue, persistedDecisions]);
 
   useEffect(() => {
     return () => {
@@ -133,6 +163,16 @@ export default function DeanDashboardClient({
 
   const applySuccessfulAction = (requestId: string, action: DeanApprovalAction) => {
     const actedRow = queue.find((row) => row.id === requestId) || null;
+
+    if (actedRow) {
+      saveDecision({
+        requestId,
+        eventName: actedRow.eventName,
+        entityType: actedRow.entityType,
+        action,
+        decidedAt: new Date().toISOString(),
+      });
+    }
 
     setCompletedActions((previous) => ({
       ...previous,
@@ -192,7 +232,7 @@ export default function DeanDashboardClient({
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            action,
+            action: action === "decline" ? "reject" : action,
             note: note?.trim() || null,
           }),
         },
@@ -229,7 +269,7 @@ export default function DeanDashboardClient({
     }
   };
 
-  const openDecisionModal = (requestId: string) => {
+  const openDecisionModal = (requestId: string, mode: "return" | "decline" = "return") => {
     const row = queue.find((item) => item.id === requestId);
     if (!row) {
       return;
@@ -240,6 +280,7 @@ export default function DeanDashboardClient({
       eventName: row.eventName,
       note: "",
       errorMessage: null,
+      mode,
     });
   };
 
@@ -318,7 +359,10 @@ export default function DeanDashboardClient({
           void submitAction({ requestId, action: "approve" });
         }}
         onReturn={(requestId) => {
-          openDecisionModal(requestId);
+          openDecisionModal(requestId, "return");
+        }}
+        onDecline={(requestId) => {
+          openDecisionModal(requestId, "decline");
         }}
       />
 
@@ -368,6 +412,62 @@ export default function DeanDashboardClient({
             </div>
           ) : null}
         </div>
+      </div>
+
+      {recentlyDecided.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Recently Decided</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Actions taken by you in the past 30 days.
+          </p>
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Event / Fest
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Decided At
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {recentlyDecided.map((d) => {
+                  const badge = actionBadgeProps(d.action);
+                  return (
+                    <tr key={d.requestId} className="hover:bg-slate-50/60">
+                      <td className="px-4 py-3">
+                        <p className="text-sm font-medium text-slate-800">{d.eventName}</p>
+                        <p className="text-xs text-slate-500 capitalize">{d.entityType}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${badge.className}`}>
+                          {badge.label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-600">
+                        {formatDecidedAt(d.decidedAt)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Volunteers — placeholder for future implementation */}
+      <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Volunteers</h2>
+        <p className="mt-2 text-sm text-slate-500">
+          Volunteer assignments and tracking for your school scope will appear here.
+          This section is under development — data and fields will be added in a future update.
+        </p>
       </div>
 
       <ApprovalDecisionModal

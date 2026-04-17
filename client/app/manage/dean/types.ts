@@ -21,4 +21,4 @@ export interface DeanDashboardMetrics {
   pendingBudgetTotal: number;
 }
 
-export type DeanApprovalAction = "approve" | "return";
+export type DeanApprovalAction = "approve" | "return" | "decline";

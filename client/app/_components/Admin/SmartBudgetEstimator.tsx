@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useCallback, useId } from "react";
+import { useState, useEffect, useTransition, useCallback, useId, useRef } from "react";
 import { Plus, Trash2, Info, CheckCircle2, Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
 import {
@@ -62,6 +62,14 @@ interface SmartBudgetEstimatorProps {
   entityId: string;
   entityType: "event" | "fest";
   entityLabel?: string;
+  /**
+   * "standalone" (default) — shows Save Draft + Submit for Approval buttons.
+   * "embedded" — hides action buttons; use onTotalChange to sync total to a
+   *              parent form that owns the final submit.
+   */
+  mode?: "standalone" | "embedded";
+  /** Called whenever the computed total changes (useful in embedded mode). */
+  onTotalChange?: (total: number) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────
@@ -70,11 +78,14 @@ export default function SmartBudgetEstimator({
   entityId,
   entityType,
   entityLabel,
+  mode = "standalone",
+  onTotalChange,
 }: SmartBudgetEstimatorProps) {
   const baseId = useId();
   const [items, setItems] = useState<ExpenseItem[]>([makeItem()]);
   const [isSavePending, startSave] = useTransition();
   const [isSubmitPending, startSubmit] = useTransition();
+  const isEmbedded = mode === "embedded";
 
   // ── Derived state ────────────────────────────────────────────────────────
   const estimatedTotal = items.reduce(
@@ -84,6 +95,13 @@ export default function SmartBudgetEstimator({
   const approvalTier = getApprovalTier(estimatedTotal);
   const allBadges = getAllBadges(estimatedTotal);
   const label = entityLabel ?? entityType;
+
+  // Notify parent whenever total changes (primarily used in embedded mode)
+  const onTotalChangeRef = useRef(onTotalChange);
+  onTotalChangeRef.current = onTotalChange;
+  useEffect(() => {
+    onTotalChangeRef.current?.(estimatedTotal);
+  }, [estimatedTotal]);
 
   // ── Item mutations ───────────────────────────────────────────────────────
   const updateItem = useCallback(
@@ -132,9 +150,9 @@ export default function SmartBudgetEstimator({
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col lg:flex-row gap-6 w-full">
-      {/* ── Left pane: expense table ── */}
-      <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+    <div className="flex flex-col gap-6 w-full">
+      {/* ── Top pane: expense table ── */}
+      <div className="w-full bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         {/* Header */}
         <div className="px-6 py-5 border-b border-slate-100">
           <h2 className="text-xl font-bold text-slate-900">Smart Budget Estimator</h2>
@@ -274,33 +292,32 @@ export default function SmartBudgetEstimator({
           </button>
         </div>
 
-        {/* Save draft */}
-        <div className="px-6 pb-5 flex items-center justify-end">
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={isSavePending}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 transition-colors"
-          >
-            {isSavePending && <Loader2 size={14} className="animate-spin" />}
-            Save Draft
-          </button>
-        </div>
+        {/* Save draft — standalone mode only */}
+        {!isEmbedded && (
+          <div className="px-6 pb-5 flex items-center justify-end">
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={isSavePending}
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 transition-colors"
+            >
+              {isSavePending && <Loader2 size={14} className="animate-spin" />}
+              Save Draft
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* ── Right pane: pre-flight card ── */}
-      <div className="w-full lg:w-[300px] shrink-0">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 lg:sticky lg:top-6 flex flex-col gap-5">
-          {/* Title */}
-          <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Budget Estimate Pre-Flight
-            </p>
-          </div>
+      {/* ── Bottom bar: pre-flight summary ── */}
+      <div className="w-full bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-4">
+          Budget Estimate Pre-Flight
+        </p>
 
+        <div className="flex flex-col sm:flex-row sm:items-start gap-4">
           {/* Total */}
-          <div>
-            <p className="text-[11px] font-medium text-slate-400 uppercase tracking-wider mb-1">
+          <div className="shrink-0">
+            <p className="text-[11px] font-medium text-slate-400 uppercase tracking-wider mb-0.5">
               Estimated Total
             </p>
             <p className="text-3xl font-bold text-slate-900 tabular-nums leading-tight">
@@ -308,63 +325,70 @@ export default function SmartBudgetEstimator({
             </p>
           </div>
 
-          {/* Alert box */}
-          {estimatedTotal > 0 ? (
-            <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 flex gap-2.5">
-              <Info size={15} className="text-blue-500 shrink-0 mt-0.5" />
-              <p className="text-xs text-slate-700 leading-relaxed">
-                At{" "}
-                <span className="font-semibold text-blue-700">{formatINR(estimatedTotal)}</span>
-                , this event will require{" "}
-                <span className="font-semibold">{joinList(approvalTier)}</span> approvals
-                before publishing.
-              </p>
-            </div>
-          ) : (
-            <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 flex gap-2.5">
-              <Info size={15} className="text-slate-400 shrink-0 mt-0.5" />
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Add expense items to see the required approval pipeline.
-              </p>
-            </div>
-          )}
+          <div className="w-px self-stretch bg-slate-100 hidden sm:block" />
 
-          {/* Approval badges */}
-          {allBadges.length > 0 && (
-            <div>
-              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                Required Approvals Pipeline
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {allBadges.map((badge) => (
-                  <span
-                    key={badge}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-600 text-white"
-                  >
-                    <CheckCircle2 size={12} />
-                    {badge}
-                  </span>
-                ))}
+          {/* Alert + badges */}
+          <div className="flex-1 flex flex-col gap-3">
+            {estimatedTotal > 0 ? (
+              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 flex gap-2">
+                <Info size={14} className="text-blue-500 shrink-0 mt-0.5" />
+                <p className="text-xs text-slate-700 leading-relaxed">
+                  At{" "}
+                  <span className="font-semibold text-blue-700">{formatINR(estimatedTotal)}</span>
+                  , this event will require{" "}
+                  <span className="font-semibold">{joinList(approvalTier)}</span> approvals
+                  before publishing.
+                </p>
               </div>
+            ) : (
+              <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 flex gap-2">
+                <Info size={14} className="text-slate-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Add expense items above to see the required approval pipeline.
+                </p>
+              </div>
+            )}
+
+            {allBadges.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
+                  Required Approvals Pipeline
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {allBadges.map((badge) => (
+                    <span
+                      key={badge}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-600 text-white"
+                    >
+                      <CheckCircle2 size={12} />
+                      {badge}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Submit button — standalone mode only */}
+          {!isEmbedded && (
+            <div className="shrink-0 sm:self-center">
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={isSubmitPending || estimatedTotal <= 0}
+                className="w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2 text-sm"
+              >
+                {isSubmitPending ? (
+                  <>
+                    <Loader2 size={15} className="animate-spin" />
+                    Submitting...
+                  </>
+                ) : (
+                  "Submit for Approval"
+                )}
+              </button>
             </div>
           )}
-
-          {/* Submit button */}
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={isSubmitPending || estimatedTotal <= 0}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2 text-sm"
-          >
-            {isSubmitPending ? (
-              <>
-                <Loader2 size={15} className="animate-spin" />
-                Submitting...
-              </>
-            ) : (
-              "Submit for Approval"
-            )}
-          </button>
         </div>
       </div>
     </div>

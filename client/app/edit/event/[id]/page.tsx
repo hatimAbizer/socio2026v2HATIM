@@ -1152,6 +1152,7 @@ export default function EditEventPage() {
               isEditMode={true}
               isBudgetLocked={isBudgetLocked}
               lifecycleStatus={lifecycleStatus}
+              eventId={eventIdSlug}
               existingImageFileUrl={existingImageFileUrl}
               existingBannerFileUrl={existingBannerFileUrl}
               existingPdfFileUrl={existingPdfFileUrl}

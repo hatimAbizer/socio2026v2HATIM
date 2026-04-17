@@ -645,8 +645,67 @@ const submitToHod = async ({ fest, requester }) => {
     excludeEmail: fest.contact_email,
   });
 
-  if (!hod?.email) {
-    return { error: "Unable to route approval. No HOD assigned for this department/campus." };
+  const hodAvailable = hod?.email && normalizeEmail(hod.email) !== normalizeEmail(requester.email);
+
+  if (!hodAvailable) {
+    // No HOD assigned — route directly to Dean if available
+    const dean = await findApprover({
+      roleCode: ROLE_CODES.DEAN,
+      department: fest.organizing_dept,
+      campus: fest.campus_hosted_at,
+      excludeEmail: fest.contact_email,
+    });
+
+    if (dean?.email && normalizeEmail(dean.email) !== normalizeEmail(requester.email)) {
+      const currentVersion = Number(fest.workflow_version) || 1;
+      const nextVersion = normalizeToken(fest.workflow_status) === FEST_STATUS.REJECTED
+        ? currentVersion + 1 : currentVersion;
+
+      const updatedFest = await updateFestWorkflow(fest.fest_id, FEST_STATUS.PENDING_DEAN, {
+        workflow_version: nextVersion,
+        rejected_at: null,
+        rejected_by: null,
+        rejection_reason: null,
+      });
+
+      await logApprovalAction({
+        entityType: "fest",
+        entityId: fest.fest_id,
+        step: "dean_review",
+        action: "submitted",
+        actorEmail: requester.email,
+        actorRole: "organizer",
+        notes: "No HOD assigned; routed directly to Dean.",
+        version: nextVersion,
+      });
+
+      return { updatedFest, dean, routedToDean: true };
+    }
+
+    // No HOD or Dean — proceed to PENDING_HOD status and wait for assignment
+    const currentVersion = Number(fest.workflow_version) || 1;
+    const nextVersion = normalizeToken(fest.workflow_status) === FEST_STATUS.REJECTED
+      ? currentVersion + 1 : currentVersion;
+
+    const updatedFest = await updateFestWorkflow(fest.fest_id, FEST_STATUS.PENDING_HOD, {
+      workflow_version: nextVersion,
+      rejected_at: null,
+      rejected_by: null,
+      rejection_reason: null,
+    });
+
+    await logApprovalAction({
+      entityType: "fest",
+      entityId: fest.fest_id,
+      step: "hod_review",
+      action: "submitted",
+      actorEmail: requester.email,
+      actorRole: "organizer",
+      notes: "No HOD or Dean assigned; pending HOD assignment.",
+      version: nextVersion,
+    });
+
+    return { updatedFest, hod: null };
   }
 
   if (normalizeEmail(hod.email) === normalizeEmail(requester.email)) {
@@ -917,21 +976,25 @@ router.post("/:festId/submit", async (req, res) => {
       return res.status(400).json({ error: submission.error });
     }
 
+    const nextRole = submission.routedToDean ? "dean" : "hod";
+    const nextApprover = submission.routedToDean ? submission.dean : submission.hod;
+    const nextStatus = submission.routedToDean ? FEST_STATUS.PENDING_DEAN : FEST_STATUS.PENDING_HOD;
+
     notifyFestSubmissionTransition({
       fest: submission.updatedFest || fest,
       requesterEmail: req.userInfo?.email,
-      nextApproverEmail: submission.hod?.email,
+      nextApproverEmail: nextApprover?.email || null,
     }).catch((notificationError) => {
       console.error("[FestApprovalNotify] submit notification error:", notificationError);
     });
 
     return res.status(200).json({
       success: true,
-      status: FEST_STATUS.PENDING_HOD,
+      status: nextStatus,
       routed_to: {
-        role: "hod",
-        name: submission.hod?.name || null,
-        email: submission.hod?.email || null,
+        role: nextRole,
+        name: nextApprover?.name || null,
+        email: nextApprover?.email || null,
       },
       fest: submission.updatedFest,
     });

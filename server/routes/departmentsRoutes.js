@@ -75,6 +75,7 @@ router.get("/", async (req, res) => {
       .from("departments")
       .select("id, name, code, school, is_active")
       .eq("is_active", true)
+      .not("code", "is", null)
       .order("school", { ascending: true })
       .order("name", { ascending: true });
 

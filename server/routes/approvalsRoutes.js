@@ -26,6 +26,7 @@ import {
   shouldEntityRemainDraft,
 } from "../utils/lifecycleStatus.js";
 import { shouldSendFinalApprovalBroadcast } from "../utils/notificationLifecycle.js";
+import { resolveDepartmentId } from "./departmentsRoutes.js";
 
 const router = express.Router();
 
@@ -902,6 +903,29 @@ const isRoleAssignmentActive = (assignment) => {
   return true;
 };
 
+const resolveDeptNameById = async (id) => {
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) return null;
+
+  // Try canonical departments table first (populated by migration 034)
+  try {
+    const row = await queryOne("departments", { where: { id: normalizedId }, select: "id,name" });
+    if (row?.name) return row.name;
+  } catch (error) {
+    if (!isMissingRelationError(error)) throw error;
+  }
+
+  // Fall back to legacy departments_courses table
+  try {
+    const row = await queryOne("departments_courses", { where: { id: normalizedId }, select: "id,department_name" });
+    if (row?.department_name) return row.department_name;
+  } catch (error) {
+    if (!isMissingRelationError(error)) throw error;
+  }
+
+  return null;
+};
+
 const resolveDepartmentLabelsFromIds = async (departmentIds) => {
   const labels = new Set();
 
@@ -914,20 +938,14 @@ const resolveDepartmentLabelsFromIds = async (departmentIds) => {
     labels.add(normalizeDepartmentScopeValue(normalizedId));
 
     try {
-      const departmentRow = await queryOne("departments_courses", {
-        where: { id: normalizedId },
-        select: "id,department_name",
-      });
-
-      if (departmentRow?.department_name) {
-        labels.add(normalizeDepartmentScopeValue(departmentRow.department_name));
+      const name = await resolveDeptNameById(normalizedId);
+      if (name) {
+        labels.add(normalizeDepartmentScopeValue(name));
       }
     } catch (error) {
-      if (isMissingRelationError(error)) {
-        continue;
+      if (!isMissingRelationError(error)) {
+        throw error;
       }
-
-      throw error;
     }
   }
 
@@ -960,12 +978,18 @@ const resolveHodDepartmentScope = async (req) => {
     try {
       const assignments = await queryAll("user_role_assignments", {
         where: { user_id: userId, role_code: ROLE_CODES.HOD },
-        select: "department_scope,is_active,valid_from,valid_until",
+        select: "department_scope,department_id,is_active,valid_from,valid_until",
       });
 
       for (const assignment of assignments || []) {
         if (!isRoleAssignmentActive(assignment)) {
           continue;
+        }
+
+        // Prefer the new UUID FK column (populated by migration 034)
+        const uuidDeptId = String(assignment.department_id || "").trim();
+        if (uuidDeptId) {
+          departmentIdCandidates.add(uuidDeptId);
         }
 
         const departmentScopeValue = String(assignment.department_scope || "").trim();
@@ -1017,7 +1041,7 @@ const resolveDeanSchoolScope = async (req) => {
     try {
       const assignments = await queryAll("user_role_assignments", {
         where: { user_id: userId, role_code: ROLE_CODES.DEAN },
-        select: "school_scope,department_scope,is_active,valid_from,valid_until",
+        select: "school_scope,department_scope,department_id,is_active,valid_from,valid_until",
       });
 
       for (const assignment of assignments || []) {
@@ -1132,11 +1156,56 @@ const resolveApprovalRequestScopeValue = async ({
 };
 
 const resolveApprovalRequestDepartmentScopeValue = async (approvalRequest) => {
-  return resolveApprovalRequestScopeValue({
+  // Try text column first (exists until migration 035 drops it)
+  const textValue = await resolveApprovalRequestScopeValue({
     approvalRequest,
     scopeColumn: "organizing_dept",
     normalizeScopeValue: normalizeDepartmentScopeValue,
   });
+  if (textValue) return textValue;
+
+  // Fallback: UUID column on the approval_request row itself
+  const deptId = String(approvalRequest?.organizing_dept_id || "").trim();
+  if (deptId) {
+    try {
+      const name = await resolveDeptNameById(deptId);
+      if (name) return normalizeDepartmentScopeValue(name);
+    } catch (error) {
+      if (!isMissingRelationError(error)) throw error;
+    }
+  }
+
+  // Fallback: UUID column on the linked event or fest entity
+  const entityType = normalizeWorkflowStatus(approvalRequest?.entity_type);
+  const entityRef = String(approvalRequest?.entity_ref || "").trim();
+  if (!entityRef) return "";
+
+  try {
+    let entityDeptId = null;
+    if (["EVENT", "STANDALONE_EVENT", "FEST_CHILD_EVENT"].includes(entityType)) {
+      const event = await queryOne("events", { where: { event_id: entityRef }, select: "organizing_dept_id" });
+      entityDeptId = String(event?.organizing_dept_id || "").trim();
+    } else if (entityType === "FEST") {
+      for (const tableName of ["fests", "fest"]) {
+        try {
+          const fest = await queryOne(tableName, { where: { fest_id: entityRef }, select: "organizing_dept_id" });
+          if (fest) { entityDeptId = String(fest?.organizing_dept_id || "").trim(); break; }
+        } catch (err) {
+          if (isMissingRelationError(err) || isMissingColumnError(err, "organizing_dept_id")) continue;
+          throw err;
+        }
+      }
+    }
+    if (entityDeptId) {
+      const name = await resolveDeptNameById(entityDeptId);
+      if (name) return normalizeDepartmentScopeValue(name);
+    }
+  } catch (error) {
+    if (isMissingRelationError(error) || isMissingColumnError(error, "organizing_dept_id")) return "";
+    throw error;
+  }
+
+  return "";
 };
 
 const resolveApprovalRequestSchoolScopeValue = async (approvalRequest) => {
@@ -1517,6 +1586,7 @@ const persistApprovalRequestScopeForRouting = async (approvalRequest) => {
   }
 
   const currentDepartment = String(approvalRequest?.organizing_dept || "").trim();
+  const currentDeptId = String(approvalRequest?.organizing_dept_id || "").trim();
   const currentSchool = String(approvalRequest?.organizing_school || "").trim();
   const currentCampus = String(approvalRequest?.campus_hosted_at || "").trim();
 
@@ -1528,6 +1598,17 @@ const persistApprovalRequestScopeForRouting = async (approvalRequest) => {
     );
     if (resolvedDepartment) {
       updates.organizing_dept = resolvedDepartment;
+    }
+  }
+
+  // Also populate organizing_dept_id (UUID) if missing
+  if (!currentDeptId) {
+    const nameToLookup = currentDepartment || updates.organizing_dept;
+    if (nameToLookup) {
+      const resolvedId = await resolveDepartmentId(nameToLookup).catch(() => null);
+      if (resolvedId) {
+        updates.organizing_dept_id = resolvedId;
+      }
     }
   }
 
@@ -1561,7 +1642,7 @@ const persistApprovalRequestScopeForRouting = async (approvalRequest) => {
       updated_at: nowIso,
     },
     where: { id: approvalRequest.id },
-    removableColumns: ["organizing_dept", "organizing_school", "campus_hosted_at"],
+    removableColumns: ["organizing_dept", "organizing_dept_id", "organizing_school", "campus_hosted_at"],
   });
 
   if (!persisted) {
@@ -2368,16 +2449,27 @@ const resolveRoleRecipientEmails = async ({
     }).catch(async (error) => {
       if (
         !isMissingColumnError(error, "is_finance_officer") &&
-        !isMissingColumnError(error, "is_finance_office")
+        !isMissingColumnError(error, "is_finance_office") &&
+        !isMissingColumnError(error, "department")
       ) {
         throw error;
       }
 
       return queryAll("users", {
         select:
-          "email,campus,school,school_id,department,department_id,university_role,is_hod,is_dean,is_cfo,is_finance_office,is_service_it,is_service_venue,is_service_catering,is_service_stalls,is_organiser_student,is_organiser",
+          "email,campus,school,school_id,department_id,university_role,is_hod,is_dean,is_cfo,is_finance_office,is_service_it,is_service_venue,is_service_catering,is_service_stalls,is_organiser_student,is_organiser",
       });
     });
+
+    // Pre-resolve department UUIDs to names for scope matching (handles post-035 state)
+    const deptIdToName = {};
+    for (const userRow of userRows || []) {
+      const deptId = String(userRow?.department_id || "").trim();
+      if (deptId && !deptIdToName[deptId] && !userRow?.department) {
+        const name = await resolveDeptNameById(deptId).catch(() => null);
+        if (name) deptIdToName[deptId] = name;
+      }
+    }
 
     const recipients = new Set();
 
@@ -2391,8 +2483,13 @@ const resolveRoleRecipientEmails = async ({
         continue;
       }
 
+      // Enrich with resolved department name if the text column is absent
+      const enrichedUser = userRow?.department
+        ? userRow
+        : { ...userRow, department: deptIdToName[String(userRow?.department_id || "").trim()] || userRow?.department };
+
       if (
-        !isUserWithinNotificationScope(userRow, normalizedRoleCode, {
+        !isUserWithinNotificationScope(enrichedUser, normalizedRoleCode, {
           campusScope,
           schoolScope,
           departmentScope,
@@ -2905,7 +3002,7 @@ router.get("/requests/timeline", async (req, res) => {
         approvalRequest = await queryOne("approval_requests", {
           where: { id: requestId },
           select:
-            "id,request_id,entity_type,entity_ref,parent_fest_ref,requested_by_user_id,requested_by_email,organizing_dept,organizing_school,campus_hosted_at,is_budget_related,status,submitted_at,decided_at,latest_comment,created_at,updated_at",
+            "id,request_id,entity_type,entity_ref,parent_fest_ref,requested_by_user_id,requested_by_email,organizing_dept,organizing_dept_id,organizing_school,campus_hosted_at,is_budget_related,status,submitted_at,decided_at,latest_comment,created_at,updated_at",
         });
       } catch (error) {
         if (!isMissingColumnError(error, "organizing_school")) {
@@ -2915,7 +3012,7 @@ router.get("/requests/timeline", async (req, res) => {
         approvalRequest = await queryOne("approval_requests", {
           where: { id: requestId },
           select:
-            "id,request_id,entity_type,entity_ref,parent_fest_ref,requested_by_user_id,requested_by_email,organizing_dept,campus_hosted_at,is_budget_related,status,submitted_at,decided_at,latest_comment,created_at,updated_at",
+            "id,request_id,entity_type,entity_ref,parent_fest_ref,requested_by_user_id,requested_by_email,organizing_dept,organizing_dept_id,campus_hosted_at,is_budget_related,status,submitted_at,decided_at,latest_comment,created_at,updated_at",
         });
       }
 
@@ -3056,6 +3153,7 @@ router.get("/queues/:roleCode", async (req, res) => {
         entity_type: approvalRequest.entity_type,
         entity_ref: approvalRequest.entity_ref,
         organizing_dept: approvalRequest.organizing_dept,
+        organizing_dept_id: approvalRequest.organizing_dept_id,
         organizing_school: approvalRequest.organizing_school,
         campus_hosted_at: approvalRequest.campus_hosted_at,
         step_code: step.step_code,
@@ -3142,7 +3240,7 @@ router.get("/service-queues/:roleCode", async (req, res) => {
       if (requestRow?.approval_request_id) {
         approvalRequest = await queryOne("approval_requests", {
           where: { id: requestRow.approval_request_id },
-          select: "entity_type,entity_ref,organizing_dept",
+          select: "entity_type,entity_ref,organizing_dept,organizing_dept_id",
         }).catch((error) => {
           if (isMissingRelationError(error)) {
             return null;
@@ -3156,7 +3254,7 @@ router.get("/service-queues/:roleCode", async (req, res) => {
       try {
         eventRecord = await queryOne("events", {
           where: { event_id: eventId },
-          select: "event_id,title,event_date,organizing_dept,campus_hosted_at",
+          select: "event_id,title,event_date,organizing_dept,organizing_dept_id,campus_hosted_at",
         });
       } catch (error) {
         if (!isMissingRelationError(error)) {
@@ -3177,6 +3275,8 @@ router.get("/service-queues/:roleCode", async (req, res) => {
         entity_id: String(approvalRequest?.entity_ref || eventId).trim(),
         organizing_dept:
           approvalRequest?.organizing_dept || eventRecord?.organizing_dept || null,
+        organizing_dept_id:
+          approvalRequest?.organizing_dept_id || eventRecord?.organizing_dept_id || null,
         campus_hosted_at: eventRecord?.campus_hosted_at || null,
         event_title: eventRecord?.title || null,
         event_date: eventRecord?.event_date || null,
@@ -3460,11 +3560,6 @@ router.post("/requests/:requestId/steps/:stepCode/decision", async (req, res) =>
 
 router.post("/service-requests/:serviceRequestId/decision", async (req, res) => {
   try {
-    if (isMasterAdminRequest(req)) {
-      return res.status(403).json({
-        error: "Master admin can view and edit resources but cannot submit service decisions.",
-      });
-    }
 
     const { serviceRequestId } = req.params;
     const decision = normalizeDecision(req.body?.decision);
