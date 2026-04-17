@@ -759,13 +759,24 @@ const asBoolean = (value) =>
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PHONE_REGEX = /^\+?[\d\s-]{10,14}$/;
 const MAX_EMAIL_LENGTH = 100;
-const CHRIST_EMAIL_DOMAIN = "@christuniversity.in";
+const CHRIST_EMAIL_DOMAIN = "christuniversity.in";
 
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 const normalizePhone = (value) => String(value || "").trim();
 const isValidEmail = (value) => EMAIL_REGEX.test(normalizeEmail(value));
-const isChristUniversityEmail = (value) =>
-  normalizeEmail(value).includes(CHRIST_EMAIL_DOMAIN);
+const getEmailDomain = (value) => {
+  const normalized = normalizeEmail(value);
+  const atIndex = normalized.lastIndexOf("@");
+  if (atIndex < 0 || atIndex === normalized.length - 1) {
+    return "";
+  }
+
+  return normalized.slice(atIndex + 1);
+};
+const isChristUniversityEmail = (value) => {
+  const domain = getEmailDomain(value);
+  return domain === CHRIST_EMAIL_DOMAIN || domain.endsWith(`.${CHRIST_EMAIL_DOMAIN}`);
+};
 
 const normalizeEventHead = (head) => {
   if (typeof head === "string") {
@@ -1566,7 +1577,7 @@ router.post(
 
       if (!isChristUniversityEmail(contactEmail)) {
         return res.status(400).json({
-          error: "Contact email must use @christuniversity.in domain.",
+          error: "Contact email must use a christuniversity.in domain (including subdomains).",
         });
       }
 
@@ -1629,7 +1640,7 @@ router.post(
       if (invalidSubhead) {
         return res.status(400).json({
           error:
-            "Each subhead must have a valid @christuniversity.in email and be 100 characters or fewer.",
+            "Each subhead must have a valid christuniversity.in email (including subdomains) and be 100 characters or fewer.",
         });
       }
 
@@ -2110,7 +2121,7 @@ router.put(
 
         if (!isChristUniversityEmail(normalizedContactEmail)) {
           return res.status(400).json({
-            error: "Contact email must use @christuniversity.in domain.",
+            error: "Contact email must use a christuniversity.in domain (including subdomains).",
           });
         }
       }
@@ -2556,7 +2567,7 @@ router.put(
           if (invalidSubhead) {
             return res.status(400).json({
               error:
-                "Each subhead must have a valid @christuniversity.in email and be 100 characters or fewer.",
+                "Each subhead must have a valid christuniversity.in email (including subdomains) and be 100 characters or fewer.",
             });
           }
 

@@ -29,7 +29,7 @@ const ALLOWED_FEST_IMAGE_TYPES = [
 ];
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const MAX_EMAIL_LENGTH = 100;
-const CHRIST_EMAIL_DOMAIN = "@christuniversity.in";
+const CHRIST_EMAIL_DOMAIN = "christuniversity.in";
 const PHONE_REGEX = /^\+?[\d\s-]{10,14}$/;
 
 const normalizeEmail = (value: unknown): string =>
@@ -38,8 +38,17 @@ const normalizeEmail = (value: unknown): string =>
 const isValidEmail = (value: unknown): boolean =>
   EMAIL_REGEX.test(normalizeEmail(value));
 
-const isChristUniversityEmail = (value: unknown): boolean =>
-  normalizeEmail(value).includes("christuniversity.in");
+const getEmailDomain = (value: unknown): string => {
+  const normalized = normalizeEmail(value);
+  const atIndex = normalized.lastIndexOf("@");
+  if (atIndex < 0 || atIndex === normalized.length - 1) return "";
+  return normalized.slice(atIndex + 1);
+};
+
+const isChristUniversityEmail = (value: unknown): boolean => {
+  const domain = getEmailDomain(value);
+  return domain === CHRIST_EMAIL_DOMAIN || domain.endsWith(`.${CHRIST_EMAIL_DOMAIN}`);
+};
 
 const normalizePhone = (value: unknown): string => String(value ?? "").trim();
 
@@ -1590,7 +1599,8 @@ function CreateFestForm(props?: CreateFestProps) {
             else if (!isValidEmail(value))
               newErrors.contactEmail = "Invalid email format";
             else if (!isChristUniversityEmail(value))
-              newErrors.contactEmail = "Use your @christuniversity.in email";
+              newErrors.contactEmail =
+                "Use your christuniversity.in email (subdomains allowed)";
             else if (normalizeEmail(value).length > MAX_EMAIL_LENGTH)
               newErrors.contactEmail = "Max 100 chars.";
             else delete newErrors.contactEmail;
@@ -1630,7 +1640,7 @@ function CreateFestForm(props?: CreateFestProps) {
             else if (!isValidEmail(value as string))
               newErrors.subheadEmail = "Invalid email format";
             else if (!isChristUniversityEmail(value as string))
-              newErrors.subheadEmail = "Use @christuniversity.in email only";
+              newErrors.subheadEmail = "Use a christuniversity.in email (subdomains allowed)";
             else delete newErrors.subheadEmail;
             break;
         }
@@ -2606,7 +2616,7 @@ function CreateFestForm(props?: CreateFestProps) {
       return;
     }
     if (!isChristUniversityEmail(email)) {
-      setErrors(prev => ({ ...prev, subheadEmail: "Use @christuniversity.in email only" }));
+      setErrors(prev => ({ ...prev, subheadEmail: "Use a christuniversity.in email (subdomains allowed)" }));
       return;
     }
     if (organizerEmail && email === organizerEmail) {
