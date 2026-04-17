@@ -7,7 +7,7 @@ import { SpinnerIcon } from "../../_shared/usePersistedDecisions";
 interface CfoApprovalTableProps {
   rows: CfoApprovalQueueItem[];
   completedActions: Record<string, CfoApprovalAction>;
-  activeRequestId: string | null;
+  activeAction: { requestId: string; action: string } | null;
   onApprove: (requestId: string) => void;
   onReject: (requestId: string) => void;
   onReturn: (requestId: string) => void;
@@ -39,7 +39,7 @@ function formatDateLabel(dateValue: string | null): string {
 export default function CfoApprovalTable({
   rows,
   completedActions,
-  activeRequestId,
+  activeAction,
   onApprove,
   onReject,
   onReturn,
@@ -87,7 +87,7 @@ export default function CfoApprovalTable({
 
           <tbody className="divide-y divide-slate-100">
             {rows.map((row) => {
-              const isWorking = activeRequestId === row.id;
+              const isWorking = activeAction?.requestId === row.id;
               const completedAction = completedActions[row.id] || null;
               const isCompleted = Boolean(completedAction);
 
@@ -134,7 +134,7 @@ export default function CfoApprovalTable({
                         <CfoApproveAndHandoffButton
                           onClick={() => onApprove(row.id)}
                           disabled={isWorking}
-                          isLoading={isWorking}
+                          isLoading={isWorking && activeAction?.action === "approve"}
                         />
                         <button
                           type="button"
@@ -142,7 +142,7 @@ export default function CfoApprovalTable({
                           disabled={isWorking}
                           className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          {isWorking ? <SpinnerIcon /> : null}
+                          {isWorking && activeAction?.action === "reject" ? <SpinnerIcon /> : null}
                           Decline
                         </button>
                         <button
@@ -151,7 +151,7 @@ export default function CfoApprovalTable({
                           disabled={isWorking}
                           className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          {isWorking ? <SpinnerIcon /> : null}
+                          {isWorking && activeAction?.action === "return" ? <SpinnerIcon /> : null}
                           Return for Revision
                         </button>
                       </div>

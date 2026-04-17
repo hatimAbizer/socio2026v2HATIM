@@ -755,6 +755,8 @@ interface EventFormProps {
   isBudgetLocked?: boolean;
   /** Stable event ID (slug) — required to persist budget line items. */
   eventId?: string | null;
+  /** UUID of the organizing department — used to pre-select in edit mode when text column is gone. */
+  initialOrganizingDeptId?: string | null;
 }
 
 const baseButtonClasses =
@@ -1482,10 +1484,12 @@ export default function EventForm({
   lifecycleStatus,
   isBudgetLocked = false,
   eventId,
+  initialOrganizingDeptId,
 }: EventFormProps) {
   const [fetchedFests, setFetchedFests] = useState<FestOption[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState(fallbackDepartmentOptions);
   const [schoolOptions, setSchoolOptions] = useState(fallbackSchoolOptions);
+  const [deptCodeByUUID, setDeptCodeByUUID] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
     fetch("/api/departments")
@@ -1495,6 +1499,9 @@ export default function EventForm({
         if (rows.length === 0) return;
         // Use code slug as value (backward-compat with existing department_access arrays)
         setDepartmentOptions(rows.map((d) => ({ value: d.code || d.id, label: d.name })));
+        const uuidMap = new Map<string, string>();
+        rows.forEach((d) => { if (d.id && (d.code || d.id)) uuidMap.set(d.id, d.code || d.id); });
+        setDeptCodeByUUID(uuidMap);
         const seen = new Set<string>();
         const schools: { value: string; label: string }[] = [];
         rows.forEach((d) => {
@@ -1941,6 +1948,13 @@ export default function EventForm({
     control,
     name: "additionalRequests.stalls.hardboardSelected",
   });
+
+  useEffect(() => {
+    if (!initialOrganizingDeptId || deptCodeByUUID.size === 0) return;
+    if (watchedOrganizingDept) return;
+    const code = deptCodeByUUID.get(initialOrganizingDeptId);
+    if (code) setValue("organizingDept", code, { shouldDirty: false, shouldValidate: false });
+  }, [initialOrganizingDeptId, deptCodeByUUID, watchedOrganizingDept, setValue]);
 
   const [standaloneApproverPreview, setStandaloneApproverPreview] = useState<{
     hodName: string | null;
@@ -4414,14 +4428,6 @@ export default function EventForm({
                   </div>
                 </div>
 
-                <datalist id="organizing-dept-list-event">
-                  {departmentOptions
-                    .filter((d) => d.value !== "all_departments")
-                    .map((dept) => (
-                      <option key={dept.value} value={dept.label} />
-                    ))}
-                </datalist>
-
                 <CustomDropdown
                   name="organizingSchool"
                   control={control}
@@ -4432,15 +4438,33 @@ export default function EventForm({
                   required
                 />
 
-                <InputField
-                  label="Organizing department / committee:"
-                  name="organizingDept"
-                  list="organizing-dept-list-event"
-                  register={register}
-                  error={errors.organizingDept}
-                  required
-                  placeholder="e.g., Department of Computer Science /  Student Welfare Organization"
-                />
+                <div>
+                  <label
+                    htmlFor="organizingDept"
+                    className="block mb-2 text-sm font-medium text-gray-700"
+                  >
+                    Organizing department / committee: <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    id="organizingDept"
+                    {...register("organizingDept")}
+                    className={`w-full px-3 py-2 sm:px-4 sm:py-3 rounded-lg border ${
+                      errors.organizingDept ? "border-red-500" : "border-gray-300"
+                    } focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent transition-all text-sm sm:text-base bg-white`}
+                  >
+                    <option value="">Select organizing department</option>
+                    {departmentOptions
+                      .filter((d) => d.value !== "all_departments")
+                      .map((dept) => (
+                        <option key={dept.value} value={dept.value}>
+                          {dept.label}
+                        </option>
+                      ))}
+                  </select>
+                  {errors.organizingDept && (
+                    <p className="text-red-500 text-xs mt-1">{errors.organizingDept.message}</p>
+                  )}
+                </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
                   <MultiSelectDropdown

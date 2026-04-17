@@ -72,6 +72,7 @@ export default function EditEventPage() {
   const { session, userData, isLoading: authIsLoading } = useAuth();
 
   const [initialData, setInitialData] = useState<Partial<EventFormData>>();
+  const [initialOrganizingDeptId, setInitialOrganizingDeptId] = useState<string | null>(null);
   const [existingImageFileUrl, setExistingImageFileUrl] = useState<
     string | null
   >(null);
@@ -472,7 +473,7 @@ export default function EditEventPage() {
             department: parsedDepartments,
             category: data.category || "",
             organizingSchool: data.organizing_school || "",
-            organizingDept: data.organizing_dept || "",
+            organizingDept: "",
             festEvent: data.fest_id || data.fest || "",
             standaloneRequiresHodApproval: parseBooleanWithFallback(
               data.requires_hod_approval,
@@ -532,6 +533,7 @@ export default function EditEventPage() {
           };
 
           setInitialData(transformedData);
+          if (data.organizing_dept_id) setInitialOrganizingDeptId(String(data.organizing_dept_id));
           const manualArchived =
             data.is_archived === true ||
             data.is_archived === 1 ||
@@ -1160,6 +1162,7 @@ export default function EditEventPage() {
               isDraft={isDraft}
               isArchiveUpdating={isArchiveUpdating}
               onToggleArchive={handleToggleArchive}
+              initialOrganizingDeptId={initialOrganizingDeptId}
             />
           </>
         ) : (

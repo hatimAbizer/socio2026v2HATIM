@@ -574,7 +574,7 @@ export async function fetchHodDashboardData({
       .eq("role_code", "HOD")
       .eq("status", "PENDING")
       .order("created_at", { ascending: true });
-    pendingData = retry.data;
+    pendingData = retry.data as typeof pendingData;
     pendingError = retry.error;
   }
 
@@ -628,7 +628,7 @@ export async function fetchHodDashboardData({
         .from("events")
         .select(legacySelect)
         .in("event_id", eventIds);
-      eventData = retry.data;
+      eventData = retry.data as typeof eventData;
       eventError = retry.error;
     }
 

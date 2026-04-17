@@ -117,7 +117,7 @@ export default function DeanDashboardClient({
   );
   const [selectedDepartment, setSelectedDepartment] = useState<string>("all");
   const [completedActions, setCompletedActions] = useState<CompletedActionMap>({});
-  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [activeAction, setActiveAction] = useState<{ requestId: string; action: string } | null>(null);
   const [modalState, setModalState] = useState<ModalState | null>(null);
   const [activeTab, setActiveTab] = useState<DashboardTab>("pending");
   const completionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -220,7 +220,7 @@ export default function DeanDashboardClient({
     note?: string;
   }) => {
     const { requestId, action, note } = params;
-    setActiveRequestId(requestId);
+    setActiveAction({ requestId, action });
 
     try {
       const response = await fetchWithTimeout(
@@ -264,7 +264,7 @@ export default function DeanDashboardClient({
         toast.error(message);
       }
     } finally {
-      setActiveRequestId(null);
+      setActiveAction(null);
     }
   };
 
@@ -397,7 +397,7 @@ export default function DeanDashboardClient({
           <DeanApprovalTable
             rows={filteredQueue}
             completedActions={completedActions}
-            activeRequestId={activeRequestId}
+            activeAction={activeAction}
             onApprove={(requestId) => {
               void submitAction({ requestId, action: "approve" });
             }}
@@ -515,7 +515,7 @@ export default function DeanDashboardClient({
         note={modalState?.note || ""}
         minCharacters={NOTE_MIN_CHARS}
         isSubmitting={Boolean(
-          activeRequestId && modalState && activeRequestId === modalState.requestId
+          activeAction && modalState && activeAction.requestId === modalState.requestId
         )}
         errorMessage={modalState?.errorMessage || null}
         onNoteChange={(nextValue) => {
@@ -524,7 +524,7 @@ export default function DeanDashboardClient({
           );
         }}
         onClose={() => {
-          if (!activeRequestId) {
+          if (!activeAction) {
             setModalState(null);
           }
         }}

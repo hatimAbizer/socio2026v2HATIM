@@ -344,7 +344,7 @@ export async function PATCH(
         .select("id,request_id,entity_type,entity_ref,status,organizing_dept_id,campus_hosted_at")
         .eq("id", requestId)
         .maybeSingle();
-      approvalData = retry.data;
+      approvalData = retry.data as typeof approvalData;
       approvalError = retry.error;
     }
 

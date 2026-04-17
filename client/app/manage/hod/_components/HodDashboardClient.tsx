@@ -111,7 +111,7 @@ export default function HodDashboardClient({
   const [queue, setQueue] = useState<HodApprovalQueueItem[]>(initialQueue);
   const [metrics, setMetrics] = useState<HodDashboardMetrics>(initialMetrics);
   const [completedActions, setCompletedActions] = useState<CompletedActionMap>({});
-  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [activeAction, setActiveAction] = useState<{ requestId: string; action: string } | null>(null);
   const [modalState, setModalState] = useState<ModalState | null>(null);
   const [activeTab, setActiveTab] = useState<DashboardTab>("pending");
   const completionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -188,7 +188,7 @@ export default function HodDashboardClient({
     note?: string;
   }) => {
     const { requestId, action, note } = params;
-    setActiveRequestId(requestId);
+    setActiveAction({ requestId, action });
 
     try {
       const response = await fetchWithTimeout(
@@ -230,7 +230,7 @@ export default function HodDashboardClient({
         toast.error(message);
       }
     } finally {
-      setActiveRequestId(null);
+      setActiveAction(null);
     }
   };
 
@@ -316,7 +316,7 @@ export default function HodDashboardClient({
         <HodApprovalTable
           rows={queue}
           completedActions={completedActions}
-          activeRequestId={activeRequestId}
+          activeAction={activeAction}
           emptyStateTitle={emptyStateTitle}
           emptyStateDescription={emptyStateDescription}
           eventDetailBasePath={eventDetailBasePath}
@@ -387,13 +387,13 @@ export default function HodDashboardClient({
         eventName={modalState?.eventName || ""}
         note={modalState?.note || ""}
         minCharacters={NOTE_MIN_CHARS}
-        isSubmitting={Boolean(activeRequestId && modalState && activeRequestId === modalState.requestId)}
+        isSubmitting={Boolean(activeAction && modalState && activeAction.requestId === modalState.requestId)}
         errorMessage={modalState?.errorMessage || null}
         onNoteChange={(nextValue) => {
           setModalState((previous) => (previous ? { ...previous, note: nextValue, errorMessage: null } : previous));
         }}
         onClose={() => {
-          if (!activeRequestId) {
+          if (!activeAction) {
             setModalState(null);
           }
         }}
