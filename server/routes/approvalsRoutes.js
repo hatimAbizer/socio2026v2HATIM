@@ -302,7 +302,7 @@ const LOGISTICS_LEVEL_BY_SERVICE = {
   stalls: "L5_STALLS",
 };
 
-const createLogisticsApprovalRequestsForEvent = async (eventId) => {
+export const createLogisticsApprovalRequestsForEvent = async (eventId) => {
   const normalizedEventId = String(eventId || "").trim();
   if (!normalizedEventId) return;
 

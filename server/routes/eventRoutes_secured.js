@@ -23,6 +23,7 @@ import {
   sendBroadcastNotification,
   sendUserNotifications,
 } from "./notificationRoutes.js";
+import { createLogisticsApprovalRequestsForEvent } from "./approvalsRoutes.js";
 import { pushEventToGated, shouldPushEventToGated, isGatedEnabled } from "../utils/gatedSync.js";
 import { ROLE_CODES, hasAnyRoleCode } from "../utils/roleAccessService.js";
 import { resolveRoleMatrixApprover } from "../utils/roleMatrixApprover.js";
@@ -3198,6 +3199,23 @@ router.post(
             createdEventRecord = refreshedEvent;
           }
         }
+      }
+
+      // Auto-approved standalone event with services requested: generate L5
+      // rows so the service dashboards pick them up. The normal path fires
+      // these from syncApprovalOutcomeToEvent on approver decision, but that
+      // never runs when there are no approvers to decide.
+      if (
+        queueStandaloneApproval &&
+        !primaryApprovalRequest &&
+        (serviceWorkflow.requestedRoleCodes || []).length > 0
+      ) {
+        await createLogisticsApprovalRequestsForEvent(event_id).catch((err) => {
+          console.warn(
+            "[EventCreate] Failed to auto-generate logistics approvals for auto-approved standalone event:",
+            err?.message
+          );
+        });
       }
 
       if (primaryApprovalRequest) {
