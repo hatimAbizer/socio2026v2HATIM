@@ -976,10 +976,22 @@ const resolveHodDepartmentScope = async (req) => {
   const userId = String(req.userInfo?.id || "").trim();
   if (userId) {
     try {
-      const assignments = await queryAll("user_role_assignments", {
-        where: { user_id: userId, role_code: ROLE_CODES.HOD },
-        select: "department_scope,department_id,is_active,valid_from,valid_until",
-      });
+      let assignments;
+      try {
+        assignments = await queryAll("user_role_assignments", {
+          where: { user_id: userId, role_code: ROLE_CODES.HOD },
+          select: "department_scope,department_id,is_active,valid_from,valid_until",
+        });
+      } catch (selErr) {
+        if (isMissingColumnError(selErr, "department_scope")) {
+          assignments = await queryAll("user_role_assignments", {
+            where: { user_id: userId, role_code: ROLE_CODES.HOD },
+            select: "department_id,is_active,valid_from,valid_until",
+          });
+        } else {
+          throw selErr;
+        }
+      }
 
       for (const assignment of assignments || []) {
         if (!isRoleAssignmentActive(assignment)) {
@@ -1039,10 +1051,38 @@ const resolveDeanSchoolScope = async (req) => {
   const userId = String(req.userInfo?.id || "").trim();
   if (userId) {
     try {
-      const assignments = await queryAll("user_role_assignments", {
-        where: { user_id: userId, role_code: ROLE_CODES.DEAN },
-        select: "school_scope,department_scope,department_id,is_active,valid_from,valid_until",
-      });
+      let assignments;
+      try {
+        assignments = await queryAll("user_role_assignments", {
+          where: { user_id: userId, role_code: ROLE_CODES.DEAN },
+          select: "school_scope,department_scope,department_id,is_active,valid_from,valid_until",
+        });
+      } catch (selErr) {
+        if (isMissingColumnError(selErr, "school_scope")) {
+          try {
+            assignments = await queryAll("user_role_assignments", {
+              where: { user_id: userId, role_code: ROLE_CODES.DEAN },
+              select: "department_scope,department_id,is_active,valid_from,valid_until",
+            });
+          } catch (selErr2) {
+            if (isMissingColumnError(selErr2, "department_scope")) {
+              assignments = await queryAll("user_role_assignments", {
+                where: { user_id: userId, role_code: ROLE_CODES.DEAN },
+                select: "department_id,is_active,valid_from,valid_until",
+              });
+            } else {
+              throw selErr2;
+            }
+          }
+        } else if (isMissingColumnError(selErr, "department_scope")) {
+          assignments = await queryAll("user_role_assignments", {
+            where: { user_id: userId, role_code: ROLE_CODES.DEAN },
+            select: "school_scope,department_id,is_active,valid_from,valid_until",
+          });
+        } else {
+          throw selErr;
+        }
+      }
 
       for (const assignment of assignments || []) {
         if (!isRoleAssignmentActive(assignment)) {
@@ -1059,33 +1099,7 @@ const resolveDeanSchoolScope = async (req) => {
         addScopeValue(schoolScopeValue);
       }
     } catch (error) {
-      if (isMissingRelationError(error)) {
-        // No RBAC scope table available.
-      } else if (isMissingColumnError(error, "school_scope")) {
-        try {
-          const fallbackAssignments = await queryAll("user_role_assignments", {
-            where: { user_id: userId, role_code: ROLE_CODES.DEAN },
-            select: "department_scope,is_active,valid_from,valid_until",
-          });
-
-          for (const assignment of fallbackAssignments || []) {
-            if (!isRoleAssignmentActive(assignment)) {
-              continue;
-            }
-
-            const schoolScopeValue = String(assignment.department_scope || "").trim();
-            if (!schoolScopeValue) {
-              continue;
-            }
-
-            addScopeValue(schoolScopeValue);
-          }
-        } catch (fallbackError) {
-          if (!isMissingRelationError(fallbackError)) {
-            throw fallbackError;
-          }
-        }
-      } else {
+      if (!isMissingRelationError(error)) {
         throw error;
       }
     }
@@ -3002,7 +3016,7 @@ router.get("/requests/timeline", async (req, res) => {
         approvalRequest = await queryOne("approval_requests", {
           where: { id: requestId },
           select:
-            "id,request_id,entity_type,entity_ref,parent_fest_ref,requested_by_user_id,requested_by_email,organizing_dept,organizing_dept_id,organizing_school,campus_hosted_at,is_budget_related,status,submitted_at,decided_at,latest_comment,created_at,updated_at",
+            "id,request_id,entity_type,entity_ref,parent_fest_ref,requested_by_user_id,requested_by_email,organizing_dept_id,organizing_school,campus_hosted_at,is_budget_related,status,submitted_at,decided_at,latest_comment,created_at,updated_at",
         });
       } catch (error) {
         if (!isMissingColumnError(error, "organizing_school")) {
@@ -3012,7 +3026,7 @@ router.get("/requests/timeline", async (req, res) => {
         approvalRequest = await queryOne("approval_requests", {
           where: { id: requestId },
           select:
-            "id,request_id,entity_type,entity_ref,parent_fest_ref,requested_by_user_id,requested_by_email,organizing_dept,organizing_dept_id,campus_hosted_at,is_budget_related,status,submitted_at,decided_at,latest_comment,created_at,updated_at",
+            "id,request_id,entity_type,entity_ref,parent_fest_ref,requested_by_user_id,requested_by_email,organizing_dept_id,campus_hosted_at,is_budget_related,status,submitted_at,decided_at,latest_comment,created_at,updated_at",
         });
       }
 
@@ -3240,7 +3254,7 @@ router.get("/service-queues/:roleCode", async (req, res) => {
       if (requestRow?.approval_request_id) {
         approvalRequest = await queryOne("approval_requests", {
           where: { id: requestRow.approval_request_id },
-          select: "entity_type,entity_ref,organizing_dept,organizing_dept_id",
+          select: "entity_type,entity_ref,organizing_dept_id",
         }).catch((error) => {
           if (isMissingRelationError(error)) {
             return null;
@@ -3254,7 +3268,7 @@ router.get("/service-queues/:roleCode", async (req, res) => {
       try {
         eventRecord = await queryOne("events", {
           where: { event_id: eventId },
-          select: "event_id,title,event_date,organizing_dept,organizing_dept_id,campus_hosted_at",
+          select: "event_id,title,event_date,organizing_dept_id,campus_hosted_at",
         });
       } catch (error) {
         if (!isMissingRelationError(error)) {
@@ -3273,8 +3287,6 @@ router.get("/service-queues/:roleCode", async (req, res) => {
           ? "fest"
           : "event",
         entity_id: String(approvalRequest?.entity_ref || eventId).trim(),
-        organizing_dept:
-          approvalRequest?.organizing_dept || eventRecord?.organizing_dept || null,
         organizing_dept_id:
           approvalRequest?.organizing_dept_id || eventRecord?.organizing_dept_id || null,
         campus_hosted_at: eventRecord?.campus_hosted_at || null,

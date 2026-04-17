@@ -1150,7 +1150,7 @@ router.get("/registrations/user/:registerId/events", async (req, res) => {
 
     const { data: eventsData, error: eventsError } = await supabase
       .from("events")
-      .select("event_id, title, organizing_dept, event_date")
+      .select("event_id, title, event_date")
       .in("event_id", eventIds);
 
     if (eventsError) {
@@ -1164,7 +1164,6 @@ router.get("/registrations/user/:registerId/events", async (req, res) => {
       registration_id: registrationByEventId.get(evt.event_id) || null,
       name: evt.title,
       date: evt.event_date,
-      department: evt.organizing_dept,
     }));
 
     return res.status(200).json({

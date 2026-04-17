@@ -202,7 +202,7 @@ const createTeacherApprovalRequestForChildEvent = async ({ eventRecord, userInfo
       parent_fest_ref: eventRecord.fest_id,
       requested_by_user_id: userInfo?.id || null,
       requested_by_email: userInfo?.email || null,
-      organizing_dept: eventRecord.organizing_dept || null,
+      organizing_dept_id: eventRecord.organizing_dept_id || null,
       organizing_school: eventRecord.organizing_school || null,
       campus_hosted_at: eventRecord.campus_hosted_at || null,
       is_budget_related: isBudgetRelated,
@@ -436,6 +436,7 @@ const resolveEventApprovalRecipientsForRole = async ({
   const approver = await resolveRoleMatrixApprover({
     roleCode: normalizedRoleCode,
     department: eventRecord?.organizing_dept || null,
+    department_id: eventRecord?.organizing_dept_id || null,
     school: eventRecord?.organizing_school || null,
     campus: eventRecord?.campus_hosted_at || null,
     excludeEmail: normalizedOrganizerEmail || undefined,
@@ -730,6 +731,7 @@ const createApprovalRequestWithSteps = async ({
   parentFestRef = null,
   userInfo,
   organizingDept = null,
+  organizingDeptId = null,
   organizingSchool = null,
   campusHostedAt = null,
   isBudgetRelated = false,
@@ -760,7 +762,7 @@ const createApprovalRequestWithSteps = async ({
       parent_fest_ref: parentFestRef,
       requested_by_user_id: userInfo?.id || null,
       requested_by_email: userInfo?.email || null,
-      organizing_dept: organizingDept,
+      organizing_dept_id: organizingDeptId || null,
       organizing_school: organizingSchool,
       campus_hosted_at: campusHostedAt,
       is_budget_related: Boolean(isBudgetRelated),
@@ -891,7 +893,7 @@ const createStandaloneApprovalRequestForEvent = async ({
     entityRef: eventId,
     parentFestRef: null,
     userInfo,
-    organizingDept: eventRecord?.organizing_dept || null,
+    organizingDeptId: eventRecord?.organizing_dept_id || null,
     organizingSchool: eventRecord?.organizing_school || null,
     campusHostedAt: eventRecord?.campus_hosted_at || null,
     isBudgetRelated: Boolean(isBudgetRelated),
@@ -2243,8 +2245,7 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
     const normalizedSearch = typeof search === "string" ? search.trim().toLowerCase() : "";
     if (normalizedSearch) {
       processedEvents = processedEvents.filter((event) =>
-        event.title?.toLowerCase().includes(normalizedSearch) ||
-        event.organizing_dept?.toLowerCase().includes(normalizedSearch)
+        event.title?.toLowerCase().includes(normalizedSearch)
       );
     }
 
@@ -2889,7 +2890,6 @@ router.post(
         organizer_phone: req.body.organizer_phone || null,
         whatsapp_invite_link: req.body.whatsapp_invite_link || null,
         organizing_school: organizingSchool,
-        organizing_dept: organizing_dept || null,
         organizing_dept_id: await resolveDepartmentId(organizing_dept).catch(() => null),
         fest_id: normalizedFestReference,
         parent_fest_id: normalizedFestReference,
@@ -3965,7 +3965,6 @@ router.put(
         organizer_phone: req.body.organizer_phone || null,
         whatsapp_invite_link: req.body.whatsapp_invite_link || null,
         organizing_school: organizingSchool,
-        organizing_dept: organizing_dept || null,
         organizing_dept_id: await resolveDepartmentId(organizing_dept).catch(() => null),
         fest_id: normalizedFestReference,
         parent_fest_id: normalizedFestReference,

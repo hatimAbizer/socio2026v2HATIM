@@ -62,24 +62,27 @@ async function resolveDepartmentMetadataForUser(user) {
   }
 
   try {
-    const departmentRow = await queryOne("departments_courses", {
-      where: { id: departmentId },
-    });
-
-    if (!departmentRow) {
+    // Try new canonical departments table first
+    let departmentRow = await queryOne("departments", { where: { id: departmentId } });
+    if (departmentRow) {
       return {
-        department: normalizeNullableText(user?.department),
-        school: normalizeNullableText(user?.school),
+        department: normalizeNullableText(departmentRow.name) || normalizeNullableText(user?.department),
+        school: normalizeNullableText(departmentRow.school) || normalizeNullableText(user?.school),
+      };
+    }
+
+    // Fall back to departments_courses (pre-035 only)
+    departmentRow = await queryOne("departments_courses", { where: { id: departmentId } });
+    if (departmentRow) {
+      return {
+        department: normalizeNullableText(departmentRow.department_name) || normalizeNullableText(user?.department),
+        school: normalizeNullableText(departmentRow.school) || normalizeNullableText(user?.school),
       };
     }
 
     return {
-      department:
-        normalizeNullableText(departmentRow.department_name) ||
-        normalizeNullableText(user?.department),
-      school:
-        normalizeNullableText(departmentRow.school) ||
-        normalizeNullableText(user?.school),
+      department: normalizeNullableText(user?.department),
+      school: normalizeNullableText(user?.school),
     };
   } catch (error) {
     console.warn("Unable to resolve department metadata for user profile response:", error);

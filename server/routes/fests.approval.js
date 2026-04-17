@@ -343,18 +343,20 @@ const matchesScope = (candidate, requiredScope) => {
   return normalizeToken(candidate) === normalizeToken(requiredScope);
 };
 
-const findApprover = async ({ roleCode, department, school, campus, excludeEmail }) =>
-  resolveRoleMatrixApprover({ roleCode, department, school, campus, excludeEmail });
+const findApprover = async ({ roleCode, department, department_id, school, campus, excludeEmail }) =>
+  resolveRoleMatrixApprover({ roleCode, department, department_id, school, campus, excludeEmail });
 
 const resolveSchoolForFest = async (fest) => {
   const directSchool = normalizeText(fest?.organizing_school || fest?.school || fest?.school_id);
   if (directSchool) return directSchool;
 
-  if (!normalizeText(fest?.organizing_dept)) {
+  if (!normalizeText(fest?.organizing_dept) && !normalizeText(fest?.organizing_dept_id)) {
     return null;
   }
 
-  const mappedSchool = await resolveDepartmentSchoolForApprovals(fest.organizing_dept);
+  const mappedSchool = await resolveDepartmentSchoolForApprovals(
+    fest.organizing_dept || fest.organizing_dept_id
+  );
   if (mappedSchool) {
     return mappedSchool;
   }
@@ -362,6 +364,7 @@ const resolveSchoolForFest = async (fest) => {
   const hod = await findApprover({
     roleCode: ROLE_CODES.HOD,
     department: fest.organizing_dept,
+    department_id: fest.organizing_dept_id || null,
     campus: fest.campus_hosted_at,
   });
 
@@ -641,6 +644,7 @@ const submitToHod = async ({ fest, requester }) => {
   const hod = await findApprover({
     roleCode: ROLE_CODES.HOD,
     department: fest.organizing_dept,
+    department_id: fest.organizing_dept_id || null,
     campus: fest.campus_hosted_at,
     excludeEmail: fest.contact_email,
   });
@@ -652,6 +656,7 @@ const submitToHod = async ({ fest, requester }) => {
     const dean = await findApprover({
       roleCode: ROLE_CODES.DEAN,
       department: fest.organizing_dept,
+      department_id: fest.organizing_dept_id || null,
       campus: fest.campus_hosted_at,
       excludeEmail: fest.contact_email,
     });
@@ -741,11 +746,14 @@ const submitToHod = async ({ fest, requester }) => {
 const ensureScopedApproverForFest = ({ fest, requester, roleCode }) => {
   if (isMasterAdmin(requester)) return null;
 
-  if (
-    roleCode === ROLE_CODES.HOD &&
-    !matchesScope(requester.department || requester.department_id, fest.organizing_dept)
-  ) {
-    return "Only the HOD of the fest department can take this action.";
+  if (roleCode === ROLE_CODES.HOD) {
+    const deptMatch =
+      (requester.department_id && fest.organizing_dept_id &&
+        requester.department_id === fest.organizing_dept_id) ||
+      matchesScope(requester.department || requester.department_id, fest.organizing_dept);
+    if (!deptMatch) {
+      return "Only the HOD of the fest department can take this action.";
+    }
   }
 
   if (roleCode === ROLE_CODES.CFO && !matchesScope(requester.campus, fest.campus_hosted_at)) {
@@ -795,10 +803,11 @@ const canAccessFestApprovalContext = async ({ fest, requester, userId }) => {
   }
 
   if (userHasRole(requester, ROLE_CODES.HOD)) {
-    if (
-      matchesScope(requester?.department || requester?.department_id, fest?.organizing_dept) &&
-      matchesScope(requester?.campus, fest?.campus_hosted_at)
-    ) {
+    const hodDeptMatch =
+      (requester?.department_id && fest?.organizing_dept_id &&
+        requester.department_id === fest.organizing_dept_id) ||
+      matchesScope(requester?.department || requester?.department_id, fest?.organizing_dept);
+    if (hodDeptMatch && matchesScope(requester?.campus, fest?.campus_hosted_at)) {
       return true;
     }
   }
@@ -878,6 +887,7 @@ router.get("/:festId/context", async (req, res) => {
       findApprover({
         roleCode: ROLE_CODES.HOD,
         department: fest.organizing_dept,
+        department_id: fest.organizing_dept_id || null,
         campus: fest.campus_hosted_at,
       }),
       findApprover({
@@ -1701,7 +1711,10 @@ router.get("/approval-queue", async (req, res) => {
 
     const filtered = (fests || []).filter((fest) => {
       const status = normalizeToken(fest.workflow_status);
-      const deptMatches = matchesScope(req.userInfo?.department, fest.organizing_dept);
+      const deptMatches =
+        (req.userInfo?.department_id && fest.organizing_dept_id &&
+          req.userInfo.department_id === fest.organizing_dept_id) ||
+        matchesScope(req.userInfo?.department, fest.organizing_dept);
       const campusMatches = matchesScope(req.userInfo?.campus, fest.campus_hosted_at);
       const schoolMatches = matchesScope(req.userInfo?.school, fest.organizing_school || fest.school);
 

@@ -21,6 +21,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getFestTableForDatabase } from "../utils/festTableResolver.js";
 
 import { ROLE_CODES } from "../utils/roleAccessService.js";
+import { resolveDepartmentId } from "./departmentsRoutes.js";
 // Import fest approval helpers for workflow logic
 import {
   findActiveApprovalRequestForEntity,
@@ -227,6 +228,9 @@ router.post("/", multerUpload.fields([
       const organizingDeptValue = String(
         pickField("organizingDept", "organizing_dept") || ""
       ).trim();
+      const organizingDeptId = organizingDeptValue
+        ? await resolveDepartmentId(organizingDeptValue).catch(() => null)
+        : null;
       const venueValue = String(pickField("venue", "location") || "").trim();
 
       const requiredFields = [
@@ -376,7 +380,7 @@ router.post("/", multerUpload.fields([
                 parent_fest_ref: festId,
                 requested_by_user_id: req.userInfo?.id || req.user?.id || null,
                 requested_by_email: req.userInfo?.email || req.user?.email || null,
-                organizing_dept: organizingDeptValue || null,
+                organizing_dept_id: organizingDeptId || null,
                 campus_hosted_at:
                   pickField("campus_hosted_at", "campusHostedAt") || null,
                 is_budget_related: Boolean(is_budget_related),
@@ -497,7 +501,7 @@ router.post("/", multerUpload.fields([
         organizer_email: organizerEmailValue,
         organizer_phone: organizerPhoneValue,
         whatsapp_invite_link: whatsappInviteLinkValue,
-        organizing_dept: organizingDeptValue,
+        organizing_dept_id: organizingDeptId || null,
         fest_id: festId,
         registration_deadline: registrationDeadlineValue || null,
         allow_outsiders: isTruthy(

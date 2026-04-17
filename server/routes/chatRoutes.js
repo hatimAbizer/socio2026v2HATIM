@@ -446,7 +446,7 @@ async function buildFullSystemPrompt(currentPage, userId) {
             .single();
 
           if (event) {
-            pageContext = `\n\nCURRENT EVENT PAGE:\nTitle: ${event.title}\nDate: ${new Date(event.event_date).toLocaleDateString()}\nVenue: ${event.venue || "TBA"}\nType: ${event.event_type || "N/A"}\nCategory: ${event.category || "N/A"}\nDepartment: ${event.organizing_dept}\nFee: ${event.registration_fee ? `Rs.${event.registration_fee}` : "Free"}\nDescription: ${event.description}\nRegistrations: ${event.registration_count || 0}`;
+            pageContext = `\n\nCURRENT EVENT PAGE:\nTitle: ${event.title}\nDate: ${new Date(event.event_date).toLocaleDateString()}\nVenue: ${event.venue || "TBA"}\nType: ${event.event_type || "N/A"}\nCategory: ${event.category || "N/A"}\nFee: ${event.registration_fee ? `Rs.${event.registration_fee}` : "Free"}\nDescription: ${event.description}\nRegistrations: ${event.registration_count || 0}`;
           }
         }
       }
@@ -462,7 +462,7 @@ async function buildFullSystemPrompt(currentPage, userId) {
             .single();
 
           if (fest) {
-            pageContext = `\n\nCURRENT FEST PAGE:\nName: ${fest.fest_title}\nStart: ${new Date(fest.opening_date).toLocaleDateString()}\nEnd: ${new Date(fest.closing_date).toLocaleDateString()}\nVenue: ${fest.venue || "TBA"}\nDepartment: ${fest.organizing_dept}\nDescription: ${fest.description}`;
+            pageContext = `\n\nCURRENT FEST PAGE:\nName: ${fest.fest_title}\nStart: ${new Date(fest.opening_date).toLocaleDateString()}\nEnd: ${new Date(fest.closing_date).toLocaleDateString()}\nVenue: ${fest.venue || "TBA"}\nDescription: ${fest.description}`;
           }
         }
       }
@@ -486,7 +486,7 @@ async function buildFullSystemPrompt(currentPage, userId) {
       // Fetch general platform data (non-fatal if it fails)
       const { data: events } = await sb
         .from("events")
-        .select("title, event_date, venue, organizing_dept, category")
+        .select("title, event_date, venue, category")
         .gte("event_date", new Date().toISOString())
         .order("event_date", { ascending: true })
         .limit(10);
@@ -499,7 +499,7 @@ async function buildFullSystemPrompt(currentPage, userId) {
 
       platformContext = `
 UPCOMING EVENTS:
-${events?.map((e) => `- ${e.title} | ${new Date(e.event_date).toLocaleDateString()} | ${e.venue || "TBA"} | ${e.organizing_dept || ""}`).join("\n") || "No upcoming events"}
+${events?.map((e) => `- ${e.title} | ${new Date(e.event_date).toLocaleDateString()} | ${e.venue || "TBA"}`).join("\n") || "No upcoming events"}
 
 ACTIVE FESTS:
 ${fests?.map((f) => `- ${f.fest_title} | ${new Date(f.opening_date).toLocaleDateString()} to ${new Date(f.closing_date).toLocaleDateString()} | ${f.venue || "TBA"}`).join("\n") || "No active fests"}`;

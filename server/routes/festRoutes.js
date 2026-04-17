@@ -467,6 +467,7 @@ const notifyFestSubmittedForApproval = async ({ festRecord, approvalRequest, ini
     const approver = await resolveRoleMatrixApprover({
       roleCode,
       department: festRecord?.organizing_dept || null,
+      department_id: festRecord?.organizing_dept_id || null,
       school: festRecord?.organizing_school || null,
       campus: festRecord?.campus_hosted_at || festRecord?.department_hosted_at || null,
       excludeEmail: organizerEmail || undefined,
@@ -502,6 +503,7 @@ export const createFestApprovalRequest = async ({
   }
 
   const departmentScope = festRecord?.organizing_dept || null;
+  const departmentIdScope = festRecord?.organizing_dept_id || null;
   const schoolScope = festRecord?.organizing_school || null;
   const campusScope =
     festRecord?.campus_hosted_at || festRecord?.department_hosted_at || null;
@@ -509,6 +511,7 @@ export const createFestApprovalRequest = async ({
   const hodApprover = await resolveRoleMatrixApprover({
     roleCode: ROLE_CODES.HOD,
     department: departmentScope,
+    department_id: departmentIdScope,
     school: schoolScope,
     campus: campusScope,
   }).catch(() => null);
@@ -516,6 +519,7 @@ export const createFestApprovalRequest = async ({
   const deanApprover = await resolveRoleMatrixApprover({
     roleCode: ROLE_CODES.DEAN,
     department: departmentScope,
+    department_id: departmentIdScope,
     school: schoolScope,
     campus: campusScope,
     excludeEmail: hodApprover?.email || undefined,
@@ -542,7 +546,7 @@ export const createFestApprovalRequest = async ({
       parent_fest_ref: null,
       requested_by_user_id: userInfo?.id || null,
       requested_by_email: userInfo?.email || null,
-      organizing_dept: festRecord?.organizing_dept || null,
+      organizing_dept_id: festRecord?.organizing_dept_id || null,
       organizing_school: festRecord?.organizing_school || null,
       campus_hosted_at:
         festRecord?.campus_hosted_at || festRecord?.department_hosted_at || null,
@@ -875,10 +879,10 @@ const toFestSlugCandidate = (value) =>
     .replace(/^-+|-+$/g, "");
 
 const EVENT_FEST_SELECT_CANDIDATES = [
-  "event_id, fest, fest_id, organizing_dept, event_date, created_at, is_archived, created_by, organizer_email, organiser_email",
-  "event_id, fest, fest_id, organizing_dept, event_date, created_at, is_archived, created_by, organizer_email",
-  "event_id, fest, fest_id, organizing_dept, event_date, created_at, is_archived, created_by",
-  "event_id, fest_id, organizing_dept, event_date, created_at, is_archived",
+  "event_id, fest, fest_id, organizing_dept_id, event_date, created_at, is_archived, created_by, organizer_email, organiser_email",
+  "event_id, fest, fest_id, organizing_dept_id, event_date, created_at, is_archived, created_by, organizer_email",
+  "event_id, fest, fest_id, organizing_dept_id, event_date, created_at, is_archived, created_by",
+  "event_id, fest_id, organizing_dept_id, event_date, created_at, is_archived",
 ];
 
 const getMergedFestsFromCandidates = async (queryOptions, primaryTable) => {
@@ -1164,11 +1168,11 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
 
     let events = [];
     const eventSelectCandidates = [
-      "event_id, fest, fest_id, organizing_dept, event_date, created_at, is_archived, created_by, organizer_email, organiser_email",
-      "event_id, fest, fest_id, organizing_dept, event_date, created_at, is_archived, created_by, organizer_email",
-      "event_id, fest, fest_id, organizing_dept, event_date, created_at, is_archived, created_by",
-      "event_id, fest_id, organizing_dept, event_date, created_at, is_archived, created_by",
-      "event_id, fest_id, organizing_dept, event_date, created_at, is_archived",
+      "event_id, fest, fest_id, organizing_dept_id, event_date, created_at, is_archived, created_by, organizer_email, organiser_email",
+      "event_id, fest, fest_id, organizing_dept_id, event_date, created_at, is_archived, created_by, organizer_email",
+      "event_id, fest, fest_id, organizing_dept_id, event_date, created_at, is_archived, created_by",
+      "event_id, fest_id, organizing_dept_id, event_date, created_at, is_archived, created_by",
+      "event_id, fest_id, organizing_dept_id, event_date, created_at, is_archived",
     ];
 
     for (const selectClause of eventSelectCandidates) {
@@ -1746,7 +1750,6 @@ router.post(
         closing_date: closingDateValue,
         fest_image_url: festData.festImageUrl || festData.fest_image_url || null,
         organizing_school: school,
-        organizing_dept: dept,
         organizing_dept_id: await resolveDepartmentId(dept).catch(() => null),
         department_access: festData.departmentAccess || festData.department_access || [],
         category: festData.category || "",
@@ -2244,7 +2247,6 @@ router.put(
         ["closing_date", incomingClosingDate],
         ["fest_image_url", incomingImageUrl],
         ["organizing_school", normalizedOrganizingSchool],
-        ["organizing_dept", normalizedOrganizingDept],
         ["organizing_dept_id", normalizedOrganizingDept !== undefined ? await resolveDepartmentId(normalizedOrganizingDept).catch(() => null) : undefined],
         ["category", updateData.category],
         ["contact_email", normalizedContactEmail],

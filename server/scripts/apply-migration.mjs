@@ -158,7 +158,7 @@ async function markApplied(filename) {
 
 // ─── main ─────────────────────────────────────────────────────────────────
 
-const FILES = ["034_create_departments_table.sql"];
+const FILES = ["034_create_departments_table.sql", "035_drop_legacy_dept_columns.sql"];
 
 console.log(`\n🚀 Applying migrations → ${SUPABASE_URL}\n`);
 
@@ -173,11 +173,11 @@ if (!probe.ok) {
     console.log(`\n❌ Cannot execute SQL via any available method.`);
     console.log(`   Please paste the migration SQL directly in the Supabase SQL editor:`);
     console.log(`   https://supabase.com/dashboard/project/${PROJECT_REF}/sql/new\n`);
-    const sql034 = readFileSync(
-      path.resolve(__dirname, "../migrations/034_create_departments_table.sql"), "utf8"
-    );
-    console.log("─".repeat(60));
-    console.log(sql034);
+    for (const f of FILES) {
+      const sqlContent = readFileSync(path.resolve(__dirname, "../migrations", f), "utf8");
+      console.log(`\n─── ${f} ${"─".repeat(60 - f.length - 5)}`);
+      console.log(sqlContent);
+    }
     console.log("─".repeat(60));
     process.exit(1);
   }

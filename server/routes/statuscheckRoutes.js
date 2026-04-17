@@ -402,7 +402,7 @@ async function runMutationChecks(req) {
         fest_id: createdFestId,
         fest_title: `Statuscheck Fest ${stamp}`,
         description: "Synthetic statuscheck fest row",
-        organizing_dept: "STATUSCHECK",
+        organizing_dept_id: null,
         opening_date: today,
         closing_date: today,
         created_by: req.userInfo.email,

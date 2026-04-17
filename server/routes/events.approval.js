@@ -251,8 +251,8 @@ const shouldRouteThroughBudgetStep = async (eventRecord) => {
   return budgetAmount > 0;
 };
 
-const findApprover = async ({ roleCode, department, school, campus, excludeEmail }) =>
-  resolveRoleMatrixApprover({ roleCode, department, school, campus, excludeEmail });
+const findApprover = async ({ roleCode, department, department_id, school, campus, excludeEmail }) =>
+  resolveRoleMatrixApprover({ roleCode, department, department_id, school, campus, excludeEmail });
 
 const resolveSchoolForEvent = async (eventRecord) => {
   const directSchool = normalizeText(
@@ -260,12 +260,15 @@ const resolveSchoolForEvent = async (eventRecord) => {
   );
   if (directSchool) return directSchool;
 
-  const mappedSchool = await resolveDepartmentSchoolForApprovals(eventRecord?.organizing_dept);
+  const mappedSchool = await resolveDepartmentSchoolForApprovals(
+    eventRecord?.organizing_dept || eventRecord?.organizing_dept_id
+  );
   if (mappedSchool) return mappedSchool;
 
   const hod = await findApprover({
     roleCode: ROLE_CODES.HOD,
     department: eventRecord?.organizing_dept,
+    department_id: eventRecord?.organizing_dept_id || null,
     campus: eventRecord?.campus_hosted_at,
   });
 
@@ -566,10 +569,11 @@ const notifyEventRejection = async ({ event, stepLabel, notes, reviewer }) => {
 
 const canAccessStandaloneApprovalContext = async ({ eventRecord, userInfo }) => {
   if (userHasRole(userInfo, ROLE_CODES.HOD)) {
-    if (
-      matchesScope(userInfo?.department || userInfo?.department_id, eventRecord?.organizing_dept) &&
-      matchesScope(userInfo?.campus, eventRecord?.campus_hosted_at)
-    ) {
+    const deptMatch =
+      (userInfo?.department_id && eventRecord?.organizing_dept_id &&
+        userInfo.department_id === eventRecord.organizing_dept_id) ||
+      matchesScope(userInfo?.department || userInfo?.department_id, eventRecord?.organizing_dept);
+    if (deptMatch && matchesScope(userInfo?.campus, eventRecord?.campus_hosted_at)) {
       return true;
     }
   }
@@ -672,6 +676,7 @@ router.get("/:eventId/context", async (req, res) => {
       findApprover({
         roleCode: ROLE_CODES.HOD,
         department: event.organizing_dept,
+        department_id: event.organizing_dept_id || null,
         campus: event.campus_hosted_at,
       }),
       findApprover({
@@ -972,6 +977,7 @@ router.post("/:eventId/submit", async (req, res) => {
       const hod = await findApprover({
         roleCode: ROLE_CODES.HOD,
         department: event.organizing_dept,
+        department_id: event.organizing_dept_id || null,
         campus: event.campus_hosted_at,
         excludeEmail: ownerEmail,
       });
@@ -1336,7 +1342,11 @@ router.post("/:eventId/hod-dean-action", async (req, res) => {
       }
 
       if (!isMasterAdmin(req.userInfo)) {
-        if (!matchesScope(req.userInfo.department, event.organizing_dept)) {
+        const hodDeptMatch =
+          (req.userInfo.department_id && event.organizing_dept_id &&
+            req.userInfo.department_id === event.organizing_dept_id) ||
+          matchesScope(req.userInfo.department, event.organizing_dept);
+        if (!hodDeptMatch) {
           return res.status(403).json({ error: "Only the HOD of this department can act." });
         }
 
@@ -1773,7 +1783,10 @@ router.get("/approval-queue", async (req, res) => {
     const filtered = (events || []).filter((event) => {
       const status = normalizeToken(event.workflow_status);
       const context = inferEventContext(event);
-      const deptMatches = matchesScope(req.userInfo?.department, event.organizing_dept);
+      const deptMatches =
+        (req.userInfo?.department_id && event.organizing_dept_id &&
+          req.userInfo.department_id === event.organizing_dept_id) ||
+        matchesScope(req.userInfo?.department, event.organizing_dept);
       const campusMatches = matchesScope(req.userInfo?.campus, event.campus_hosted_at);
       const schoolMatches = matchesScope(req.userInfo?.school, event.organizing_school || event.school);
 

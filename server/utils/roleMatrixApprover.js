@@ -2,9 +2,11 @@ import { queryAll, queryOne } from "../config/database.js";
 import { ROLE_CODES, isRoleAssignmentActive, normalizeRoleCode } from "./roleAccessService.js";
 
 const ASSIGNMENT_SELECT_WITH_SCHOOL =
-  "user_id,role_code,department_scope,school_scope,campus_scope,is_active,valid_from,valid_until";
+  "user_id,role_code,department_id,department_scope,school_scope,campus_scope,is_active,valid_from,valid_until";
 const ASSIGNMENT_SELECT_LEGACY =
-  "user_id,role_code,department_scope,campus_scope,is_active,valid_from,valid_until";
+  "user_id,role_code,department_id,department_scope,campus_scope,is_active,valid_from,valid_until";
+const ASSIGNMENT_SELECT_NO_DEPT_SCOPE =
+  "user_id,role_code,department_id,school_scope,campus_scope,is_active,valid_from,valid_until";
 
 const normalizeText = (value) => String(value || "").trim();
 const normalizeScope = (value) => normalizeText(value).toLowerCase();
@@ -56,7 +58,7 @@ const getAssignmentScopeValue = (assignment, roleCode) => {
   }
 
   if (normalizedRoleCode === ROLE_CODES.HOD) {
-    return normalizeText(assignment?.department_scope);
+    return normalizeText(assignment?.department_id || assignment?.department_scope);
   }
 
   if (
@@ -124,6 +126,24 @@ const resolveDepartmentSchool = async (departmentValue) => {
   }
 
   try {
+    const departments = await queryAll("departments", {
+      where: { is_active: true },
+      select: "id,name,code,school",
+    });
+
+    const match = (departments || []).find(
+      (row) =>
+        normalizeScope(row?.name) === normalizedDepartment ||
+        normalizeScope(row?.code) === normalizedDepartment ||
+        normalizeScope(row?.id) === normalizedDepartment
+    );
+
+    if (match?.school) return normalizeText(match.school);
+  } catch (error) {
+    if (!isMissingRelationError(error)) throw error;
+  }
+
+  try {
     const departmentRows = await queryAll("departments_courses");
 
     const matchedRow = (departmentRows || []).find((row) => {
@@ -183,11 +203,26 @@ const loadActiveAssignmentsForRole = async (roleCode) => {
       };
     }
 
+    if (isMissingColumnError(error, "department_scope")) {
+      const fallbackAssignments = await queryAll("user_role_assignments", {
+        where: {
+          role_code: normalizedRoleCode,
+          is_active: true,
+        },
+        select: ASSIGNMENT_SELECT_NO_DEPT_SCOPE,
+      });
+
+      return {
+        assignments: (fallbackAssignments || []).filter((assignment) => isRoleAssignmentActive(assignment)),
+        source: "matrix_no_dept_scope",
+      };
+    }
+
     throw error;
   }
 };
 
-const resolveEffectiveScope = async ({ roleCode, department, school, campus }) => {
+const resolveEffectiveScope = async ({ roleCode, department, department_id, school, campus }) => {
   const normalizedRoleCode = normalizeRoleCode(roleCode);
   const normalizedDepartment = normalizeScope(department);
   const normalizedCampus = normalizeScope(campus);
@@ -200,6 +235,7 @@ const resolveEffectiveScope = async ({ roleCode, department, school, campus }) =
   return {
     roleCode: normalizedRoleCode,
     department: normalizedDepartment,
+    department_id: normalizeText(department_id) || null,
     school: normalizedSchool,
     campus: normalizedCampus,
   };
@@ -209,6 +245,9 @@ const assignmentMatchesScope = (assignment, effectiveScope) => {
   const scopeValue = getAssignmentScopeValue(assignment, effectiveScope.roleCode);
 
   if (effectiveScope.roleCode === ROLE_CODES.HOD) {
+    if (assignment.department_id && effectiveScope.department_id) {
+      return assignment.department_id === effectiveScope.department_id;
+    }
     return matchesScope(scopeValue, effectiveScope.department);
   }
 
@@ -299,8 +338,8 @@ const resolveLegacyApprover = async ({ roleCode, department, school, campus, exc
   return scopedUsers[0] ? normalizeApproverRecord(scopedUsers[0], effectiveScope.roleCode, "legacy") : null;
 };
 
-export const hasScopedRoleAssignment = async ({ roleCode, department, school, campus }) => {
-  const effectiveScope = await resolveEffectiveScope({ roleCode, department, school, campus });
+export const hasScopedRoleAssignment = async ({ roleCode, department, department_id, school, campus }) => {
+  const effectiveScope = await resolveEffectiveScope({ roleCode, department, department_id, school, campus });
   const { assignments } = await loadActiveAssignmentsForRole(effectiveScope.roleCode);
 
   return (assignments || []).some((assignment) => assignmentMatchesScope(assignment, effectiveScope));
@@ -311,11 +350,12 @@ export const resolveDepartmentSchoolForApprovals = resolveDepartmentSchool;
 export const resolveRoleMatrixApprover = async ({
   roleCode,
   department,
+  department_id,
   school,
   campus,
   excludeEmail,
 }) => {
-  const effectiveScope = await resolveEffectiveScope({ roleCode, department, school, campus });
+  const effectiveScope = await resolveEffectiveScope({ roleCode, department, department_id, school, campus });
   const normalizedExclude = normalizeEmail(excludeEmail);
 
   const { assignments, source } = await loadActiveAssignmentsForRole(effectiveScope.roleCode);

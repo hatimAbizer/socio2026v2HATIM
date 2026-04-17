@@ -141,7 +141,7 @@ export default function DeanApprovalTable({
                           className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {isWorking ? <SpinnerIcon /> : null}
-                          Send Back
+                          Return for Revision
                         </button>
                         <button
                           type="button"

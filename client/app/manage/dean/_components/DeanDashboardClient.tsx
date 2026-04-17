@@ -472,7 +472,7 @@ export default function DeanDashboardClient({
 
       <ApprovalDecisionModal
         isOpen={Boolean(modalState)}
-        mode="return"
+        mode={modalState?.mode === "decline" ? "reject" : "return"}
         eventName={modalState?.eventName || ""}
         note={modalState?.note || ""}
         minCharacters={NOTE_MIN_CHARS}
@@ -498,19 +498,14 @@ export default function DeanDashboardClient({
           const trimmedNote = modalState.note.trim();
           if (trimmedNote.length < NOTE_MIN_CHARS) {
             setModalState((previous) =>
-              previous
-                ? {
-                    ...previous,
-                    errorMessage: "Revision description is required.",
-                  }
-                : previous
+              previous ? { ...previous, errorMessage: "A note is required." } : previous
             );
             return;
           }
 
           void submitAction({
             requestId: modalState.requestId,
-            action: "return",
+            action: modalState.mode === "decline" ? "decline" : "return",
             note: trimmedNote,
           });
         }}
