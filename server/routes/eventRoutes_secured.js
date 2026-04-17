@@ -1886,14 +1886,6 @@ const validateAdditionalRequestsPayload = ({
 
   const additionalRequests = sanitizeAdditionalRequests(additionalRequestsRaw);
 
-  if (!hasFestSelected) {
-    return {
-      fieldErrors,
-      additionalRequests: buildAdditionalRequestsDefaults(),
-      venueBooking: null,
-    };
-  }
-
   if (asBoolean(additionalRequests.it.enabled)) {
     if (!normalizeSingleStringField(additionalRequests.it.description)) {
       addFieldError(
