@@ -546,6 +546,7 @@ export const createFestApprovalRequest = async ({
       parent_fest_ref: null,
       requested_by_user_id: userInfo?.id || null,
       requested_by_email: userInfo?.email || null,
+      organizing_dept: festRecord?.organizing_dept || null,
       organizing_dept_id: festRecord?.organizing_dept_id || null,
       organizing_school: festRecord?.organizing_school || null,
       campus_hosted_at:
@@ -559,11 +560,17 @@ export const createFestApprovalRequest = async ({
     try {
       insertedRequest = await insert("approval_requests", [requestPayload]);
     } catch (insertError) {
-      if (!isMissingColumnError(insertError, "organizing_school")) {
+      const missingOrgSchool = isMissingColumnError(insertError, "organizing_school");
+      const missingOrgDeptId = isMissingColumnError(insertError, "organizing_dept_id");
+      const missingOrgDept = isMissingColumnError(insertError, "organizing_dept");
+
+      if (!missingOrgSchool && !missingOrgDeptId && !missingOrgDept) {
         throw insertError;
       }
 
-      delete requestPayload.organizing_school;
+      if (missingOrgSchool) delete requestPayload.organizing_school;
+      if (missingOrgDeptId) delete requestPayload.organizing_dept_id;
+      if (missingOrgDept) delete requestPayload.organizing_dept;
       insertedRequest = await insert("approval_requests", [requestPayload]);
     }
 
@@ -1750,6 +1757,7 @@ router.post(
         closing_date: closingDateValue,
         fest_image_url: festData.festImageUrl || festData.fest_image_url || null,
         organizing_school: school,
+        organizing_dept: dept,
         organizing_dept_id: await resolveDepartmentId(dept).catch(() => null),
         department_access: festData.departmentAccess || festData.department_access || [],
         category: festData.category || "",
@@ -1787,12 +1795,16 @@ router.post(
         const missingBudgetAmountColumn = isMissingColumnError(insertError, "budget_amount");
         const missingEstimatedBudgetColumn = isMissingColumnError(insertError, "estimated_budget_amount");
         const missingTotalEstimatedColumn = isMissingColumnError(insertError, "total_estimated_expense");
+        const missingOrgDeptIdColumn = isMissingColumnError(insertError, "organizing_dept_id");
+        const missingOrgDeptColumn = isMissingColumnError(insertError, "organizing_dept");
 
         if (
           !missingStatusColumn &&
           !missingBudgetAmountColumn &&
           !missingEstimatedBudgetColumn &&
-          !missingTotalEstimatedColumn
+          !missingTotalEstimatedColumn &&
+          !missingOrgDeptIdColumn &&
+          !missingOrgDeptColumn
         ) {
           throw insertError;
         }
@@ -1811,6 +1823,14 @@ router.post(
         }
         if (missingTotalEstimatedColumn) {
           delete fallbackFestPayload.total_estimated_expense;
+        }
+        // organizing_dept_id missing → pre-migration schema, drop UUID column
+        if (missingOrgDeptIdColumn) {
+          delete fallbackFestPayload.organizing_dept_id;
+        }
+        // organizing_dept missing → post-migration schema (column was dropped), drop text column
+        if (missingOrgDeptColumn) {
+          delete fallbackFestPayload.organizing_dept;
         }
         inserted = await insert(festTable, [fallbackFestPayload]);
       }
