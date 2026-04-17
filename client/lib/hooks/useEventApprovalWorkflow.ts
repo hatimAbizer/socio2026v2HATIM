@@ -600,7 +600,7 @@ function buildGraph(snapshot: WorkflowSnapshot, eventContext?: string | null) {
 
     const inheritedByFest = isUnderFest && (nodeKey === "hod" || nodeKey === "dean");
 
-    const status = inheritedByFest
+    const status: ApprovalVisualStatus = inheritedByFest
       ? "approved"
       : deriveStemNodeStatus({
           nodeKey,
@@ -705,7 +705,7 @@ function buildGraph(snapshot: WorkflowSnapshot, eventContext?: string | null) {
     }
 
     const decision = latestServiceDecisionByRequestId.get(serviceRequest.id) || null;
-    const status = deriveServiceStatus({
+    const status: ApprovalVisualStatus = deriveServiceStatus({
       request: serviceRequest,
       decision,
       accountsApproved,
