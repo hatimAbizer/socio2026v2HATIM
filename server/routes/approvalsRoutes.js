@@ -795,85 +795,24 @@ const buildDepartmentScopeCandidates = (value) => {
 };
 
 const resolveSchoolScopeFromDepartmentValue = async (departmentValue) => {
-  const candidateSet = new Set(buildDepartmentScopeCandidates(departmentValue));
-  if (candidateSet.size === 0) {
-    return "";
-  }
+  const normalized = String(departmentValue || "").trim();
+  if (!normalized) return "";
 
-  const departmentIdCandidates = Array.from(candidateSet).filter((candidate) =>
-    UUID_REGEX.test(candidate)
-  );
-
-  for (const departmentId of departmentIdCandidates) {
-    try {
-      const departmentRow = await queryOne("departments_courses", {
-        where: { id: departmentId },
-        select: "id,department_name,school",
-      });
-
-      if (departmentRow?.department_name) {
-        const rowCandidates = buildDepartmentScopeCandidates(
-          departmentRow.department_name
-        );
-        rowCandidates.forEach((candidate) => candidateSet.add(candidate));
-      }
-
-      const schoolValue = normalizeSchoolScopeValue(departmentRow?.school);
-      if (schoolValue) {
-        return schoolValue;
-      }
-    } catch (error) {
-      if (
-        isMissingRelationError(error) ||
-        isMissingColumnError(error, "id") ||
-        isMissingColumnError(error, "department_name") ||
-        isMissingColumnError(error, "school")
-      ) {
-        continue;
-      }
-
-      throw error;
+  try {
+    if (UUID_REGEX.test(normalized)) {
+      const row = await queryOne("departments", { where: { id: normalized }, select: "id,school" });
+      return normalizeSchoolScopeValue(row?.school);
     }
-  }
 
-  const findSchoolMatch = (rows) => {
+    const rows = await queryAll("departments", { select: "id,name,school" });
     for (const row of rows || []) {
-      const rowCandidates = buildDepartmentScopeCandidates(row?.department_name);
-      const hasMatch = rowCandidates.some((candidate) => candidateSet.has(candidate));
-      if (!hasMatch) {
-        continue;
-      }
-
-      const schoolValue = normalizeSchoolScopeValue(row?.school);
-      if (schoolValue) {
-        return schoolValue;
+      if (normalizeDepartmentScopeValue(row?.name) === normalizeDepartmentScopeValue(normalized)) {
+        const school = normalizeSchoolScopeValue(row?.school);
+        if (school) return school;
       }
     }
-
-    return "";
-  };
-
-  for (const tableName of ["departments_courses", "department_school"]) {
-    try {
-      const rows = await queryAll(tableName, {
-        select: "department_name,school",
-      });
-
-      const schoolValue = findSchoolMatch(rows);
-      if (schoolValue) {
-        return schoolValue;
-      }
-    } catch (error) {
-      if (
-        isMissingRelationError(error) ||
-        isMissingColumnError(error, "department_name") ||
-        isMissingColumnError(error, "school")
-      ) {
-        continue;
-      }
-
-      throw error;
-    }
+  } catch (error) {
+    if (!isMissingRelationError(error)) throw error;
   }
 
   return "";
@@ -907,18 +846,9 @@ const resolveDeptNameById = async (id) => {
   const normalizedId = String(id || "").trim();
   if (!normalizedId) return null;
 
-  // Try canonical departments table first (populated by migration 034)
   try {
     const row = await queryOne("departments", { where: { id: normalizedId }, select: "id,name" });
     if (row?.name) return row.name;
-  } catch (error) {
-    if (!isMissingRelationError(error)) throw error;
-  }
-
-  // Fall back to legacy departments_courses table
-  try {
-    const row = await queryOne("departments_courses", { where: { id: normalizedId }, select: "id,department_name" });
-    if (row?.department_name) return row.department_name;
   } catch (error) {
     if (!isMissingRelationError(error)) throw error;
   }
@@ -976,42 +906,19 @@ const resolveHodDepartmentScope = async (req) => {
   const userId = String(req.userInfo?.id || "").trim();
   if (userId) {
     try {
-      let assignments;
-      try {
-        assignments = await queryAll("user_role_assignments", {
-          where: { user_id: userId, role_code: ROLE_CODES.HOD },
-          select: "department_scope,department_id,is_active,valid_from,valid_until",
-        });
-      } catch (selErr) {
-        if (isMissingColumnError(selErr, "department_scope")) {
-          assignments = await queryAll("user_role_assignments", {
-            where: { user_id: userId, role_code: ROLE_CODES.HOD },
-            select: "department_id,is_active,valid_from,valid_until",
-          });
-        } else {
-          throw selErr;
-        }
-      }
+      const assignments = await queryAll("user_role_assignments", {
+        where: { user_id: userId, role_code: ROLE_CODES.HOD },
+        select: "department_id,is_active,valid_from,valid_until",
+      });
 
       for (const assignment of assignments || []) {
         if (!isRoleAssignmentActive(assignment)) {
           continue;
         }
 
-        // Prefer the new UUID FK column (populated by migration 034)
         const uuidDeptId = String(assignment.department_id || "").trim();
         if (uuidDeptId) {
           departmentIdCandidates.add(uuidDeptId);
-        }
-
-        const departmentScopeValue = String(assignment.department_scope || "").trim();
-        if (!departmentScopeValue) {
-          continue;
-        }
-
-        addScopeValue(departmentScopeValue);
-        if (UUID_REGEX.test(departmentScopeValue)) {
-          departmentIdCandidates.add(departmentScopeValue);
         }
       }
     } catch (error) {
@@ -1051,47 +958,17 @@ const resolveDeanSchoolScope = async (req) => {
   const userId = String(req.userInfo?.id || "").trim();
   if (userId) {
     try {
-      let assignments;
-      try {
-        assignments = await queryAll("user_role_assignments", {
-          where: { user_id: userId, role_code: ROLE_CODES.DEAN },
-          select: "school_scope,department_scope,department_id,is_active,valid_from,valid_until",
-        });
-      } catch (selErr) {
-        if (isMissingColumnError(selErr, "school_scope")) {
-          try {
-            assignments = await queryAll("user_role_assignments", {
-              where: { user_id: userId, role_code: ROLE_CODES.DEAN },
-              select: "department_scope,department_id,is_active,valid_from,valid_until",
-            });
-          } catch (selErr2) {
-            if (isMissingColumnError(selErr2, "department_scope")) {
-              assignments = await queryAll("user_role_assignments", {
-                where: { user_id: userId, role_code: ROLE_CODES.DEAN },
-                select: "department_id,is_active,valid_from,valid_until",
-              });
-            } else {
-              throw selErr2;
-            }
-          }
-        } else if (isMissingColumnError(selErr, "department_scope")) {
-          assignments = await queryAll("user_role_assignments", {
-            where: { user_id: userId, role_code: ROLE_CODES.DEAN },
-            select: "school_scope,department_id,is_active,valid_from,valid_until",
-          });
-        } else {
-          throw selErr;
-        }
-      }
+      const assignments = await queryAll("user_role_assignments", {
+        where: { user_id: userId, role_code: ROLE_CODES.DEAN },
+        select: "school_scope,department_id,is_active,valid_from,valid_until",
+      });
 
       for (const assignment of assignments || []) {
         if (!isRoleAssignmentActive(assignment)) {
           continue;
         }
 
-        const schoolScopeValue = String(
-          assignment.school_scope || assignment.department_scope || ""
-        ).trim();
+        const schoolScopeValue = String(assignment.school_scope || "").trim();
         if (!schoolScopeValue) {
           continue;
         }
@@ -1137,25 +1014,19 @@ const resolveApprovalRequestScopeValue = async ({
     }
 
     if (entityType === "FEST") {
-      for (const tableName of ["fests", "fest"]) {
-        try {
-          const fest = await queryOne(tableName, {
-            where: { fest_id: entityRef },
-            select: `fest_id,${scopeColumn}`,
-          });
+      try {
+        const fest = await queryOne("fests", {
+          where: { fest_id: entityRef },
+          select: `fest_id,${scopeColumn}`,
+        });
 
-          if (!fest) {
-            continue;
-          }
-
-          return normalizeScopeValue(fest?.[scopeColumn]);
-        } catch (error) {
-          if (isMissingRelationError(error) || isMissingColumnError(error, scopeColumn)) {
-            continue;
-          }
-
-          throw error;
+        return normalizeScopeValue(fest?.[scopeColumn]);
+      } catch (error) {
+        if (isMissingRelationError(error) || isMissingColumnError(error, scopeColumn)) {
+          return "";
         }
+
+        throw error;
       }
     }
   } catch (error) {
@@ -1170,15 +1041,7 @@ const resolveApprovalRequestScopeValue = async ({
 };
 
 const resolveApprovalRequestDepartmentScopeValue = async (approvalRequest) => {
-  // Try text column first (exists until migration 035 drops it)
-  const textValue = await resolveApprovalRequestScopeValue({
-    approvalRequest,
-    scopeColumn: "organizing_dept",
-    normalizeScopeValue: normalizeDepartmentScopeValue,
-  });
-  if (textValue) return textValue;
-
-  // Fallback: UUID column on the approval_request row itself
+  // Use UUID column on the approval_request row
   const deptId = String(approvalRequest?.organizing_dept_id || "").trim();
   if (deptId) {
     try {
@@ -1200,15 +1063,8 @@ const resolveApprovalRequestDepartmentScopeValue = async (approvalRequest) => {
       const event = await queryOne("events", { where: { event_id: entityRef }, select: "organizing_dept_id" });
       entityDeptId = String(event?.organizing_dept_id || "").trim();
     } else if (entityType === "FEST") {
-      for (const tableName of ["fests", "fest"]) {
-        try {
-          const fest = await queryOne(tableName, { where: { fest_id: entityRef }, select: "organizing_dept_id" });
-          if (fest) { entityDeptId = String(fest?.organizing_dept_id || "").trim(); break; }
-        } catch (err) {
-          if (isMissingRelationError(err) || isMissingColumnError(err, "organizing_dept_id")) continue;
-          throw err;
-        }
-      }
+      const fest = await queryOne("fests", { where: { fest_id: entityRef }, select: "organizing_dept_id" });
+      if (fest) entityDeptId = String(fest?.organizing_dept_id || "").trim();
     }
     if (entityDeptId) {
       const name = await resolveDeptNameById(entityDeptId);

@@ -631,7 +631,7 @@ export async function fetchHodDashboardData({
     );
   }
 
-  // Batch-fetch department names for display
+  // Batch-fetch department names for display and scope matching
   const allDeptIds = Array.from(
     new Set([
       ...requestRows.map((r) => normalizeText(r.organizing_dept_id)).filter(Boolean),
@@ -641,16 +641,32 @@ export async function fetchHodDashboardData({
   );
   let deptNameById = new Map<string, string>();
   if (allDeptIds.length > 0) {
-    const { data: deptRows } = await supabase
+    const { data: primaryDeptRows, error: primaryDeptError } = await supabase
       .from("departments")
       .select("id, name")
       .in("id", allDeptIds);
-    if (Array.isArray(deptRows)) {
+    if (!primaryDeptError && Array.isArray(primaryDeptRows)) {
       deptNameById = new Map(
-        (deptRows as Array<{ id: string; name: string }>).map((r) => [String(r.id), String(r.name || "")])
+        (primaryDeptRows as Array<{ id: string; name: string }>).map((r) => [String(r.id), String(r.name || "")])
       );
+    } else {
+      // Fallback: departments_courses uses department_name column
+      const { data: fallbackRows } = await supabase
+        .from("departments_courses")
+        .select("id, department_name")
+        .in("id", allDeptIds);
+      if (Array.isArray(fallbackRows)) {
+        deptNameById = new Map(
+          (fallbackRows as Array<{ id: string; department_name: string }>).map((r) => [
+            String(r.id),
+            String(r.department_name || ""),
+          ])
+        );
+      }
     }
   }
+
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
   const scopedPendingRows = pendingRows.filter((stepRow) => {
     const requestRow = toSingleRecord(stepRow.approval_requests);
@@ -673,11 +689,22 @@ export async function fetchHodDashboardData({
     );
     const effectiveDeptId = requestDeptId || fallbackDeptId;
 
-    if (
-      normalizedDepartmentScopes.length > 0 &&
-      !normalizedDepartmentScopes.includes(effectiveDeptId)
-    ) {
-      return false;
+    if (normalizedDepartmentScopes.length > 0) {
+      // UUID scopes: compare directly
+      const uuidMatch = normalizedDepartmentScopes.some(
+        (scope) => uuidPattern.test(scope) && scope === effectiveDeptId.toLowerCase()
+      );
+      // Text scopes: compare normalized dept name
+      const resolvedDeptName = normalizeDepartmentScope(deptNameById.get(effectiveDeptId) || "");
+      const nameMatch =
+        resolvedDeptName.length > 0 &&
+        normalizedDepartmentScopes.some(
+          (scope) => !uuidPattern.test(scope) && normalizeDepartmentScope(scope) === resolvedDeptName
+        );
+
+      if (!uuidMatch && !nameMatch) {
+        return false;
+      }
     }
 
     const requestCampusScope = normalizeScope(requestRow.campus_hosted_at);

@@ -271,12 +271,30 @@ async function buildDepartmentToSchoolLookup(supabase: any): Promise<Map<string,
   // Returns Map<dept_uuid, school_name> for resolving school from organizing_dept_id
   const lookup = new Map<string, string>();
 
-  const { data: departmentRows, error: departmentError } = await supabase
+  const { data: primaryRows, error: primaryError } = await supabase
     .from("departments")
     .select("id,name,school");
 
-  if (!departmentError && Array.isArray(departmentRows)) {
-    (departmentRows as any[]).forEach((row) => {
+  if (!primaryError && Array.isArray(primaryRows)) {
+    (primaryRows as any[]).forEach((row) => {
+      const deptId = String(row?.id || "").trim();
+      const school = normalizeScope(row?.school);
+      if (deptId && school) {
+        lookup.set(deptId, school);
+      }
+    });
+    if (lookup.size > 0) {
+      return lookup;
+    }
+  }
+
+  // Fallback: departments_courses table uses department_name column
+  const { data: fallbackRows } = await supabase
+    .from("departments_courses")
+    .select("id,school");
+
+  if (Array.isArray(fallbackRows)) {
+    (fallbackRows as any[]).forEach((row) => {
       const deptId = String(row?.id || "").trim();
       const school = normalizeScope(row?.school);
       if (deptId && school) {

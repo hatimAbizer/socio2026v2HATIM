@@ -48,11 +48,13 @@ function resolveDeanSchoolScope(userProfile: Record<string, unknown>): string {
     (assignment) =>
       String(assignment.role_code || "").trim().toUpperCase() === "DEAN" &&
       isAssignmentActive(assignment) &&
-      normalizeScope(assignment.school_scope || assignment.department_id).length > 0
+      normalizeScope(
+        assignment.school_scope || assignment.department_scope || assignment.department_id
+      ).length > 0
   );
 
   const assignmentScope = normalizeScope(
-    scopedSchool?.school_scope || scopedSchool?.department_id
+    scopedSchool?.school_scope || scopedSchool?.department_scope || scopedSchool?.department_id
   );
   if (assignmentScope) {
     return assignmentScope;

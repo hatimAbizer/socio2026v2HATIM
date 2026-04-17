@@ -56,38 +56,28 @@ async function resolveDepartmentMetadataForUser(user) {
   const departmentId = normalizeNullableText(user?.department_id);
   if (!departmentId) {
     return {
-      department: normalizeNullableText(user?.department),
+      department: null,
       school: normalizeNullableText(user?.school),
     };
   }
 
   try {
-    // Try new canonical departments table first
-    let departmentRow = await queryOne("departments", { where: { id: departmentId } });
+    const departmentRow = await queryOne("departments", { where: { id: departmentId } });
     if (departmentRow) {
       return {
-        department: normalizeNullableText(departmentRow.name) || normalizeNullableText(user?.department),
-        school: normalizeNullableText(departmentRow.school) || normalizeNullableText(user?.school),
-      };
-    }
-
-    // Fall back to departments_courses (pre-035 only)
-    departmentRow = await queryOne("departments_courses", { where: { id: departmentId } });
-    if (departmentRow) {
-      return {
-        department: normalizeNullableText(departmentRow.department_name) || normalizeNullableText(user?.department),
+        department: normalizeNullableText(departmentRow.name),
         school: normalizeNullableText(departmentRow.school) || normalizeNullableText(user?.school),
       };
     }
 
     return {
-      department: normalizeNullableText(user?.department),
+      department: null,
       school: normalizeNullableText(user?.school),
     };
   } catch (error) {
     console.warn("Unable to resolve department metadata for user profile response:", error);
     return {
-      department: normalizeNullableText(user?.department),
+      department: null,
       school: normalizeNullableText(user?.school),
     };
   }
@@ -213,12 +203,12 @@ router.get(
   requireMasterAdmin,
   async (req, res) => {
     try {
-      const departmentRows = await queryAll("departments_courses");
+      const departmentRows = await queryAll("departments", { where: { is_active: true } });
 
       const departments = (departmentRows || [])
         .map((row) => ({
           id: String(row.id || "").trim(),
-          department_name: String(row.department_name || "").trim(),
+          department_name: String(row.name || "").trim(),
           school: row.school ? String(row.school).trim() : null,
         }))
         .filter((row) => row.id.length > 0 && row.department_name.length > 0)

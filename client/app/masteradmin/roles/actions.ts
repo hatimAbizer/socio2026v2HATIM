@@ -1144,33 +1144,15 @@ async function resolveDepartmentScopeDetails(
       departmentLabel = normalizeNullableText((deptData as any).name) || normalizedScope;
       schoolName = normalizeNullableText((deptData as any).school);
     } else {
-      // Fallback: try legacy departments_courses (pre-migration)
-      const { data: legacyData, error: legacyError } = await adminClient
-        .from("departments_courses")
-        .select("id,department_name,school")
-        .eq("id", normalizedScope)
-        .maybeSingle();
-
-      if (legacyError) {
-        if (!(isMissingRelationError(legacyError) || isMissingColumnError(legacyError))) {
-          throw new Error(legacyError.message || "Failed to validate the selected department.");
-        }
-      }
-
-      if (legacyData && typeof legacyData === "object") {
-        departmentLabel = normalizeNullableText((legacyData as any).department_name) || normalizedScope;
-        schoolName = normalizeNullableText((legacyData as any).school);
-      } else if (!legacyData) {
-        // Last resort: match against FALLBACK_DEPARTMENT_OPTIONS by id/code
-        const fallback = FALLBACK_DEPARTMENT_OPTIONS.find(
-          (opt) => normalizeNullableText(opt.id) === normalizedScope
-        );
-        if (fallback) {
-          departmentLabel = normalizeNullableText(fallback.department_name) || normalizedScope;
-          schoolName = normalizeNullableText(fallback.school);
-        } else if (!deptData) {
-          throw new Error("Selected department does not exist.");
-        }
+      // Last resort: match against FALLBACK_DEPARTMENT_OPTIONS by id/code
+      const fallback = FALLBACK_DEPARTMENT_OPTIONS.find(
+        (opt) => normalizeNullableText(opt.id) === normalizedScope
+      );
+      if (fallback) {
+        departmentLabel = normalizeNullableText(fallback.department_name) || normalizedScope;
+        schoolName = normalizeNullableText(fallback.school);
+      } else {
+        throw new Error("Selected department does not exist.");
       }
     }
   }
@@ -1621,16 +1603,13 @@ export async function updateUserAccess(
 
     if (payload.is_dean) {
       const { data, error } = await adminClient
-        .from("departments_courses")
+        .from("departments")
         .select("id")
         .eq("school", payload.school_id)
+        .eq("is_active", true)
         .limit(1);
       if (error) {
-        if (isMissingRelationError(error) || isMissingColumnError(error)) {
-          // Catalog table missing in this environment; allow scoped value without strict lookup.
-        } else {
-          return { ok: false, error: error.message || "Failed to validate school." };
-        }
+        return { ok: false, error: error.message || "Failed to validate school." };
       } else if (!Array.isArray(data) || data.length === 0) {
         return { ok: false, error: "Selected school does not exist." };
       }
@@ -2039,31 +2018,19 @@ export async function assignRoleMatrixEntry(
     }
 
     if (roleValue === "dean") {
-      // Try canonical departments table first, fall back to departments_courses
       const { data: deptData, error: deptError } = await adminClient
         .from("departments")
         .select("id")
         .eq("school", scopeValue)
+        .eq("is_active", true)
         .limit(1);
 
-      if (!deptError && Array.isArray(deptData) && deptData.length > 0) {
-        // School exists in canonical departments table
-      } else {
-        const { data, error } = await adminClient
-          .from("departments_courses")
-          .select("id")
-          .eq("school", scopeValue)
-          .limit(1);
+      if (deptError) {
+        return { ok: false, error: deptError.message || "Failed to validate the selected school." };
+      }
 
-        if (error) {
-          if (!(isMissingRelationError(error) || isMissingColumnError(error))) {
-            return { ok: false, error: error.message || "Failed to validate the selected school." };
-          }
-        }
-
-        if (!error && (!Array.isArray(data) || data.length === 0)) {
-          return { ok: false, error: "Selected school does not exist." };
-        }
+      if (!Array.isArray(deptData) || deptData.length === 0) {
+        return { ok: false, error: "Selected school does not exist." };
       }
     }
 

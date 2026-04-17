@@ -52,29 +52,41 @@ function collectHodDepartmentScopes(userProfile: Record<string, unknown>): strin
 
   assignmentRows.forEach((assignment) => {
     if (
-      String(assignment.role_code || "").trim().toUpperCase() === "HOD" &&
-      isAssignmentActive(assignment) &&
-      normalizeScope(assignment.department_id).length > 0
+      String(assignment.role_code || "").trim().toUpperCase() !== "HOD" ||
+      !isAssignmentActive(assignment)
     ) {
-      addScope(assignment.department_id);
-    }
-  });
-
-  addScope(userProfile.department_id);
-  addScope(userProfile.role_matrix_department);
-
-  const roleMatrixAssignments = Array.isArray(userProfile.role_matrix_assignments)
-    ? (userProfile.role_matrix_assignments as Array<Record<string, unknown>>)
-    : [];
-
-  roleMatrixAssignments.forEach((assignment) => {
-    if (String(assignment.role_code || "").trim().toUpperCase() !== "HOD") {
       return;
     }
-
-    addScope(assignment.department_id);
-    addScope(assignment.department_label);
+    // Prefer UUID-based department_id; fall back to text department_scope
+    if (normalizeScope(assignment.department_id).length > 0) {
+      addScope(assignment.department_id);
+    } else if (normalizeScope(assignment.department_scope).length > 0) {
+      addScope(assignment.department_scope);
+    }
   });
+
+  // Only fall back to profile/matrix data if no explicit HOD assignment scope was found
+  if (scopes.size === 0) {
+    addScope(userProfile.department_id);
+    addScope(userProfile.role_matrix_department);
+
+    const roleMatrixAssignments = Array.isArray(userProfile.role_matrix_assignments)
+      ? (userProfile.role_matrix_assignments as Array<Record<string, unknown>>)
+      : [];
+
+    roleMatrixAssignments.forEach((assignment) => {
+      if (String(assignment.role_code || "").trim().toUpperCase() !== "HOD") {
+        return;
+      }
+      if (normalizeScope(assignment.department_id).length > 0) {
+        addScope(assignment.department_id);
+      } else if (normalizeScope(assignment.department_scope).length > 0) {
+        addScope(assignment.department_scope);
+      } else {
+        addScope(assignment.department_label);
+      }
+    });
+  }
 
   return Array.from(scopes);
 }
