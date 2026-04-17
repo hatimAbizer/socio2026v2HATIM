@@ -3175,7 +3175,7 @@ router.get("/service-queues/:roleCode", async (req, res) => {
       if (requestRow?.approval_request_id) {
         approvalRequest = await queryOne("approval_requests", {
           where: { id: requestRow.approval_request_id },
-          select: "entity_type,entity_ref,organizing_dept_id",
+          select: "entity_type,entity_ref,organizing_dept_id,organizing_school",
         }).catch((error) => {
           if (isMissingRelationError(error)) {
             return null;
@@ -3189,7 +3189,7 @@ router.get("/service-queues/:roleCode", async (req, res) => {
       try {
         eventRecord = await queryOne("events", {
           where: { event_id: eventId },
-          select: "event_id,title,event_date,organizing_dept_id,campus_hosted_at",
+          select: "event_id,title,event_date,organizing_dept_id,organizing_school,campus_hosted_at",
         });
       } catch (error) {
         if (!isMissingRelationError(error)) {
@@ -3210,6 +3210,8 @@ router.get("/service-queues/:roleCode", async (req, res) => {
         entity_id: String(approvalRequest?.entity_ref || eventId).trim(),
         organizing_dept_id:
           approvalRequest?.organizing_dept_id || eventRecord?.organizing_dept_id || null,
+        organizing_school:
+          approvalRequest?.organizing_school || eventRecord?.organizing_school || null,
         campus_hosted_at: eventRecord?.campus_hosted_at || null,
         event_title: eventRecord?.title || null,
         event_date: eventRecord?.event_date || null,

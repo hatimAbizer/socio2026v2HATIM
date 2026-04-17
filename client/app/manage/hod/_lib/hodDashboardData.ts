@@ -8,6 +8,7 @@ type ApprovalRequestJoinRow = {
   entity_type?: string | null;
   entity_ref?: string | null;
   organizing_dept_id?: string | null;
+  organizing_school?: string | null;
   campus_hosted_at?: string | null;
   status?: string | null;
   submitted_at?: string | null;
@@ -28,6 +29,7 @@ type EventDetailRow = {
   title?: string | null;
   event_date?: string | null;
   organizing_dept_id?: string | null;
+  organizing_school?: string | null;
   organizer_email?: string | null;
   budget_amount?: number | string | null;
   estimated_budget_amount?: number | string | null;
@@ -39,6 +41,7 @@ type FestDetailRow = {
   fest_title?: string | null;
   opening_date?: string | null;
   organizing_dept_id?: string | null;
+  organizing_school?: string | null;
   contact_email?: string | null;
   budget_amount?: number | string | null;
   estimated_budget_amount?: number | string | null;
@@ -223,9 +226,9 @@ async function fetchFestRowsFromTableWithFallback(
   error: { code?: string | null; message?: string | null } | null;
 }> {
   const selectClauseWithBudget =
-    "fest_id, fest_title, opening_date, organizing_dept_id, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense, custom_fields";
+    "fest_id, fest_title, opening_date, organizing_dept_id, organizing_school, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense, custom_fields";
   const selectClauseLegacy =
-    "fest_id, fest_title, opening_date, organizing_dept_id, contact_email, custom_fields";
+    "fest_id, fest_title, opening_date, organizing_dept_id, organizing_school, contact_email, custom_fields";
 
   const { data: primaryData, error: primaryError } = await supabase
     .from(tableName)
@@ -278,9 +281,9 @@ async function fetchAllFestRowsFromTableWithFallback(
   tableName: string
 ): Promise<FestDetailRow[]> {
   const selectClauseWithBudget =
-    "fest_id, fest_title, opening_date, organizing_dept_id, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense, custom_fields";
+    "fest_id, fest_title, opening_date, organizing_dept_id, organizing_school, contact_email, budget_amount, estimated_budget_amount, total_estimated_expense, custom_fields";
   const selectClauseLegacy =
-    "fest_id, fest_title, opening_date, organizing_dept_id, contact_email, custom_fields";
+    "fest_id, fest_title, opening_date, organizing_dept_id, organizing_school, contact_email, custom_fields";
 
   const { data: primaryData, error: primaryError } = await supabase
     .from(tableName)
@@ -587,8 +590,8 @@ export async function fetchHodDashboardData({
   let eventRowsById = new Map<string, EventDetailRow>();
   if (eventIds.length > 0) {
     const fullSelect =
-      "event_id, title, event_date, organizing_dept_id, organizer_email, budget_amount, estimated_budget_amount, total_estimated_expense";
-    const legacySelect = "event_id, title, event_date, organizing_dept_id, organizer_email";
+      "event_id, title, event_date, organizing_dept_id, organizing_school, organizer_email, budget_amount, estimated_budget_amount, total_estimated_expense";
+    const legacySelect = "event_id, title, event_date, organizing_dept_id, organizing_school, organizer_email";
 
     let { data: eventData, error: eventError } = await supabase
       .from("events")
@@ -829,7 +832,9 @@ export async function fetchHodDashboardData({
       const deptId =
         normalizeText(requestRow.organizing_dept_id) ||
         normalizeText(isFestEntity ? festRow?.organizing_dept_id : eventRow?.organizing_dept_id);
-      const departmentName = (deptId && deptNameById.get(deptId)) || "Unknown Department";
+      const schoolFallback =
+        normalizeText(isFestEntity ? festRow?.organizing_school : eventRow?.organizing_school);
+      const departmentName = (deptId && deptNameById.get(deptId)) || schoolFallback || "Unknown Department";
 
       return {
         id: normalizeText(requestRow.id),
@@ -947,7 +952,8 @@ async function fetchDecisionHistory(
         id,
         entity_type,
         entity_ref,
-        organizing_dept_id
+        organizing_dept_id,
+        organizing_school
       )
     `)
     .in("role_code", roleCodes)
@@ -1021,7 +1027,8 @@ async function fetchDecisionHistory(
 
     const isFest = entityType === "FEST";
     const deptId = String(req.organizing_dept_id || "").trim();
-    const deptName = (deptId && deptNameById.get(deptId)) || "Unknown Department";
+    const schoolFallback = String(req.organizing_school || "").trim();
+    const deptName = (deptId && deptNameById.get(deptId)) || schoolFallback || "Unknown Department";
 
     // Apply department scope filter (same logic as queue filter)
     if (departmentScopes.length > 0) {

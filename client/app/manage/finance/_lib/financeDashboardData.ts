@@ -880,7 +880,10 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
           requestRow.organizing_dept_id ||
           (isFestEntity ? festRow?.organizing_dept_id : eventRow?.organizing_dept_id)
         );
-        return (dId && approvalDeptNameById.get(dId)) || "Unknown Department";
+        const schoolFallback =
+          normalizeText(isFestEntity ? festRow?.organizing_school : eventRow?.organizing_school) ||
+          normalizeText(requestRow.organizing_school);
+        return (dId && approvalDeptNameById.get(dId)) || schoolFallback || "Unknown Department";
       })(),
       schoolName:
         normalizeText(isFestEntity ? festRow?.organizing_school : eventRow?.organizing_school) ||
@@ -1054,7 +1057,8 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
         eventName: normalizeText(eventRow?.title) || "Untitled Event",
         departmentName: (() => {
           const dId = normalizeText(eventRow?.organizing_dept_id);
-          return (dId && settlementDeptNameById.get(dId)) || "Unknown Department";
+          const schoolFallback = normalizeText(eventRow?.organizing_school);
+          return (dId && settlementDeptNameById.get(dId)) || schoolFallback || "Unknown Department";
         })(),
         totalEstimatedExpense: toNumber(budgetRow.total_estimated_expense),
         advanceRequestedAmount,
@@ -1086,7 +1090,8 @@ export async function fetchFinanceDashboardData({ supabase }: { supabase: any })
         eventName: normalizeText(eventRow?.title) || "Untitled Event",
         departmentName: (() => {
           const dId = normalizeText(eventRow?.organizing_dept_id);
-          return (dId && settlementDeptNameById.get(dId)) || "Unknown Department";
+          const schoolFallback = normalizeText(eventRow?.organizing_school);
+          return (dId && settlementDeptNameById.get(dId)) || schoolFallback || "Unknown Department";
         })(),
         schoolName: normalizeText(eventRow?.organizing_school) || "Unknown School",
         totalEstimatedExpense,
@@ -1130,7 +1135,8 @@ async function fetchFinanceDecisionHistory(supabase: any): Promise<import("./../
         id,
         entity_type,
         entity_ref,
-        organizing_dept_id
+        organizing_dept_id,
+        organizing_school
       )
     `)
     .in("role_code", ["ACCOUNTS", "FINANCE_OFFICER", "FINANCE", "FINANCE_OFFICE"])
@@ -1185,13 +1191,14 @@ async function fetchFinanceDecisionHistory(supabase: any): Promise<import("./../
     const decision = String(row.decision || "").toLowerCase();
     if (!["approved", "rejected", "returned_for_revision"].includes(decision)) return [];
     const deptId = String(req.organizing_dept_id || "").trim();
+    const schoolFallback = String(req.organizing_school || "").trim();
     return [{
       id: String(row.id || ""),
       requestId: String(req.id || ""),
       entityRef,
       entityType: entityType === "FEST" ? "fest" : ("event" as "event" | "fest"),
       eventName: entityType === "FEST" ? festNamesById.get(entityRef) || "Untitled Fest" : eventNamesById.get(entityRef) || "Untitled Event",
-      departmentName: (deptId && deptNamesById.get(deptId)) || "Unknown Department",
+      departmentName: (deptId && deptNamesById.get(deptId)) || schoolFallback || "Unknown Department",
       decision: decision as "approved" | "rejected" | "returned_for_revision",
       comment: row.comment ? String(row.comment) : null,
       decidedByEmail: String(row.decided_by_email || ""),

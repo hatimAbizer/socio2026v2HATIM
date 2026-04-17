@@ -96,6 +96,7 @@ async function fetchServiceRoleDashboardData({
 
       const departmentName =
         String(item?.organizing_dept || details.organizing_dept || details.department || "").trim() ||
+        String(item?.organizing_school || details.organizing_school || "").trim() ||
         "Unknown Department";
 
       const coordinatorName =

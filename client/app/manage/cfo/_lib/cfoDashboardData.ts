@@ -717,7 +717,7 @@ export async function fetchCfoDashboardData({
         : resolveSchoolName(eventRow || fallbackEventRow, departmentLookup);
 
       const departmentName = isFestEntity
-        ? normalizeText(departmentLookup?.name) || departmentId || "Unknown Department"
+        ? normalizeText(departmentLookup?.name) || schoolId || "Unknown Department"
         : resolveDepartmentName(eventRow || fallbackEventRow, departmentLookup);
 
       return {
@@ -926,7 +926,8 @@ async function fetchCfoDecisionHistory(supabase: any): Promise<import("../types"
         id,
         entity_type,
         entity_ref,
-        organizing_dept_id
+        organizing_dept_id,
+        organizing_school
       )
     `)
     .in("role_code", ["CFO", "L3_CFO", "CAMPUS_DIRECTOR_CFO"])
@@ -981,13 +982,14 @@ async function fetchCfoDecisionHistory(supabase: any): Promise<import("../types"
     const decision = String(row.decision || "").toLowerCase();
     if (!["approved", "rejected", "returned_for_revision"].includes(decision)) return [];
     const deptId = String(req.organizing_dept_id || "").trim();
+    const schoolFallback = String(req.organizing_school || "").trim();
     return [{
       id: String(row.id || ""),
       requestId: String(req.id || ""),
       entityRef,
       entityType: entityType === "FEST" ? "fest" : ("event" as "event" | "fest"),
       eventName: entityType === "FEST" ? festNamesById.get(entityRef) || "Untitled Fest" : eventNamesById.get(entityRef) || "Untitled Event",
-      departmentName: (deptId && deptNamesById.get(deptId)) || "Unknown Department",
+      departmentName: (deptId && deptNamesById.get(deptId)) || schoolFallback || "Unknown Department",
       decision: decision as "approved" | "rejected" | "returned_for_revision",
       comment: row.comment ? String(row.comment) : null,
       decidedByEmail: String(row.decided_by_email || ""),

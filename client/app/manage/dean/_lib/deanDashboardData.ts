@@ -715,7 +715,10 @@ export async function fetchDeanDashboardData({
           const dId =
             String(requestRow.organizing_dept_id || "") ||
             String((isFestEntity ? festRow?.organizing_dept_id : eventRow?.organizing_dept_id) || "");
-          return (dId && deptNameById.get(dId)) || "Unknown Department";
+          const schoolFallback =
+            String((isFestEntity ? festRow?.organizing_school : eventRow?.organizing_school) || "") ||
+            String(requestRow.organizing_school || "");
+          return (dId && deptNameById.get(dId)) || schoolFallback || "Unknown Department";
         })(),
       };
     })
@@ -866,7 +869,8 @@ export async function fetchDeanDashboardData({
 
   filteredKpiRequestRows.forEach(({ stepRow, requestRow }) => {
     const deptId = String(requestRow.organizing_dept_id || "").trim();
-    const departmentName = (deptId && deptNameById.get(deptId)) || "Unknown Department";
+    const schoolFallback = String(requestRow.organizing_school || "").trim();
+    const departmentName = (deptId && deptNameById.get(deptId)) || schoolFallback || "Unknown Department";
     const entityType = normalizeEntityType(requestRow.entity_type);
     const entityRef = normalizeText(requestRow.entity_ref);
     const budgetValue =
@@ -1009,7 +1013,7 @@ async function fetchDeanDecisionHistory(
       eventName: entityType === "FEST"
         ? festNamesById.get(entityRef) || "Untitled Fest"
         : eventNamesById.get(entityRef) || "Untitled Event",
-      departmentName: (deptId && deptNamesById.get(deptId)) || "Unknown Department",
+      departmentName: (deptId && deptNamesById.get(deptId)) || directSchool || "Unknown Department",
       decision: decision as "approved" | "rejected" | "returned_for_revision",
       comment: row.comment ? String(row.comment) : null,
       decidedByEmail: String(row.decided_by_email || ""),
