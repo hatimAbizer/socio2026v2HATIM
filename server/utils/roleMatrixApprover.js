@@ -1,12 +1,15 @@
 import { queryAll, queryOne } from "../config/database.js";
 import { ROLE_CODES, isRoleAssignmentActive, normalizeRoleCode } from "./roleAccessService.js";
 
+// Modern schema — department_scope was dropped in favour of department_id uuid.
+const ASSIGNMENT_SELECT_MODERN =
+  "user_id,role_code,department_id,school_scope,campus_scope,is_active,valid_from,valid_until";
+// Legacy fallbacks for older environments that still have the text columns.
 const ASSIGNMENT_SELECT_WITH_SCHOOL =
   "user_id,role_code,department_id,department_scope,school_scope,campus_scope,is_active,valid_from,valid_until";
 const ASSIGNMENT_SELECT_LEGACY =
   "user_id,role_code,department_id,department_scope,campus_scope,is_active,valid_from,valid_until";
-const ASSIGNMENT_SELECT_NO_DEPT_SCOPE =
-  "user_id,role_code,department_id,school_scope,campus_scope,is_active,valid_from,valid_until";
+const ASSIGNMENT_SELECT_NO_DEPT_SCOPE = ASSIGNMENT_SELECT_MODERN;
 
 const normalizeText = (value) => String(value || "").trim();
 const normalizeScope = (value) => normalizeText(value).toLowerCase();
@@ -170,13 +173,14 @@ const loadActiveAssignmentsForRole = async (roleCode) => {
     return { assignments: [], source: "invalid" };
   }
 
+  // Modern schema first (no department_scope column).
   try {
     const assignments = await queryAll("user_role_assignments", {
       where: {
         role_code: normalizedRoleCode,
         is_active: true,
       },
-      select: ASSIGNMENT_SELECT_WITH_SCHOOL,
+      select: ASSIGNMENT_SELECT_MODERN,
     });
 
     return {
@@ -188,33 +192,53 @@ const loadActiveAssignmentsForRole = async (roleCode) => {
       return { assignments: [], source: "missing_table" };
     }
 
-    if (isMissingColumnError(error, "school_scope")) {
-      const fallbackAssignments = await queryAll("user_role_assignments", {
-        where: {
-          role_code: normalizedRoleCode,
-          is_active: true,
-        },
-        select: ASSIGNMENT_SELECT_LEGACY,
-      });
+    // Legacy fallback when department_id column doesn't exist yet.
+    if (isMissingColumnError(error, "department_id")) {
+      try {
+        const legacy = await queryAll("user_role_assignments", {
+          where: {
+            role_code: normalizedRoleCode,
+            is_active: true,
+          },
+          select: ASSIGNMENT_SELECT_WITH_SCHOOL,
+        });
 
-      return {
-        assignments: (fallbackAssignments || []).filter((assignment) => isRoleAssignmentActive(assignment)),
-        source: "matrix_legacy",
-      };
+        return {
+          assignments: (legacy || []).filter((assignment) => isRoleAssignmentActive(assignment)),
+          source: "matrix_legacy_with_school",
+        };
+      } catch (legacyError) {
+        if (isMissingColumnError(legacyError, "school_scope")) {
+          const legacyNoSchool = await queryAll("user_role_assignments", {
+            where: {
+              role_code: normalizedRoleCode,
+              is_active: true,
+            },
+            select: ASSIGNMENT_SELECT_LEGACY,
+          });
+
+          return {
+            assignments: (legacyNoSchool || []).filter((assignment) => isRoleAssignmentActive(assignment)),
+            source: "matrix_legacy",
+          };
+        }
+
+        throw legacyError;
+      }
     }
 
-    if (isMissingColumnError(error, "department_scope")) {
-      const fallbackAssignments = await queryAll("user_role_assignments", {
+    if (isMissingColumnError(error, "school_scope")) {
+      const noSchool = await queryAll("user_role_assignments", {
         where: {
           role_code: normalizedRoleCode,
           is_active: true,
         },
-        select: ASSIGNMENT_SELECT_NO_DEPT_SCOPE,
+        select: "user_id,role_code,department_id,campus_scope,is_active,valid_from,valid_until",
       });
 
       return {
-        assignments: (fallbackAssignments || []).filter((assignment) => isRoleAssignmentActive(assignment)),
-        source: "matrix_no_dept_scope",
+        assignments: (noSchool || []).filter((assignment) => isRoleAssignmentActive(assignment)),
+        source: "matrix_no_school",
       };
     }
 

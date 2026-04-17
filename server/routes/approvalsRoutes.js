@@ -961,6 +961,71 @@ const resolveDepartmentLabelsFromIds = async (departmentIds) => {
   return labels;
 };
 
+const loadHodAssignmentsForUser = async (userId) => {
+  // Preferred: modern schema has only department_id (uuid); department_scope was dropped.
+  try {
+    return await queryAll("user_role_assignments", {
+      where: { user_id: userId, role_code: ROLE_CODES.HOD },
+      select: "department_id,is_active,valid_from,valid_until",
+    });
+  } catch (error) {
+    if (
+      !isMissingColumnError(error, "department_id") &&
+      !isMissingRelationError(error)
+    ) {
+      // Legacy schema fallback (department_scope text, no department_id).
+      if (isMissingColumnError(error, "department_scope")) {
+        return await queryAll("user_role_assignments", {
+          where: { user_id: userId, role_code: ROLE_CODES.HOD },
+          select: "department_id,is_active,valid_from,valid_until",
+        });
+      }
+      throw error;
+    }
+
+    try {
+      return await queryAll("user_role_assignments", {
+        where: { user_id: userId, role_code: ROLE_CODES.HOD },
+        select: "department_scope,is_active,valid_from,valid_until",
+      });
+    } catch (legacyError) {
+      if (isMissingRelationError(legacyError)) {
+        return [];
+      }
+      throw legacyError;
+    }
+  }
+};
+
+const loadDeanAssignmentsForUser = async (userId) => {
+  try {
+    return await queryAll("user_role_assignments", {
+      where: { user_id: userId, role_code: ROLE_CODES.DEAN },
+      select: "school_scope,department_id,is_active,valid_from,valid_until",
+    });
+  } catch (error) {
+    if (isMissingRelationError(error)) {
+      return [];
+    }
+
+    if (isMissingColumnError(error, "school_scope")) {
+      return await queryAll("user_role_assignments", {
+        where: { user_id: userId, role_code: ROLE_CODES.DEAN },
+        select: "department_id,is_active,valid_from,valid_until",
+      });
+    }
+
+    if (isMissingColumnError(error, "department_id")) {
+      return await queryAll("user_role_assignments", {
+        where: { user_id: userId, role_code: ROLE_CODES.DEAN },
+        select: "school_scope,is_active,valid_from,valid_until",
+      });
+    }
+
+    throw error;
+  }
+};
+
 const resolveHodDepartmentScope = async (req) => {
   if (req.__hodDepartmentScope instanceof Set) {
     return req.__hodDepartmentScope;
@@ -985,10 +1050,7 @@ const resolveHodDepartmentScope = async (req) => {
   const userId = String(req.userInfo?.id || "").trim();
   if (userId) {
     try {
-      const assignments = await queryAll("user_role_assignments", {
-        where: { user_id: userId, role_code: ROLE_CODES.HOD },
-        select: "department_id,department_scope,is_active,valid_from,valid_until",
-      });
+      const assignments = await loadHodAssignmentsForUser(userId);
 
       for (const assignment of assignments || []) {
         if (!isRoleAssignmentActive(assignment)) {
@@ -1000,7 +1062,7 @@ const resolveHodDepartmentScope = async (req) => {
           departmentIdCandidates.add(uuidDeptId);
         }
 
-        // Also add text-based department_scope as a direct normalized scope value
+        // Legacy fallback: some environments still expose department_scope text.
         const textScope = String(assignment.department_scope || "").trim();
         if (textScope) {
           addScopeValue(textScope);

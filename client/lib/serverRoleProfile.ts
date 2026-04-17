@@ -153,19 +153,31 @@ export async function getCurrentUserProfileWithRoleCodes(
     return profile;
   }
 
+  // The `department_scope` column was dropped during the departments
+  // migration — we query `department_id` exclusively now, with a legacy
+  // fallback for environments that still have `department_scope`.
   let assignmentQuery = await roleLookupClient
     .from("user_role_assignments")
-    .select("id,role_code,school_scope,department_scope,department_id,campus_scope,is_active,valid_from,valid_until")
+    .select("id,role_code,school_scope,department_id,campus_scope,is_active,valid_from,valid_until")
     .eq("user_id", userId);
 
   if (
     assignmentQuery.error &&
-    (String(assignmentQuery.error.message || "").toLowerCase().includes("school_scope") ||
-      String(assignmentQuery.error.message || "").toLowerCase().includes("department_scope"))
+    String(assignmentQuery.error.message || "").toLowerCase().includes("school_scope")
   ) {
     assignmentQuery = await roleLookupClient
       .from("user_role_assignments")
-      .select("id,role_code,department_scope,department_id,campus_scope,is_active,valid_from,valid_until")
+      .select("id,role_code,department_id,campus_scope,is_active,valid_from,valid_until")
+      .eq("user_id", userId);
+  }
+
+  if (
+    assignmentQuery.error &&
+    String(assignmentQuery.error.message || "").toLowerCase().includes("department_id")
+  ) {
+    assignmentQuery = await roleLookupClient
+      .from("user_role_assignments")
+      .select("id,role_code,school_scope,department_scope,campus_scope,is_active,valid_from,valid_until")
       .eq("user_id", userId);
   }
 
