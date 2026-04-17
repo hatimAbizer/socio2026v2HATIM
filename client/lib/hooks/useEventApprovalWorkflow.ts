@@ -650,7 +650,7 @@ function buildGraph(snapshot: WorkflowSnapshot, eventContext?: string | null) {
         title: STEM_TITLES[nodeKey],
         roleCode: STEM_ROLE_CODES[nodeKey],
         status,
-        statusLabel: getStatusLabel(status),
+        statusLabel: inheritedByFest ? "Via Fest" : getStatusLabel(status),
         description,
         approverName: approver.name,
         approverEmail: approver.email,
@@ -803,22 +803,24 @@ function buildGraph(snapshot: WorkflowSnapshot, eventContext?: string | null) {
 
   const nodes: WorkflowGraphNode[] = [...stemNodes, ...serviceNodes];
 
+  const hodNode = stemNodes.find((node) => node.id === "hod");
+  const deanNode = stemNodes.find((node) => node.id === "dean");
   const quickSummary: QuickApprovalSummaryItem[] = [
     {
       id: "L1_HOD",
       label: "HOD Approval",
-      status: stemNodes.find((node) => node.id === "hod")?.data.status || "blocked",
-      statusLabel: getStatusLabel(stemNodes.find((node) => node.id === "hod")?.data.status || "blocked"),
-      timestamp: stemNodes.find((node) => node.id === "hod")?.data.timestamp || null,
-      note: stemNodes.find((node) => node.id === "hod")?.data.reviewNote || null,
+      status: hodNode?.data.status || "blocked",
+      statusLabel: hodNode?.data.statusLabel || getStatusLabel(hodNode?.data.status || "blocked"),
+      timestamp: hodNode?.data.timestamp || null,
+      note: hodNode?.data.reviewNote || null,
     },
     {
       id: "L2_DEAN",
       label: "Dean Approval",
-      status: stemNodes.find((node) => node.id === "dean")?.data.status || "blocked",
-      statusLabel: getStatusLabel(stemNodes.find((node) => node.id === "dean")?.data.status || "blocked"),
-      timestamp: stemNodes.find((node) => node.id === "dean")?.data.timestamp || null,
-      note: stemNodes.find((node) => node.id === "dean")?.data.reviewNote || null,
+      status: deanNode?.data.status || "blocked",
+      statusLabel: deanNode?.data.statusLabel || getStatusLabel(deanNode?.data.status || "blocked"),
+      timestamp: deanNode?.data.timestamp || null,
+      note: deanNode?.data.reviewNote || null,
     },
   ];
 
@@ -1100,7 +1102,10 @@ export function useEventApprovalWorkflow(eventId: string): EventApprovalWorkflow
     };
   }, [snapshot.approvalRequest?.id, scheduleRefresh]);
 
-  const graph = useMemo(() => buildGraph(snapshot), [snapshot]);
+  const graph = useMemo(
+    () => buildGraph(snapshot, snapshot.eventRow?.event_context),
+    [snapshot]
+  );
 
   return {
     nodes: graph.nodes,
