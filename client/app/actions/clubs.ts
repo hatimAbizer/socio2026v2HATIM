@@ -67,3 +67,31 @@ export async function getClubs(): Promise<ClubRecord[]> {
   }
   return data ?? [];
 }
+
+export async function getAllOrganizations(): Promise<ClubRecord[]> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("clubs")
+    .select("*")
+    .order("club_name", { ascending: true });
+
+  if (error) {
+    console.error("getAllOrganizations error:", error.message);
+    return [];
+  }
+  return data ?? [];
+}
+
+export async function deleteClub(clubId: string): Promise<boolean> {
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from("clubs")
+    .delete()
+    .eq("club_id", clubId);
+
+  if (error) {
+    console.error("deleteClub error:", error.message);
+    return false;
+  }
+  return true;
+}
