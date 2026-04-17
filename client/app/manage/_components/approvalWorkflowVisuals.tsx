@@ -28,7 +28,7 @@ const STATUS_CONFIG: Record<ApprovalVisualStatus, StatusVisualConfig> = {
     helperTextClassName: "text-amber-700/80",
   },
   blocked: {
-    label: "Blocked",
+    label: "Locked",
     iconClassName: "text-slate-500",
     badgeClassName: "border border-slate-300 bg-slate-100 text-slate-600",
     nodeClassName: "border border-slate-300 bg-slate-100/95 shadow-slate-300/30 opacity-85",
