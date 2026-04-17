@@ -808,6 +808,7 @@ const MappedEventCard = ({
   const isReadyToPublish =
     !isApprovalPending &&
     !isArchived &&
+    eventLifecycleStatusNorm !== "published" &&
     (eventWorkflowStatusNorm === "fully_approved" || eventLifecycleStatusNorm === "approved");
   const statusLabel = isEditLocked
     ? "APPROVAL PENDING"
