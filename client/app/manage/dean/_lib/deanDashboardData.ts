@@ -42,6 +42,9 @@ type EventDetailRow = {
   organizing_school?: string | null;
   campus_hosted_at?: string | null;
   organizer_email?: string | null;
+  budget_amount?: number | string | null;
+  estimated_budget_amount?: number | string | null;
+  total_estimated_expense?: number | string | null;
 };
 
 type FestDetailRow = {
@@ -217,6 +220,22 @@ function parseJsonArraySafely(value: unknown): any[] {
   return [];
 }
 
+function getEventBudgetAmount(
+  eventRow: EventDetailRow | null | undefined,
+  budgetRow: BudgetRow | null | undefined
+): number {
+  const directBudget =
+    toNumber(eventRow?.total_estimated_expense) ||
+    toNumber(eventRow?.estimated_budget_amount) ||
+    toNumber(eventRow?.budget_amount);
+
+  if (directBudget > 0) {
+    return directBudget;
+  }
+
+  return toNumber(budgetRow?.total_estimated_expense);
+}
+
 function getFestBudgetAmount(festRow: FestDetailRow | null | undefined): number {
   const directBudget =
     toNumber(festRow?.total_estimated_expense) ||
@@ -379,6 +398,53 @@ async function fetchFestRowsWithFallback(
   return [];
 }
 
+async function fetchEventRowsById(
+  supabase: any,
+  eventIds: string[]
+): Promise<Map<string, EventDetailRow>> {
+  if (eventIds.length === 0) {
+    return new Map();
+  }
+
+  const fullSelect =
+    "event_id, title, event_date, organizing_dept, organizing_school, campus_hosted_at, organizer_email, budget_amount, estimated_budget_amount, total_estimated_expense";
+  const legacySelect =
+    "event_id, title, event_date, organizing_dept, organizing_school, campus_hosted_at, organizer_email";
+
+  let { data, error } = await supabase
+    .from("events")
+    .select(fullSelect)
+    .in("event_id", eventIds);
+
+  if (
+    error &&
+    (isMissingColumnError(error, "budget_amount") ||
+      isMissingColumnError(error, "estimated_budget_amount") ||
+      isMissingColumnError(error, "total_estimated_expense") ||
+      isMissingColumnError(error, "organizing_school") ||
+      isMissingColumnError(error, "campus_hosted_at") ||
+      isMissingColumnError(error))
+  ) {
+    const retry = await supabase
+      .from("events")
+      .select(legacySelect)
+      .in("event_id", eventIds);
+    data = retry.data;
+    error = retry.error;
+  }
+
+  if (error) {
+    throw new Error(`Failed to load event details: ${error.message}`);
+  }
+
+  const rows = Array.isArray(data) ? (data as EventDetailRow[]) : [];
+  return new Map(
+    rows
+      .map((row) => [normalizeText(row.event_id), row] as const)
+      .filter(([eventId]) => eventId.length > 0)
+  );
+}
+
 export async function fetchDeanDashboardData({
   supabase,
   schoolId,
@@ -488,21 +554,7 @@ export async function fetchDeanDashboardData({
 
   let eventRowsById = new Map<string, EventDetailRow>();
   if (eventIds.length > 0) {
-    const { data: eventData, error: eventError } = await supabase
-      .from("events")
-      .select("event_id, title, event_date, organizing_dept, organizing_school, campus_hosted_at, organizer_email")
-      .in("event_id", eventIds);
-
-    if (eventError) {
-      throw new Error(`Failed to load event details: ${eventError.message}`);
-    }
-
-    const eventRows = Array.isArray(eventData) ? (eventData as EventDetailRow[]) : [];
-    eventRowsById = new Map(
-      eventRows
-        .map((row) => [normalizeText(row.event_id), row] as const)
-        .filter(([eventId]) => eventId.length > 0)
-    );
+    eventRowsById = await fetchEventRowsById(supabase, eventIds);
   }
 
   let festRowsById = new Map<string, FestDetailRow>();
@@ -618,7 +670,7 @@ export async function fetchDeanDashboardData({
         entityType: isFestEntity ? "fest" : "event",
         totalBudget: isFestEntity
           ? getFestBudgetAmount(festRow)
-          : toNumber(budgetRow?.total_estimated_expense),
+          : getEventBudgetAmount(eventRow, budgetRow),
         coordinatorName: deriveCoordinatorName(
           organizerEmail,
           organizerEmail ? userNamesByEmail.get(organizerEmail) : null
@@ -750,6 +802,20 @@ export async function fetchDeanDashboardData({
     );
   }
 
+  let kpiEventRowsById = new Map<string, EventDetailRow>();
+  if (kpiEventIds.length > 0) {
+    const missingEventIds = kpiEventIds.filter((eventId) => !eventRowsById.has(eventId));
+    if (missingEventIds.length > 0) {
+      const additionalRows = await fetchEventRowsById(supabase, missingEventIds);
+      kpiEventRowsById = new Map([
+        ...Array.from(eventRowsById.entries()),
+        ...Array.from(additionalRows.entries()),
+      ]);
+    } else {
+      kpiEventRowsById = new Map(eventRowsById);
+    }
+  }
+
     const kpiFestIds = Array.from(
       new Set(
         filteredKpiRequestRows
@@ -778,7 +844,10 @@ export async function fetchDeanDashboardData({
     const budgetValue =
       entityType === "FEST"
         ? getFestBudgetAmount(kpiFestsById.get(entityRef) || null)
-        : toNumber(kpiBudgetsByEventId.get(entityRef)?.total_estimated_expense);
+        : getEventBudgetAmount(
+            kpiEventRowsById.get(entityRef) || null,
+            kpiBudgetsByEventId.get(entityRef) || null
+          );
 
     const existing = departmentMap.get(departmentName) || {
       requested: 0,

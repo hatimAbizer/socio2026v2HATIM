@@ -1654,6 +1654,54 @@ const resolveEventIdFromApprovalRequest = (approvalRequest) => {
   return String(approvalRequest?.event_id || approvalRequest?.entity_ref || "").trim();
 };
 
+const resolveBudgetAmountFromEventRow = async (eventId) => {
+  const attemptSelects = [
+    "event_id,total_estimated_expense,estimated_budget_amount,budget_amount",
+    "event_id,estimated_budget_amount,budget_amount",
+    "event_id,budget_amount",
+  ];
+
+  for (const select of attemptSelects) {
+    try {
+      const eventRow = await queryOne("events", {
+        where: { event_id: eventId },
+        select,
+      });
+
+      if (!eventRow) {
+        return null;
+      }
+
+      const candidates = [
+        eventRow.total_estimated_expense,
+        eventRow.estimated_budget_amount,
+        eventRow.budget_amount,
+      ];
+
+      for (const candidate of candidates) {
+        const parsed = toFiniteNumber(candidate, 0);
+        if (parsed > 0) {
+          return parsed;
+        }
+      }
+
+      return 0;
+    } catch (error) {
+      if (
+        isMissingColumnError(error, "total_estimated_expense") ||
+        isMissingColumnError(error, "estimated_budget_amount") ||
+        isMissingColumnError(error, "budget_amount")
+      ) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  return null;
+};
+
 const resolveBudgetAmountForApprovalRequest = async (approvalRequest) => {
   const eventId = resolveEventIdFromApprovalRequest(approvalRequest);
   if (!eventId) {
@@ -1661,13 +1709,18 @@ const resolveBudgetAmountForApprovalRequest = async (approvalRequest) => {
   }
 
   try {
+    const eventBudget = await resolveBudgetAmountFromEventRow(eventId);
+    if (eventBudget !== null && eventBudget > 0) {
+      return eventBudget;
+    }
+
     const budgetRecord = await queryOne("event_budgets", {
       where: { event_id: eventId },
       select: "event_id,total_estimated_expense,total_actual_expense",
     });
 
     if (!budgetRecord) {
-      return 0;
+      return eventBudget !== null ? eventBudget : 0;
     }
 
     const estimatedExpense = toFiniteNumber(budgetRecord.total_estimated_expense, 0);
@@ -1675,7 +1728,12 @@ const resolveBudgetAmountForApprovalRequest = async (approvalRequest) => {
       return estimatedExpense;
     }
 
-    return Math.max(toFiniteNumber(budgetRecord.total_actual_expense, 0), 0);
+    const actualExpense = Math.max(toFiniteNumber(budgetRecord.total_actual_expense, 0), 0);
+    if (actualExpense > 0) {
+      return actualExpense;
+    }
+
+    return eventBudget !== null ? eventBudget : 0;
   } catch (error) {
     if (isMissingRelationError(error) || isMissingColumnError(error, "total_estimated_expense")) {
       return null;

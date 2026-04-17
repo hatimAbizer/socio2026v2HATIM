@@ -3300,7 +3300,7 @@ export default function EventForm({
                 </div>
                 )}
 
-                {
+                {(!showStandaloneFlowStepper || standaloneFlowStep === "details") && (
                   <div
                     id="additionalRequests-section"
                     className="bg-gray-50 border border-gray-200 rounded-2xl p-5 sm:p-6 space-y-5"
@@ -3783,7 +3783,7 @@ export default function EventForm({
                       </div>
                     </div>
                   </div>
-                }
+                )}
 
                 {(!showStandaloneFlowStepper || standaloneFlowStep === "details") && (
                 <div
