@@ -80,12 +80,17 @@ router.get("/", async (req, res) => {
       .order("name", { ascending: true });
 
     if (error) {
-      // Table hasn't been created yet — return canonical fallback
-      if (
-        error.code === "42P01" ||
-        error.message?.toLowerCase().includes("does not exist") ||
-        error.message?.toLowerCase().includes("relation")
-      ) {
+      // Table doesn't exist yet OR schema cache hasn't refreshed after migration — return fallback
+      const code = String(error.code || "").toUpperCase();
+      const msg = String(error.message || "").toLowerCase();
+      const isTableMissing =
+        code === "42P01" ||
+        code === "PGRST205" ||
+        msg.includes("does not exist") ||
+        msg.includes("relation") ||
+        msg.includes("schema cache") ||
+        msg.includes("could not find");
+      if (isTableMissing) {
         return res.status(200).json({ departments: FALLBACK_DEPARTMENTS });
       }
       throw error;

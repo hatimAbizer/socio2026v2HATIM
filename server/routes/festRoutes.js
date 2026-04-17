@@ -1797,6 +1797,8 @@ router.post(
         const missingTotalEstimatedColumn = isMissingColumnError(insertError, "total_estimated_expense");
         const missingOrgDeptIdColumn = isMissingColumnError(insertError, "organizing_dept_id");
         const missingOrgDeptColumn = isMissingColumnError(insertError, "organizing_dept");
+        // department_hosted_at was dropped in the same migration that dropped organizing_dept
+        const missingDeptHostedAtColumn = isMissingColumnError(insertError, "department_hosted_at");
 
         if (
           !missingStatusColumn &&
@@ -1804,7 +1806,8 @@ router.post(
           !missingEstimatedBudgetColumn &&
           !missingTotalEstimatedColumn &&
           !missingOrgDeptIdColumn &&
-          !missingOrgDeptColumn
+          !missingOrgDeptColumn &&
+          !missingDeptHostedAtColumn
         ) {
           throw insertError;
         }
@@ -1828,9 +1831,11 @@ router.post(
         if (missingOrgDeptIdColumn) {
           delete fallbackFestPayload.organizing_dept_id;
         }
-        // organizing_dept missing → post-migration schema (column was dropped), drop text column
-        if (missingOrgDeptColumn) {
+        // organizing_dept and department_hosted_at were dropped together in the same migration;
+        // remove both whenever either is missing to avoid a second insert failure.
+        if (missingOrgDeptColumn || missingDeptHostedAtColumn) {
           delete fallbackFestPayload.organizing_dept;
+          delete fallbackFestPayload.department_hosted_at;
         }
         inserted = await insert(festTable, [fallbackFestPayload]);
       }
@@ -2341,12 +2346,16 @@ router.put(
         const missingBudgetAmountColumn = isMissingColumnError(updateError, "budget_amount");
         const missingEstimatedBudgetColumn = isMissingColumnError(updateError, "estimated_budget_amount");
         const missingTotalEstimatedColumn = isMissingColumnError(updateError, "total_estimated_expense");
+        const missingOrgDeptColumn = isMissingColumnError(updateError, "organizing_dept");
+        const missingDeptHostedAtColumn = isMissingColumnError(updateError, "department_hosted_at");
 
         if (
           !missingStatusColumn &&
           !missingBudgetAmountColumn &&
           !missingEstimatedBudgetColumn &&
-          !missingTotalEstimatedColumn
+          !missingTotalEstimatedColumn &&
+          !missingOrgDeptColumn &&
+          !missingDeptHostedAtColumn
         ) {
           console.error("[Fest Update ERROR] Supabase update failed:", {
             errorMessage: updateError.message,
@@ -2362,17 +2371,14 @@ router.put(
         const fallbackPayload = {
           ...updatePayload,
         };
-        if (missingStatusColumn) {
-          delete fallbackPayload.status;
-        }
-        if (missingBudgetAmountColumn) {
-          delete fallbackPayload.budget_amount;
-        }
-        if (missingEstimatedBudgetColumn) {
-          delete fallbackPayload.estimated_budget_amount;
-        }
-        if (missingTotalEstimatedColumn) {
-          delete fallbackPayload.total_estimated_expense;
+        if (missingStatusColumn) delete fallbackPayload.status;
+        if (missingBudgetAmountColumn) delete fallbackPayload.budget_amount;
+        if (missingEstimatedBudgetColumn) delete fallbackPayload.estimated_budget_amount;
+        if (missingTotalEstimatedColumn) delete fallbackPayload.total_estimated_expense;
+        // organizing_dept and department_hosted_at were dropped together in the same migration
+        if (missingOrgDeptColumn || missingDeptHostedAtColumn) {
+          delete fallbackPayload.organizing_dept;
+          delete fallbackPayload.department_hosted_at;
         }
         updated = await update(festTable, fallbackPayload, { fest_id: festId });
       }
