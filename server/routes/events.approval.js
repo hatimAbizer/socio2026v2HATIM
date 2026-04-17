@@ -782,14 +782,87 @@ router.post("/:eventId/submit", async (req, res) => {
         });
       }
 
+      const isParentOrganizer =
+        normalizeText(parentFest.auth_uuid) === normalizeText(req.userId) ||
+        requesterEmail === normalizeEmail(parentFest.created_by) ||
+        requesterEmail === normalizeEmail(parentFest.contact_email);
+
       const isSubhead = await ensureSubheadForFest({
         festId: parentFestId,
         requesterEmail,
       });
 
-      if (!isSubhead && !isMasterAdmin(req.userInfo)) {
+      if (!isParentOrganizer && !isSubhead && !isMasterAdmin(req.userInfo)) {
         return res.status(403).json({
-          error: "Only approved fest subheads can submit events under this fest.",
+          error: "Only the fest organiser or an approved subhead can submit events under this fest.",
+        });
+      }
+
+      // Fest owner submitting their own child event: the organiser step is implicit, so
+      // skip PENDING_ORGANISER and go straight to ORGANISER_APPROVED. Downstream services
+      // (IT/Venue/Catering/Stalls) are released in the same step.
+      if (isParentOrganizer) {
+        const nowIso = new Date().toISOString();
+        const updatedEvent = await updateEventWorkflow(eventId, EVENT_STATUS.ORGANISER_APPROVED, {
+          event_context: EVENT_CONTEXT.UNDER_FEST,
+          parent_fest_id: parentFestId,
+          workflow_version: nextVersion,
+          rejected_at: null,
+          rejected_by: null,
+          rejection_reason: null,
+        });
+
+        await logApprovalAction({
+          entityId: eventId,
+          step: "organiser_review",
+          action: "auto_approved",
+          actorEmail: requesterEmail,
+          actorRole: "organiser",
+          notes: "Auto-approved: event submitted by parent fest organiser.",
+          version: nextVersion,
+        });
+
+        try {
+          const { data: arRows } = await supabase
+            .from("approval_requests")
+            .select("id,status")
+            .eq("entity_ref", eventId)
+            .in("entity_type", ["FEST_CHILD_EVENT", "EVENT"])
+            .in("status", ["UNDER_REVIEW", "PENDING", "DRAFT"]);
+
+          if (arRows && arRows.length > 0) {
+            const arId = arRows[0].id;
+            await supabase
+              .from("approval_steps")
+              .update({ status: "APPROVED", decided_at: nowIso })
+              .eq("approval_request_id", arId)
+              .eq("role_code", "ORGANIZER")
+              .eq("status", "PENDING");
+
+            await supabase
+              .from("approval_requests")
+              .update({ status: "APPROVED", decided_at: nowIso })
+              .eq("id", arId);
+          }
+        } catch (_stepUpdateErr) {
+          console.warn("[EventApproval] submit auto-approve: approval_step update failed:", _stepUpdateErr?.message || _stepUpdateErr);
+        }
+
+        try {
+          await supabase
+            .from("service_requests")
+            .update({ status: "PENDING", updated_at: nowIso })
+            .eq("event_id", eventId)
+            .eq("status", "QUEUED");
+        } catch (_serviceReleaseErr) {
+          console.warn("[EventApproval] submit auto-approve: service_requests release failed:", _serviceReleaseErr?.message || _serviceReleaseErr);
+        }
+
+        return res.status(200).json({
+          success: true,
+          status: EVENT_STATUS.ORGANISER_APPROVED,
+          auto_approved: true,
+          event: updatedEvent,
         });
       }
 
@@ -1092,6 +1165,18 @@ router.post("/:eventId/organiser-action", async (req, res) => {
       } catch (_stepUpdateErr) {
         // Non-fatal — the event itself was approved above; step sync failure is logged only.
         console.warn("[EventApproval] organiser-action: approval_step update failed:", _stepUpdateErr?.message || _stepUpdateErr);
+      }
+
+      // Release any service_requests that were queued while awaiting organiser approval so
+      // the IT/Venue/Catering/Stalls dashboards can pick them up.
+      try {
+        await supabase
+          .from("service_requests")
+          .update({ status: "PENDING", updated_at: nowIso })
+          .eq("event_id", eventId)
+          .eq("status", "QUEUED");
+      } catch (_serviceReleaseErr) {
+        console.warn("[EventApproval] organiser-action: service_requests release failed:", _serviceReleaseErr?.message || _serviceReleaseErr);
       }
 
       const subOrganiserEmail = getEventOwnerEmail(event);
