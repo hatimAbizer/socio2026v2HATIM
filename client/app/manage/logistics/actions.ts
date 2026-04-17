@@ -410,31 +410,47 @@ function groupRowsByEventId(rows: Array<Record<string, unknown>>) {
   return rowsByEventId;
 }
 
-function mapVenueContext(rows: Array<Record<string, unknown>>) {
+function mapVenueContext(
+  eventRow: Record<string, unknown> | null,
+  rows: Array<Record<string, unknown>>
+) {
+  const additionalRequests = parseAdditionalRequests(eventRow?.additional_requests);
+  const arVenue = (additionalRequests.venue as Record<string, unknown> | null | undefined) || {};
+
   const row = rows[0] || null;
   const venueId =
+    normalizeText(arVenue.selectedVenue) ||
+    normalizeText(arVenue.customVenue) ||
     firstNonEmptyValue(row, ["venue_id", "venue", "room_id", "hall_id", "venue_name"]) ||
     "Not specified";
   const startTime =
+    normalizeText(arVenue.startTime) ||
     firstNonEmptyValue(row, ["start_time", "slot_start", "from_time", "booking_start", "starts_at"]) ||
     "Not specified";
   const endTime =
+    normalizeText(arVenue.endTime) ||
     firstNonEmptyValue(row, ["end_time", "slot_end", "to_time", "booking_end", "ends_at"]) ||
     "Not specified";
 
   return {
     summary: `${venueId} (${startTime} - ${endTime})`,
     fields: [
-      { label: "Venue ID", value: venueId },
+      { label: "Venue", value: venueId },
       { label: "Start Time", value: startTime },
       { label: "End Time", value: endTime },
     ],
   };
 }
 
-function mapItContext(rows: Array<Record<string, unknown>>) {
-  const equipmentCounts = new Map<string, number>();
+function mapItContext(
+  eventRow: Record<string, unknown> | null,
+  rows: Array<Record<string, unknown>>
+) {
+  const additionalRequests = parseAdditionalRequests(eventRow?.additional_requests);
+  const arIt = (additionalRequests.it as Record<string, unknown> | null | undefined) || {};
+  const formDescription = normalizeText(arIt.description);
 
+  const equipmentCounts = new Map<string, number>();
   rows.forEach((row) => {
     const equipmentName =
       firstNonEmptyValue(row, ["resource_name", "item_name", "name", "title", "resource_type", "category"]) ||
@@ -442,22 +458,37 @@ function mapItContext(rows: Array<Record<string, unknown>>) {
     const quantityRaw =
       firstNonEmptyValue(row, ["quantity", "qty", "count", "units_requested", "requested_quantity"]);
     const quantity = Math.max(toNumber(quantityRaw), 1);
-
     equipmentCounts.set(equipmentName, (equipmentCounts.get(equipmentName) || 0) + quantity);
   });
 
   const parts = Array.from(equipmentCounts.entries()).map(
     ([name, quantity]) => `${quantity} ${name}`
   );
-  const equipmentList = parts.length > 0 ? parts.join(", ") : "No equipment listed";
+  const equipmentList = parts.length > 0 ? parts.join(", ") : "";
+
+  const descriptionValue = formDescription || "No description provided";
+  const equipmentValue = equipmentList || "No equipment listed";
+  const summary = formDescription || equipmentList || "IT support requested";
 
   return {
-    summary: equipmentList,
-    fields: [{ label: "Equipment List", value: equipmentList }],
+    summary,
+    fields: [
+      { label: "IT Requirements", value: descriptionValue },
+      { label: "Equipment List", value: equipmentValue },
+    ],
   };
 }
 
-function mapCateringContext(rows: Array<Record<string, unknown>>) {
+function mapCateringContext(
+  eventRow: Record<string, unknown> | null,
+  rows: Array<Record<string, unknown>>
+) {
+  const additionalRequests = parseAdditionalRequests(eventRow?.additional_requests);
+  const arCatering =
+    (additionalRequests.catering as Record<string, unknown> | null | undefined) || {};
+  const formDescription = normalizeText(arCatering.description);
+  const formHeadcount = Math.max(toNumber(arCatering.approximateCount), 0);
+
   const menuNotes = Array.from(
     new Set(
       rows
@@ -475,7 +506,7 @@ function mapCateringContext(rows: Array<Record<string, unknown>>) {
     )
   );
 
-  const totalHeadcount = rows.reduce((total, row) => {
+  const legacyHeadcount = rows.reduce((total, row) => {
     const countText = firstNonEmptyValue(row, [
       "total_headcount",
       "headcount",
@@ -486,7 +517,10 @@ function mapCateringContext(rows: Array<Record<string, unknown>>) {
     return total + Math.max(toNumber(countText), 0);
   }, 0);
 
-  const menuSummary = menuNotes.length > 0 ? menuNotes.join(" | ") : "Menu not provided";
+  const menuSummary =
+    formDescription ||
+    (menuNotes.length > 0 ? menuNotes.join(" | ") : "Menu not provided");
+  const totalHeadcount = formHeadcount > 0 ? formHeadcount : legacyHeadcount;
   const headcountSummary = totalHeadcount > 0 ? String(totalHeadcount) : "Not specified";
 
   return {
@@ -502,6 +536,25 @@ function mapStallsContext(
   eventRow: Record<string, unknown> | null,
   stallsRows: Array<Record<string, unknown>>
 ) {
+  const additionalRequests = parseAdditionalRequests(eventRow?.additional_requests);
+  const arStalls =
+    (additionalRequests.stalls as Record<string, unknown> | null | undefined) || {};
+
+  const canopySelected = toBoolean(arStalls.canopySelected);
+  const canopyQty = Math.max(toNumber(arStalls.canopyQuantity), 0);
+  const canopyDescription = normalizeText(arStalls.canopyDescription);
+  const hardboardSelected = toBoolean(arStalls.hardboardSelected);
+  const hardboardQty = Math.max(toNumber(arStalls.hardboardQuantity), 0);
+  const hardboardDescription = normalizeText(arStalls.hardboardDescription);
+  const formDescription = normalizeText(arStalls.description);
+
+  const canopySummary = canopySelected
+    ? `${canopyQty || "Qty n/a"} canopy${canopyDescription ? ` — ${canopyDescription}` : ""}`
+    : "";
+  const hardboardSummary = hardboardSelected
+    ? `${hardboardQty || "Qty n/a"} hardboard${hardboardDescription ? ` — ${hardboardDescription}` : ""}`
+    : "";
+
   const stallCount =
     firstNonEmptyValue(eventRow, [
       "stall_count",
@@ -523,13 +576,20 @@ function mapStallsContext(
     firstNonEmptyValue(stallsRows[0], ["setup_location", "stall_location", "location", "venue"]) ||
     "Not specified";
 
-  return {
-    summary: `${stallCount} stalls at ${setupLocation}`,
-    fields: [
-      { label: "Stall Count", value: stallCount },
-      { label: "Setup Location", value: setupLocation },
-    ],
-  };
+  const fields: Array<{ label: string; value: string }> = [];
+  if (canopySummary) fields.push({ label: "Canopy", value: canopySummary });
+  if (hardboardSummary) fields.push({ label: "Hardboard", value: hardboardSummary });
+  if (formDescription) fields.push({ label: "Notes", value: formDescription });
+  fields.push({ label: "Stall Count", value: stallCount });
+  fields.push({ label: "Setup Location", value: setupLocation });
+
+  const summaryParts = [canopySummary, hardboardSummary].filter((part) => part.length > 0);
+  const summary =
+    summaryParts.length > 0
+      ? summaryParts.join(" + ")
+      : formDescription || `${stallCount} stalls at ${setupLocation}`;
+
+  return { summary, fields };
 }
 
 function resolveEventIdFromRequestRow(requestRow: Record<string, unknown>): string {
@@ -546,15 +606,15 @@ function buildContextForService(params: {
   const serviceRows = serviceRowsByEventId.get(eventId) || [];
 
   if (service === "venue") {
-    return mapVenueContext(serviceRows);
+    return mapVenueContext(eventRow, serviceRows);
   }
 
   if (service === "it") {
-    return mapItContext(serviceRows);
+    return mapItContext(eventRow, serviceRows);
   }
 
   if (service === "catering") {
-    return mapCateringContext(serviceRows);
+    return mapCateringContext(eventRow, serviceRows);
   }
 
   return mapStallsContext(eventRow, serviceRows);
