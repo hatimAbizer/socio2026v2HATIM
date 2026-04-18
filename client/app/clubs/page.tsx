@@ -6,7 +6,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 
 import { CentreClubCard } from "../_components/Discover/ClubCard";
 import Footer from "../_components/Home/Footer";
-import { allCentres, Centre } from "../lib/centresData";
+import { getCentres } from "@/app/actions/clubs";
+import { ClubRecord } from "@/app/actions/clubs";
 
 interface FilterOption {
   name: string;
@@ -46,6 +47,15 @@ const CentresPageContent = () => {
     { name: "Leadership", active: false },
     { name: "Sports", active: false },
   ]);
+  const [allCentres, setAllCentres] = useState<ClubRecord[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  useEffect(() => {
+    getCentres().then((data) => {
+      setAllCentres(data);
+      setDataLoading(false);
+    });
+  }, []);
 
   useEffect(() => {
     const activeFilter = filterOptions
@@ -112,9 +122,9 @@ const CentresPageContent = () => {
 
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
-      const titleMatch = centre.title?.toLowerCase().includes(q);
+      const titleMatch = centre.club_name?.toLowerCase().includes(q);
       const subtitleMatch = centre.subtitle?.toLowerCase().includes(q);
-      const descriptionMatch = centre.description?.toLowerCase().includes(q);
+      const descriptionMatch = centre.club_description?.toLowerCase().includes(q);
       const categoryMatch = centre.category?.toLowerCase().includes(q);
 
       if (!titleMatch && !subtitleMatch && !descriptionMatch && !categoryMatch) {
@@ -183,11 +193,10 @@ const CentresPageContent = () => {
                 <button
                   key={index}
                   onClick={() => handleFilterClick(filter.name)}
-                  className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-full text-xs sm:text-sm font-medium transition-all cursor-pointer touch-manipulation ${
-                    filter.active
-                      ? "bg-[#154CB3] text-white"
-                      : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-100"
-                  }`}
+                  className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-full text-xs sm:text-sm font-medium transition-all cursor-pointer touch-manipulation ${filter.active
+                    ? "bg-[#154CB3] text-white"
+                    : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-100"
+                    }`}
                 >
                   {filter.name}
                 </button>
@@ -258,12 +267,12 @@ const CentresPageContent = () => {
                 {filteredCentres.map((centre) => (
                   <div key={centre.id} className="min-w-0 h-full">
                     <CentreClubCard
-                      title={centre.title}
+                      title={centre.club_name}
                       subtitle={centre.subtitle}
-                      description={centre.description}
-                      link={centre.externalLink}
+                      description={centre.club_description}
+                      link={centre.club_web_link}
                       slug={centre.slug}
-                      image={centre.image}
+                      image={centre.club_banner_url}
                       type="center"
                     />
                   </div>
