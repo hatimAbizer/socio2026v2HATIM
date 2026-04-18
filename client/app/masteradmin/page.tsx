@@ -31,7 +31,7 @@ import {
   Building2,
 } from "lucide-react";
 import AdminDashboardView from "../_components/Admin/AdminDashboardView";
-import { getAllOrganizations, deleteClub, ClubRecord } from "@/app/actions/clubs";
+import { deleteClub, ClubRecord } from "@/app/actions/clubs";
 
 const API_FALLBACK_ORIGINS = [
   "https://socioserver-snowy.vercel.app",
@@ -708,8 +708,17 @@ export default function MasterAdminPage() {
   const fetchClubs = async (options?: { unpaged?: boolean }) => {
     try {
       setIsLoading(true);
-      const data = await getAllOrganizations();
-      let filtered = data;
+      const { data, error } = await supabase
+        .from("clubs")
+        .select("*")
+        .order("club_name", { ascending: true });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      const allOrganizations = (data ?? []) as ClubRecord[];
+      let filtered = allOrganizations;
 
       if (debouncedClubSearch.trim()) {
         const query = debouncedClubSearch.toLowerCase();

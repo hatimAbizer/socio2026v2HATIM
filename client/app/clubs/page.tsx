@@ -6,8 +6,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 
 import { CentreClubCard } from "../_components/Discover/ClubCard";
 import Footer from "../_components/Home/Footer";
-import { getAllOrganizations } from "@/app/actions/clubs";
 import { ClubRecord } from "@/app/actions/clubs";
+import supabase from "@/lib/supabaseClient";
 
 interface FilterOption {
   name: string;
@@ -84,22 +84,32 @@ const CentresPageContent = () => {
     setLoadError(null);
     setDataLoading(true);
 
-    getAllOrganizations()
-      .then((data) => {
-        if (!isMounted) return;
+    const fetchOrganizations = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("clubs")
+          .select("*")
+          .order("club_name", { ascending: true });
 
-        setAllCentres(data);
-        setFilterOptions(createFilterOptions(data, categoryParam));
-      })
-      .catch((error) => {
+        if (!isMounted) return;
+        if (error) {
+          throw new Error(error.message);
+        }
+
+        const organizations = (data ?? []) as ClubRecord[];
+        setAllCentres(organizations);
+        setFilterOptions(createFilterOptions(organizations, categoryParam));
+      } catch (error) {
         if (!isMounted) return;
         setAllCentres([]);
         setLoadError(error instanceof Error ? error.message : "Failed to load organizations.");
-      })
-      .finally(() => {
+      } finally {
         if (!isMounted) return;
         setDataLoading(false);
-      });
+      }
+    };
+
+    void fetchOrganizations();
 
     return () => {
       isMounted = false;
