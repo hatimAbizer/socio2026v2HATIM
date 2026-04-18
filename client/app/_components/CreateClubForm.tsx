@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import { christCampuses } from "../lib/eventFormSchema";
 import { createClub } from "../actions/clubs";
+import { useAuth } from "../../context/AuthContext";
+import { buildServerApiUrl } from "../../lib/apiBase";
 
 type ClubType = "club" | "centre" | "cell";
 
@@ -19,7 +21,8 @@ const PREDEFINED_ROLES = [
 ];
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
-const BANNER_URL_EXT_REGEX = /\.(jpg|jpeg|png)$/i;
+const MAX_BANNER_FILE_SIZE = 3 * 1024 * 1024;
+const ALLOWED_BANNER_FILE_TYPES = ["image/jpeg", "image/png"];
 
 interface ClubEditor {
   email: string;
@@ -31,7 +34,6 @@ interface ClubFormState {
   clubName: string;
   subtitle: string;
   detailedDescription: string;
-  clubBannerUrl: string;
   clubRegistrations: boolean;
   clubCampus: string[];
   clubEditors: ClubEditor[];
@@ -42,16 +44,7 @@ interface ClubFormState {
 const createUiKey = (prefix: string): string =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-const getBannerExtensionIsValid = (urlValue: string): boolean => {
-  try {
-    const url = new URL(urlValue);
-    return BANNER_URL_EXT_REGEX.test(url.pathname);
-  } catch {
-    return false;
-  }
-};
-
-const validateBannerResolution = (urlValue: string): Promise<string | null> =>
+const validateBannerResolution = (file: File): Promise<string | null> =>
   new Promise((resolve) => {
     const image = new Image();
     image.onload = () => {
@@ -61,19 +54,19 @@ const validateBannerResolution = (urlValue: string): Promise<string | null> =>
       }
       resolve(null);
     };
-    image.onerror = () => resolve("Could not load banner URL. Check the URL and file format.");
-    image.src = urlValue;
+    image.onerror = () => resolve("Could not read the selected banner image.");
+    image.src = URL.createObjectURL(file);
   });
 
 export default function CreateClubForm() {
   const router = useRouter();
+  const { session } = useAuth();
 
   const [formData, setFormData] = useState<ClubFormState>({
     type: "club",
     clubName: "",
     subtitle: "",
     detailedDescription: "",
-    clubBannerUrl: "",
     clubRegistrations: false,
     clubCampus: [],
     clubEditors: [],
@@ -82,6 +75,8 @@ export default function CreateClubForm() {
   });
   const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
   const [showOtherRoleInput, setShowOtherRoleInput] = useState(false);
   const [otherRoleInput, setOtherRoleInput] = useState("");
@@ -140,6 +135,32 @@ export default function CreateClubForm() {
     }));
   };
 
+  const handleBannerFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setImageFile(null);
+      setErrors((prev) => ({ ...prev, imageFile: "Club banner is required." }));
+      return;
+    }
+
+    setImageFile(file);
+    if (file.size > MAX_BANNER_FILE_SIZE) {
+      setErrors((prev) => ({ ...prev, imageFile: "Max 3MB" }));
+      return;
+    }
+
+    if (!ALLOWED_BANNER_FILE_TYPES.includes(file.type)) {
+      setErrors((prev) => ({ ...prev, imageFile: "JPG/PNG only" }));
+      return;
+    }
+
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next.imageFile;
+      return next;
+    });
+  };
+
   const validateForm = async (): Promise<boolean> => {
     const nextErrors: Record<string, string | undefined> = {};
 
@@ -155,17 +176,16 @@ export default function CreateClubForm() {
       nextErrors.detailedDescription = "Detailed description is required.";
     }
 
-    const bannerUrl = formData.clubBannerUrl.trim();
-    if (!bannerUrl) {
-      nextErrors.clubBannerUrl = "Club banner URL is required.";
-    } else if (!bannerUrl.startsWith("https://")) {
-      nextErrors.clubBannerUrl = "Banner URL must start with https://";
-    } else if (!getBannerExtensionIsValid(bannerUrl)) {
-      nextErrors.clubBannerUrl = "Only .jpg, .jpeg, or .png banner URLs are allowed.";
+    if (!imageFile) {
+      nextErrors.imageFile = "Club banner is required.";
+    } else if (imageFile.size > MAX_BANNER_FILE_SIZE) {
+      nextErrors.imageFile = "Image file must be less than 3MB";
+    } else if (!ALLOWED_BANNER_FILE_TYPES.includes(imageFile.type)) {
+      nextErrors.imageFile = "Invalid file type. JPG/PNG only.";
     } else {
-      const resolutionError = await validateBannerResolution(bannerUrl);
+      const resolutionError = await validateBannerResolution(imageFile);
       if (resolutionError) {
-        nextErrors.clubBannerUrl = resolutionError;
+        nextErrors.imageFile = resolutionError;
       }
     }
 
@@ -203,12 +223,45 @@ export default function CreateClubForm() {
 
     setIsSubmitting(true);
     try {
+      if (!session?.access_token) {
+        setErrors((prev) => ({ ...prev, submit: "You must be logged in." }));
+        return;
+      }
+
+      if (!imageFile) {
+        setErrors((prev) => ({ ...prev, imageFile: "Club banner is required." }));
+        return;
+      }
+
+      setIsUploadingImage(true);
+      const uploadFormData = new FormData();
+      uploadFormData.append("file", imageFile);
+      const uploadResponse = await fetch(buildServerApiUrl("/upload/fest-image"), {
+        method: "POST",
+        body: uploadFormData,
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+
+      const uploadData = await uploadResponse.json().catch(() => null);
+      if (!uploadResponse.ok || !uploadData?.url) {
+        setErrors((prev) => ({
+          ...prev,
+          submit:
+            uploadData?.error ||
+            uploadData?.message ||
+            "Image upload failed. Please try again.",
+        }));
+        return;
+      }
+
       const result = await createClub({
         type: formData.type,
         club_name: formData.clubName.trim(),
         subtitle: formData.subtitle.trim() || null,
         club_description: formData.detailedDescription.trim(),
-        club_banner_url: formData.clubBannerUrl.trim(),
+        club_banner_url: uploadData.url,
         club_registrations: formData.clubRegistrations,
         club_campus: formData.clubCampus,
         club_editors: formData.clubEditors
@@ -230,6 +283,7 @@ export default function CreateClubForm() {
       router.push("/masteradmin");
       router.refresh();
     } finally {
+      setIsUploadingImage(false);
       setIsSubmitting(false);
     }
   };
@@ -341,25 +395,40 @@ export default function CreateClubForm() {
 
                 <div>
                   <label className="block mb-2 text-sm font-medium text-gray-700">
-                    Club banner URL <span className="text-red-500">*</span>
+                    Club banner: <span className="text-red-500">*</span> (max 3MB, JPG/PNG)
                   </label>
-                  <input
-                    type="url"
-                    value={formData.clubBannerUrl}
-                    onChange={(e) =>
-                      setFormData((prev) => ({ ...prev, clubBannerUrl: e.target.value }))
-                    }
-                    placeholder="https://... (2048x1080, jpg/png)"
-                    className={`w-full px-4 py-3 rounded-lg border ${
-                      errors.clubBannerUrl ? "border-red-500" : "border-gray-300"
-                    } focus:outline-none focus:ring-2 focus:ring-[#154CB3]`}
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Only HTTPS .jpg/.jpeg/.png URLs with exact resolution 2048x1080 are accepted.
-                  </p>
-                  {errors.clubBannerUrl && (
-                    <p className="text-red-500 text-xs mt-1">{errors.clubBannerUrl}</p>
-                  )}
+                  <div className="border border-dashed border-gray-400 rounded-xl p-6 sm:p-8 text-center hover:border-gray-500 transition-colors">
+                    {imageFile ? (
+                      <p className="text-gray-700 font-medium mb-3 text-sm sm:text-base">
+                        New file selected: {imageFile.name}
+                      </p>
+                    ) : (
+                      <p className="text-gray-500 mb-4 text-sm sm:text-base">
+                        JPEG, PNG (max 3MB) - 2048x1080 required
+                      </p>
+                    )}
+
+                    <input
+                      type="file"
+                      id="image-upload-input"
+                      accept="image/jpeg,image/png"
+                      onChange={handleBannerFileChange}
+                      className="hidden"
+                      required
+                      aria-describedby={errors.imageFile ? "imageFile-error" : undefined}
+                    />
+                    <label
+                      htmlFor="image-upload-input"
+                      className="bg-[#154CB3] cursor-pointer text-white text-sm py-2 px-4 rounded-full font-medium hover:bg-[#154cb3eb] transition-colors focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2"
+                    >
+                      {imageFile ? "Change Image" : "Choose File"}
+                    </label>
+                    {errors.imageFile && (
+                      <p id="imageFile-error" className="text-red-500 text-xs mt-2">
+                        {errors.imageFile}
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 <div className="bg-white border border-gray-200 rounded-xl p-4">
@@ -368,7 +437,17 @@ export default function CreateClubForm() {
                       <label className="text-sm font-semibold text-gray-900 block">
                         Club Registrations
                       </label>
-                      <p className="text-xs text-gray-500 mt-1">OFF = false, ON = true</p>
+                      <div className="mt-1">
+                        {formData.clubRegistrations ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+                            ● Green = True
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+                            ● Red = False
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer">
                       <input
@@ -595,7 +674,7 @@ export default function CreateClubForm() {
                 disabled={isSubmitting || formData.type !== "club"}
                 className="px-5 py-2.5 rounded-lg bg-[#154CB3] text-white text-sm font-semibold hover:bg-[#0f3f95] disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {isSubmitting ? "Creating..." : "Create Club"}
+                {isSubmitting || isUploadingImage ? "Creating..." : "Create Club"}
               </button>
             </div>
           </form>
