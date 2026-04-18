@@ -76,17 +76,30 @@ const CentresPageContent = () => {
   ]);
   const [allCentres, setAllCentres] = useState<ClubRecord[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
 
-    getAllOrganizations().then((data) => {
-      if (!isMounted) return;
+    setLoadError(null);
+    setDataLoading(true);
 
-      setAllCentres(data);
-      setFilterOptions(createFilterOptions(data, categoryParam));
-      setDataLoading(false);
-    });
+    getAllOrganizations()
+      .then((data) => {
+        if (!isMounted) return;
+
+        setAllCentres(data);
+        setFilterOptions(createFilterOptions(data, categoryParam));
+      })
+      .catch((error) => {
+        if (!isMounted) return;
+        setAllCentres([]);
+        setLoadError(error instanceof Error ? error.message : "Failed to load organizations.");
+      })
+      .finally(() => {
+        if (!isMounted) return;
+        setDataLoading(false);
+      });
 
     return () => {
       isMounted = false;
@@ -299,6 +312,13 @@ const CentresPageContent = () => {
             {dataLoading ? (
               <div className="min-h-[240px] flex items-center justify-center">
                 <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-[#154CB3]"></div>
+              </div>
+            ) : loadError ? (
+              <div className="text-center py-8 sm:py-12">
+                <h3 className="mt-2 text-lg sm:text-xl font-bold text-red-700 mb-2">
+                  Failed to load organizations
+                </h3>
+                <p className="text-red-600 text-sm sm:text-base">{loadError}</p>
               </div>
             ) : filteredCentres.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-8">

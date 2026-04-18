@@ -68,8 +68,7 @@ export async function getCentres(): Promise<ClubRecord[]> {
     .order("club_name", { ascending: true });
 
   if (error) {
-    console.error("getCentres error:", error.message);
-    return [];
+    throw new Error(`getCentres error: ${error.message}`);
   }
   return data ?? [];
 }
@@ -99,8 +98,7 @@ export async function getClubs(): Promise<ClubRecord[]> {
     .order("club_name", { ascending: true });
 
   if (error) {
-    console.error("getClubs error:", error.message);
-    return [];
+    throw new Error(`getClubs error: ${error.message}`);
   }
   return data ?? [];
 }
@@ -113,8 +111,7 @@ export async function getAllOrganizations(): Promise<ClubRecord[]> {
     .order("club_name", { ascending: true });
 
   if (error) {
-    console.error("getAllOrganizations error:", error.message);
-    return [];
+    throw new Error(`getAllOrganizations error: ${error.message}`);
   }
   return data ?? [];
 }

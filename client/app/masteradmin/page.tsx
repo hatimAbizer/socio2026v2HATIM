@@ -751,9 +751,9 @@ export default function MasterAdminPage() {
         hasNext: startIndex + ITEMS_PER_PAGE < filtered.length,
         hasPrev: clubPage > 1,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching clubs:", error);
-      toast.error("Failed to load clubs");
+      toast.error(error?.message || "Failed to load clubs");
     } finally {
       setIsLoading(false);
     }
