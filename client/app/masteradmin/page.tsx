@@ -2850,7 +2850,8 @@ export default function MasterAdminPage() {
                       onClick={() => handleDeleteClub(showDeleteClubConfirm)}
                       className="flex-1 px-6 py-3 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 transition-colors"
                     >
-                      Delete Organization
+                      Delete organization
+                    
                     </button>
                   </div>
                 </div>
