@@ -8,7 +8,8 @@ import Footer from "@/app/_components/Home/Footer";
 
 const CentreDetailsPage = () => {
   const params = useParams();
-  const slug = params.id as string;
+  const slugParam = params.id;
+  const slug = Array.isArray(slugParam) ? slugParam[0] : slugParam;
   const [centre, setCentre] = useState<ClubRecord | null>(null);
   const [imageError, setImageError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -20,6 +21,8 @@ const CentreDetailsPage = () => {
         setLoading(true);
         const foundCentre = await getCentreBySlug(slug);
         setCentre(foundCentre);
+        setLoading(false);
+      } else {
         setLoading(false);
       }
     }

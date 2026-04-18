@@ -14,6 +14,41 @@ interface FilterOption {
   active: boolean;
 }
 
+const normalizeCategory = (category: string) => category.trim().toLowerCase();
+
+const createFilterOptions = (
+  centres: ClubRecord[],
+  categoryParam: string | null
+): FilterOption[] => {
+  const categories = Array.from(
+    new Set(
+      centres
+        .map((centre) => centre.category?.trim())
+        .filter((category): category is string => Boolean(category))
+    )
+  ).sort((a, b) => a.localeCompare(b));
+
+  const normalizedCategoryParam = categoryParam
+    ? normalizeCategory(categoryParam)
+    : null;
+  const hasMatchingParam = Boolean(
+    normalizedCategoryParam &&
+      categories.some(
+        (category) => normalizeCategory(category) === normalizedCategoryParam
+      )
+  );
+
+  return [
+    { name: "All", active: !hasMatchingParam },
+    ...categories.map((category) => ({
+      name: category,
+      active:
+        hasMatchingParam &&
+        normalizeCategory(category) === normalizedCategoryParam,
+    })),
+  ];
+};
+
 const buildCentresUrl = (category: string | null, searchValue: string) => {
   const params = new URLSearchParams();
   if (category && category.toLowerCase() !== "all") {
@@ -38,53 +73,52 @@ const CentresPageContent = () => {
   const [searchQuery, setSearchQuery] = useState(searchParam);
   const [filterOptions, setFilterOptions] = useState<FilterOption[]>([
     { name: "All", active: true },
-    { name: "Research", active: false },
-    { name: "Academic", active: false },
-    { name: "Cultural", active: false },
-    { name: "Student support", active: false },
-    { name: "Innovation", active: false },
-    { name: "Social", active: false },
-    { name: "Leadership", active: false },
-    { name: "Sports", active: false },
   ]);
   const [allCentres, setAllCentres] = useState<ClubRecord[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
 
   useEffect(() => {
+    let isMounted = true;
+
     getCentres().then((data) => {
+      if (!isMounted) return;
+
       setAllCentres(data);
+      setFilterOptions(createFilterOptions(data, categoryParam));
       setDataLoading(false);
     });
-  }, []);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [categoryParam]);
 
   useEffect(() => {
-    const activeFilter = filterOptions
-      .find((f) => f.active)
-      ?.name.toLowerCase();
-    const paramToMatch = categoryParam?.toLowerCase();
-
-    if (categoryParam && activeFilter !== paramToMatch) {
-      const normalizedCategoryParam = categoryParam.toLowerCase();
-      const newActiveExists = filterOptions.some(
-        (filter) => filter.name.toLowerCase() === normalizedCategoryParam
+    setFilterOptions((prevFilters) => {
+      const normalizedCategoryParam = categoryParam
+        ? normalizeCategory(categoryParam)
+        : null;
+      const hasMatchingParam = Boolean(
+        normalizedCategoryParam &&
+          prevFilters.some(
+            (filter) =>
+              normalizeCategory(filter.name) === normalizedCategoryParam
+          )
       );
 
-      setFilterOptions((prevFilters) =>
-        prevFilters.map((filter) => ({
-          ...filter,
-          active: newActiveExists
-            ? filter.name.toLowerCase() === normalizedCategoryParam
-            : filter.name === "All",
-        }))
+      const nextFilters = prevFilters.map((filter) => ({
+        ...filter,
+        active: hasMatchingParam
+          ? normalizeCategory(filter.name) === normalizedCategoryParam
+          : filter.name === "All",
+      }));
+
+      const didChange = nextFilters.some(
+        (filter, index) => filter.active !== prevFilters[index]?.active
       );
-    } else if (!categoryParam && activeFilter !== "all") {
-      setFilterOptions((prevFilters) =>
-        prevFilters.map((filter) => ({
-          ...filter,
-          active: filter.name === "All",
-        }))
-      );
-    }
+
+      return didChange ? nextFilters : prevFilters;
+    });
   }, [categoryParam]);
 
   const activeFilter =
@@ -112,7 +146,7 @@ const CentresPageContent = () => {
     return () => window.clearTimeout(timeoutId);
   }, [categoryParam, router, searchParam, searchQuery]);
 
-  const filteredCentres = allCentres.filter((centre: Centre) => {
+  const filteredCentres = allCentres.filter((centre: ClubRecord) => {
     if (
       activeFilter !== "All" &&
       centre.category?.toLowerCase() !== activeFilter.toLowerCase()
@@ -262,17 +296,21 @@ const CentresPageContent = () => {
           </h2>
 
           <div>
-            {filteredCentres.length > 0 ? (
+            {dataLoading ? (
+              <div className="min-h-[240px] flex items-center justify-center">
+                <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-[#154CB3]"></div>
+              </div>
+            ) : filteredCentres.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-8">
                 {filteredCentres.map((centre) => (
-                  <div key={centre.id} className="min-w-0 h-full">
+                  <div key={centre.club_id} className="min-w-0 h-full">
                     <CentreClubCard
                       title={centre.club_name}
-                      subtitle={centre.subtitle}
-                      description={centre.club_description}
-                      link={centre.club_web_link}
-                      slug={centre.slug}
-                      image={centre.club_banner_url}
+                      subtitle={centre.subtitle ?? undefined}
+                      description={centre.club_description ?? "No description provided."}
+                      link={centre.club_web_link ?? undefined}
+                      slug={centre.slug ?? undefined}
+                      image={centre.club_banner_url ?? undefined}
                       type="center"
                     />
                   </div>
