@@ -119,16 +119,9 @@ router.post(
       const orgSchool = item.organizing_school || null;
       const parentFestId = item.fest_id || null;
 
-      // Check if this is an under-fest event whose parent already completed Stage 1
-      let allStage1Skipped = false;
-      if (type === "event" && parentFestId) {
-        const parentApproval = await queryOne("approvals", {
-          where: { event_or_fest_id: parentFestId, type: "fest" },
-        });
-        if (parentApproval && parentApproval.current_stage === 2) {
-          allStage1Skipped = true;
-        }
-      }
+      // Under-fest events always skip ALL Stage 1 approvals (HOD, Dean, CFO, Finance)
+      // The fest itself handles Stage 1; events under it go straight to Stage 2
+      const allStage1Skipped = type === "event" && !!parentFestId;
 
       // Auto-assign HOD and Dean
       const hodUser = allStage1Skipped ? null : await findHodForSchool(orgSchool);

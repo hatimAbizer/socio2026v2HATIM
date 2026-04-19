@@ -850,6 +850,116 @@ const FullPageSpinner: React.FC<{ text: string }> = ({ text }) => (
   </div>
 );
 
+interface ApprovalsSetupViewProps {
+  organizingSchool: string;
+  organizingDept: string;
+  festId: string | null;
+  approvalExists: boolean | null;
+  isSubmitting: boolean;
+  onSubmitForApproval: () => void;
+  onBackToDetails: () => void;
+  session: any;
+}
+
+function ApprovalsSetupView({
+  organizingSchool,
+  organizingDept,
+  festId,
+  approvalExists,
+  isSubmitting,
+  onSubmitForApproval,
+  onBackToDetails,
+}: ApprovalsSetupViewProps) {
+  const steps = [
+    { key: 'hod', label: 'HOD', desc: 'Head of Department', color: 'blue' },
+    { key: 'dean', label: 'Dean', desc: 'Dean of the School', color: 'indigo' },
+    { key: 'cfo', label: 'CFO / Campus Director', desc: 'Finance & campus oversight', color: 'purple' },
+    { key: 'accounts', label: 'Accounts Office', desc: 'Financial clearance', color: 'violet' },
+  ];
+
+  return (
+    <div className="p-6 sm:p-8 md:p-10">
+      <h2 className="text-xl sm:text-2xl font-bold text-[#063168] mb-2">Approvals Setup</h2>
+      <p className="text-sm text-gray-500 mb-8">
+        Your fest will go through the following approval chain before going live. Approvers will be auto-assigned based on your organizing school.
+      </p>
+
+      {organizingSchool && (
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <p className="text-sm text-blue-800">
+            <span className="font-semibold">Organizing school:</span> {organizingSchool}
+          </p>
+          {organizingDept && (
+            <p className="text-sm text-blue-700 mt-1">
+              <span className="font-semibold">Department:</span> {organizingDept}
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="space-y-3 mb-8">
+        {steps.map((step, i) => (
+          <div key={step.key} className="flex items-start gap-4">
+            <div className="flex flex-col items-center">
+              <div className="w-9 h-9 rounded-full bg-blue-100 border-2 border-blue-300 flex items-center justify-center text-blue-700 font-bold text-sm">
+                {i + 1}
+              </div>
+              {i < steps.length - 1 && <div className="w-0.5 h-6 bg-blue-200 mt-1" />}
+            </div>
+            <div className="pb-2">
+              <p className="font-semibold text-gray-800 text-sm">{step.label}</p>
+              <p className="text-xs text-gray-500">{step.desc}</p>
+              {!organizingSchool && (
+                <p className="text-xs text-amber-600 mt-0.5">Auto-assigned when school is set</p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg mb-8">
+        <p className="text-sm text-amber-800">
+          <span className="font-semibold">Note:</span> Your fest is saved as a draft. It will automatically go live once all Stage 1 approvals are cleared.
+        </p>
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-gray-200">
+        <button
+          type="button"
+          onClick={onBackToDetails}
+          className="w-full sm:w-auto px-5 py-2.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
+        >
+          ← Back to Fest Details
+        </button>
+
+        {approvalExists ? (
+          <a
+            href={`/approvals/${festId}`}
+            className="w-full sm:w-auto px-6 py-2.5 bg-green-600 text-white text-sm font-semibold rounded-md hover:bg-green-700 transition-colors text-center"
+          >
+            View Approval Status →
+          </a>
+        ) : (
+          <button
+            type="button"
+            onClick={onSubmitForApproval}
+            disabled={isSubmitting || !festId}
+            className="w-full sm:w-auto px-6 py-2.5 bg-[#154CB3] text-white text-sm font-semibold rounded-md hover:bg-[#0f3a7a] focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {isSubmitting && (
+              <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            )}
+            {isSubmitting ? 'Submitting...' : 'Submit for Approval →'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CreateFestForm(props?: CreateFestProps) {
   // If props are passed (from edit page), use them; otherwise use defaults
   const title = props?.title || "";
@@ -930,6 +1040,10 @@ function CreateFestForm(props?: CreateFestProps) {
   const [successAction, setSuccessAction] = useState<"publish" | "draft">("publish");
   const [festModalVisible, setFestModalVisible] = useState(false);
   const [isOpeningPreview, setIsOpeningPreview] = useState(false);
+  const [activeView, setActiveView] = useState<'details' | 'approvals'>('details');
+  const [savedFestId, setSavedFestId] = useState<string | null>(null);
+  const [approvalExists, setApprovalExists] = useState<boolean | null>(null);
+  const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
 
   const { session } = useAuth();
   const currentDateRef = useRef(new Date());
@@ -1088,6 +1202,14 @@ function CreateFestForm(props?: CreateFestProps) {
       fetchFestData();
     }
   }, [isEditModeFromPath, festIdFromPath, session, pathname]); // Use isEditModeFromPath here
+
+  useEffect(() => {
+    if (!finalIsEditMode || !festIdFromPath || !session?.access_token) return;
+    setSavedFestId(festIdFromPath);
+    fetch(`${API_URL}/api/approvals/${festIdFromPath}`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    }).then((r) => setApprovalExists(r.ok)).catch(() => setApprovalExists(false));
+  }, [finalIsEditMode, festIdFromPath, session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const derivedStatus = deriveFestStatusFromDates(
@@ -1699,7 +1821,7 @@ function CreateFestForm(props?: CreateFestProps) {
     []
   );
 
-  const submitFest = async (saveAsDraft: boolean) => {
+  const submitFest = async (saveAsDraft: boolean): Promise<string | null> => {
     setErrors((prev) => ({ ...prev, submit: undefined }));
     setSubmitIntent(saveAsDraft ? "draft" : "publish");
 
@@ -1717,7 +1839,7 @@ function CreateFestForm(props?: CreateFestProps) {
       requestAnimationFrame(() => {
         scrollToFirstFestError(currentValidationErrors);
       });
-      return;
+      return null;
     }
 
     setIsSubmitting(true);
@@ -1767,7 +1889,7 @@ function CreateFestForm(props?: CreateFestProps) {
         }));
         setIsSubmitting(false);
         setIsUploadingImage(false);
-        return;
+        return null;
       }
       setIsUploadingImage(false);
     } else if (!imageFile && !isEditMode && !existingImageFileUrl) {
@@ -1776,7 +1898,7 @@ function CreateFestForm(props?: CreateFestProps) {
         submit: "Fest image is required for new fests.",
       }));
       setIsSubmitting(false);
-      return;
+      return null;
     }
 
     try {
@@ -1913,14 +2035,14 @@ function CreateFestForm(props?: CreateFestProps) {
           : isPublishingDraft
             ? "published"
             : "updated";
-        
+
         toast.success(
           `Fest ${successLabel} successfully! The fest link has changed from /fest/${oldId} to /fest/${newId}`,
           { duration: 5000 }
         );
 
         router.replace(`/edit/fest/${newId}`);
-        return;
+        return responseData.fest_id as string;
       } else if (finalIsEditMode) {
         // Show regular success message for edit
         toast.success(
@@ -1933,14 +2055,25 @@ function CreateFestForm(props?: CreateFestProps) {
         );
       }
 
-      // Defer modal until overlay animation finishes
-      setSuccessAction(saveAsDraft ? "draft" : "publish");
-      setPendingFestSuccess(true);
+      const resultFestId: string | null =
+        responseData?.fest?.fest_id ||
+        responseData?.fest_id ||
+        festIdFromPath ||
+        null;
+
+      // Defer modal until overlay animation finishes (only for normal publish/edit flow)
+      if (!saveAsDraft || finalIsEditMode) {
+        setSuccessAction(saveAsDraft ? "draft" : "publish");
+        setPendingFestSuccess(true);
+      }
+
+      return resultFestId;
     } catch (error: any) {
       setErrors((prev) => ({
         ...prev,
         submit: error?.message || "Something went wrong while saving the fest.",
       }));
+      return null;
     } finally {
       setIsSubmitting(false);
       setSubmitIntent("publish");
@@ -1950,6 +2083,38 @@ function CreateFestForm(props?: CreateFestProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await submitFest(false);
+  };
+
+  const handleGoAheadForApprovals = async () => {
+    if (isSubmitting || isNavigating || isUploadingImage) return;
+    const festId = await submitFest(true);
+    if (!festId) return;
+    setSavedFestId(festId);
+    setActiveView('approvals');
+  };
+
+  const handleSubmitForApproval = async () => {
+    const festId = savedFestId || festIdFromPath;
+    if (!festId || !session?.access_token) return;
+    setIsSubmittingApproval(true);
+    try {
+      const res = await fetch(`${API_URL}/api/approvals`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ itemId: festId, type: 'fest' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to submit for approval');
+      toast.success('Fest submitted for approval!', { duration: 3000 });
+      router.push(`/approvals/${festId}`);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to submit for approval');
+    } finally {
+      setIsSubmittingApproval(false);
+    }
   };
 
   const handlePreview = async () => {
@@ -2384,7 +2549,52 @@ function CreateFestForm(props?: CreateFestProps) {
             </div>
           </div>
           <div className="max-w-4xl mx-auto p-4 sm:p-6 md:p-12">
-            <div className="bg-white rounded-2xl border border-gray-200 p-6 sm:p-8 md:p-10 shadow-sm">
+            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+              {/* Tab header */}
+              <div className="flex border-b border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => setActiveView('details')}
+                  className={`flex-1 py-4 px-6 text-sm font-semibold transition-colors focus:outline-none ${
+                    activeView === 'details'
+                      ? 'text-[#154CB3] border-b-2 border-[#154CB3] bg-blue-50/40'
+                      : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  Fest Details
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (savedFestId || finalIsEditMode) setActiveView('approvals');
+                  }}
+                  disabled={!savedFestId && !finalIsEditMode}
+                  className={`flex-1 py-4 px-6 text-sm font-semibold transition-colors focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed ${
+                    activeView === 'approvals'
+                      ? 'text-[#154CB3] border-b-2 border-[#154CB3] bg-blue-50/40'
+                      : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  Approvals Setup
+                  {!savedFestId && !finalIsEditMode && (
+                    <span className="ml-2 text-xs text-gray-400 font-normal">(save draft first)</span>
+                  )}
+                </button>
+              </div>
+
+              {activeView === 'approvals' ? (
+                <ApprovalsSetupView
+                  organizingSchool={formData.organizingSchool}
+                  organizingDept={formData.organizingDept}
+                  festId={savedFestId || festIdFromPath || null}
+                  approvalExists={approvalExists}
+                  isSubmitting={isSubmittingApproval}
+                  onSubmitForApproval={handleSubmitForApproval}
+                  onBackToDetails={() => setActiveView('details')}
+                  session={session}
+                />
+              ) : (
+              <div className="p-6 sm:p-8 md:p-10">
               <h2 className="text-xl sm:text-2xl font-bold text-[#063168] mb-6 sm:mb-8">
                 Fest details
               </h2>
@@ -3446,53 +3656,44 @@ function CreateFestForm(props?: CreateFestProps) {
                     )}
                   </div>
                   
-                  <button
-                    type="submit"
-                    disabled={isSubmitting || isNavigating || isOpeningPreview}
-                    className="w-full sm:w-auto px-6 py-2.5 bg-[#154CB3] text-white text-sm font-medium rounded-md hover:bg-[#0f3a7a] focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
-                  >
-                    {(isSubmitting || isUploadingImage) && (
-                      <svg
-                        className="animate-spin h-4 w-4 text-white"
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        ></circle>
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        ></path>
-                      </svg>
-                    )}
-                    <span>
-                      {isUploadingImage
-                        ? "Uploading image..."
-                        : isSubmitting
-                        ? submitIntent === "draft"
-                          ? "Saving Draft..."
-                          : finalIsEditMode
-                            ? isDraftFest
-                              ? "Publishing..."
-                              : "Updating..."
-                            : "Publishing..."
-                        : finalIsEditMode
-                        ? isDraftFest
-                          ? "Publish Fest"
-                          : "Update Fest"
-                        : "Publish Fest"}
-                    </span>
-                  </button>
+                  {finalIsEditMode ? (
+                    <button
+                      type="submit"
+                      disabled={isSubmitting || isNavigating || isOpeningPreview}
+                      className="w-full sm:w-auto px-6 py-2.5 bg-[#154CB3] text-white text-sm font-medium rounded-md hover:bg-[#0f3a7a] focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      {(isSubmitting || isUploadingImage) && (
+                        <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                      )}
+                      <span>
+                        {isUploadingImage ? "Uploading image..." : isSubmitting ? (submitIntent === "draft" ? "Saving Draft..." : isDraftFest ? "Publishing..." : "Updating...") : isDraftFest ? "Publish Fest" : "Update Fest"}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleGoAheadForApprovals}
+                      disabled={isSubmitting || isNavigating || isUploadingImage}
+                      className="w-full sm:w-auto px-6 py-2.5 bg-[#154CB3] text-white text-sm font-semibold rounded-md hover:bg-[#0f3a7a] focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:ring-offset-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      {(isSubmitting || isUploadingImage) && (
+                        <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                      )}
+                      <span>
+                        {isUploadingImage ? "Uploading image..." : isSubmitting ? "Saving..." : "Go ahead for Approvals →"}
+                      </span>
+                    </button>
+                  )}
                 </div>
               </form>
+              </div>
+              )}
             </div>
           </div>
         </>
