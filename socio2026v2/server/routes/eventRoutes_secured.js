@@ -533,6 +533,7 @@ router.post(
         category,
         claims_applicable,
         registration_fee,
+        organizing_school,
         organizing_dept,
         fest,
         fest_id,
@@ -721,6 +722,8 @@ router.post(
         organizer_email: organizerEmail,
         organizer_phone: req.body.organizer_phone || null,
         whatsapp_invite_link: req.body.whatsapp_invite_link || null,
+        organizing_school:
+          normalizeSingleStringField(organizing_school || req.body.organizingSchool || "") || null,
         organizing_dept: organizing_dept || null,
         fest_id: normalizeFestReference(fest_id ?? fest),
         created_by: req.userInfo?.email,
@@ -1024,6 +1027,7 @@ router.put(
         category,
         claims_applicable,
         registration_fee,
+        organizing_school,
         organizing_dept,
         fest,
         fest_id,
@@ -1208,6 +1212,8 @@ router.put(
         organizer_email: resolvedOrganizerEmail,
         organizer_phone: req.body.organizer_phone || null,
         whatsapp_invite_link: req.body.whatsapp_invite_link || null,
+        organizing_school:
+          normalizeSingleStringField(organizing_school || req.body.organizingSchool || "") || null,
         organizing_dept: organizing_dept || null,
         fest_id: normalizeFestReference(fest_id ?? fest),
         registration_deadline: req.body.registration_deadline || null,

@@ -35,6 +35,7 @@ interface Student {
   name: string;
   registerNumber: string;
   course: string;
+  school: string;
   department: string;
   campus: string;
   email: string;
@@ -48,6 +49,7 @@ interface UserData {
   register_number?: string | number;
   email?: string;
   course?: string;
+  school?: string;
   department?: string;
   campus?: string;
   created_at?: string;
@@ -64,6 +66,7 @@ const StudentProfile = () => {
     name: "",
     registerNumber: "",
     course: "",
+    school: "",
     department: "",
     campus: "",
     email: "",
@@ -98,6 +101,7 @@ const StudentProfile = () => {
         registerNumber: String(userData.register_number || ""),
         email: userData.email || "",
         course: isStaff ? "Staff" : (userData.course || "Not specified"),
+        school: isStaff ? "Staff" : (userData.school || "Not specified"),
         department: isStaff ? "Staff" : (userData.department || "Not specified"),
         campus: userData.campus || "Not specified",
         joined: joinedFormatted,
@@ -373,6 +377,14 @@ const StudentProfile = () => {
                         </h3>
                         <p className="text-sm sm:text-base text-gray-800 font-medium">
                           {student.course}
+                        </p>
+                      </div>
+                      <div>
+                        <h3 className="text-xs sm:text-sm font-medium text-gray-500">
+                          School
+                        </h3>
+                        <p className="text-sm sm:text-base text-gray-800 font-medium">
+                          {student.school}
                         </p>
                       </div>
                       <div>

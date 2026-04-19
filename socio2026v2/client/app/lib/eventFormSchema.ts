@@ -69,6 +69,228 @@ export const customFieldSchema = z.object({
   options: z.array(z.string()).optional(),
 });
 
+export type DepartmentOption = {
+  value: string;
+  label: string;
+};
+
+export type SchoolDepartmentGroup = {
+  school: string;
+  departments: DepartmentOption[];
+};
+
+export const CLUBS_AND_CENTRES_SCHOOL = "Clubs and Centres";
+
+export const schoolDepartmentGroups: SchoolDepartmentGroup[] = [
+  {
+    school: "School of Business and Management",
+    departments: [
+      {
+        value: "dept_business_management_bba",
+        label: "Department of Business and Management (BBA)",
+      },
+      {
+        value: "dept_business_management_mba",
+        label: "Department of Business and Management (MBA)",
+      },
+      {
+        value: "dept_hotel_management",
+        label: "Department of Hotel Management",
+      },
+    ],
+  },
+  {
+    school: "School of Commerce Finance and Accountancy",
+    departments: [
+      { value: "dept_commerce", label: "Department of Commerce" },
+      {
+        value: "dept_professional_studies",
+        label: "Department of Professional Studies",
+      },
+    ],
+  },
+  {
+    school: "School of Humanities and Performing Arts",
+    departments: [
+      {
+        value: "dept_english_cultural_studies",
+        label: "Department of English and Cultural Studies",
+      },
+      { value: "dept_music", label: "Department of Music" },
+      {
+        value: "dept_performing_arts",
+        label: "Department of Performing Arts",
+      },
+      {
+        value: "dept_philosophy_theology",
+        label: "Department of Philosophy and Theology",
+      },
+      {
+        value: "dept_theatre_studies",
+        label: "Department of Theatre Studies",
+      },
+    ],
+  },
+  {
+    school: "School of Law",
+    departments: [{ value: "dept_school_of_law", label: "Department of Law" }],
+  },
+  {
+    school: "School of Psychological Sciences, Education and Social Work",
+    departments: [
+      { value: "dept_psychology", label: "Department of Psychology" },
+      {
+        value: "dept_school_of_education",
+        label: "Department of Education",
+      },
+      { value: "dept_social_work", label: "Department of Social Work" },
+    ],
+  },
+  {
+    school: "School of Sciences",
+    departments: [
+      { value: "dept_chemistry", label: "Department of Chemistry" },
+      {
+        value: "dept_computer_science",
+        label: "Department of Computer Science",
+      },
+      {
+        value: "dept_life_sciences",
+        label: "Department of Life Sciences",
+      },
+      { value: "dept_mathematics", label: "Department of Mathematics" },
+      {
+        value: "dept_physics_electronics",
+        label: "Department of Physics and Electronics",
+      },
+      {
+        value: "dept_statistics_data_science",
+        label: "Department of Statistics and Data Science",
+      },
+    ],
+  },
+  {
+    school: "School of Social Sciences",
+    departments: [
+      { value: "dept_economics", label: "Department of Economics" },
+      {
+        value: "dept_international_studies_political_science_history",
+        label: "Department of International Studies, Political Science and History",
+      },
+      {
+        value: "dept_media_studies",
+        label: "Department of Media Studies",
+      },
+      { value: "dept_sociology", label: "Department of Sociology" },
+    ],
+  },
+  {
+    school: CLUBS_AND_CENTRES_SCHOOL,
+    departments: [
+      {
+        value: "clubs_student_welfare_office",
+        label: "Student Welfare Office",
+      },
+      {
+        value: "clubs_national_cadet_corps",
+        label: "National Cadet Corps",
+      },
+      {
+        value: "clubs_other_centres",
+        label: "Other Clubs and Centres",
+      },
+    ],
+  },
+];
+
+const toCanonical = (value: string): string =>
+  value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]/g, "");
+
+const legacyDepartmentSchoolAliases: Record<string, string> = {
+  [toCanonical("Department of School of Law")]: "School of Law",
+  [toCanonical("Department of School of Education")]:
+    "School of Psychological Sciences, Education and Social Work",
+};
+
+const departmentsBySchool = new Map(
+  schoolDepartmentGroups.map((group) => [group.school, group.departments])
+);
+
+const allDepartmentOptions: DepartmentOption[] = schoolDepartmentGroups.flatMap(
+  (group) => group.departments
+);
+
+export const organizingSchools: DepartmentOption[] = schoolDepartmentGroups.map(
+  (group) => ({ value: group.school, label: group.school })
+);
+
+export const getDepartmentOptionsForSchool = (
+  school: string | null | undefined
+): DepartmentOption[] => {
+  const normalizedSchool = String(school || "").trim();
+  if (!normalizedSchool) return [];
+  return departmentsBySchool.get(normalizedSchool) || [];
+};
+
+export const inferSchoolFromDepartment = (
+  department: string | null | undefined
+): string => {
+  const normalizedDepartment = String(department || "").trim();
+  if (!normalizedDepartment) return "";
+
+  const canonicalDepartment = toCanonical(normalizedDepartment);
+
+  for (const group of schoolDepartmentGroups) {
+    const match = group.departments.some(
+      (option) =>
+        option.value === normalizedDepartment ||
+        option.label === normalizedDepartment ||
+        toCanonical(option.value) === canonicalDepartment ||
+        toCanonical(option.label) === canonicalDepartment
+    );
+
+    if (match) {
+      return group.school;
+    }
+  }
+
+  return legacyDepartmentSchoolAliases[canonicalDepartment] || "";
+};
+
+export const isValidOrganizingDepartmentForSchool = (
+  school: string | null | undefined,
+  department: string | null | undefined
+): boolean => {
+  const normalizedSchool = String(school || "").trim();
+  const normalizedDepartment = String(department || "").trim();
+
+  if (!normalizedSchool || !normalizedDepartment) {
+    return false;
+  }
+
+  if (normalizedSchool === CLUBS_AND_CENTRES_SCHOOL) {
+    return normalizedDepartment.length > 0;
+  }
+
+  const schoolDepartments = getDepartmentOptionsForSchool(normalizedSchool);
+  const canonicalDepartment = toCanonical(normalizedDepartment);
+
+  if (legacyDepartmentSchoolAliases[canonicalDepartment] === normalizedSchool) {
+    return true;
+  }
+
+  return schoolDepartments.some(
+    (option) =>
+      option.label === normalizedDepartment ||
+      option.value === normalizedDepartment ||
+      toCanonical(option.label) === canonicalDepartment ||
+      toCanonical(option.value) === canonicalDepartment
+  );
+};
+
 export const eventFormSchema = z
   .object({
     eventTitle: z
@@ -90,6 +312,7 @@ export const eventFormSchema = z
     department: z
       .array(z.string())
       .min(1, "At least one department is required"),
+    organizingSchool: z.string().min(1, "Organizing school is required"),
     organizingDept: z.string().min(1, "Organizing department is required"),
     category: z.string().min(1, "Category is required"),
     festEvent: z.string().optional(),
@@ -250,6 +473,25 @@ export const eventFormSchema = z
       message: "Registration deadline cannot be after the event end date",
       path: ["registrationDeadline"],
     }
+  )
+  .refine(
+    (data) => {
+      return isValidOrganizingDepartmentForSchool(
+        data.organizingSchool,
+        data.organizingDept
+      );
+    },
+    {
+      message: "Select a valid organizing department for the selected school",
+      path: ["organizingDept"],
+    }
+  )
+  .refine(
+    (data) => data.department.length > 0,
+    {
+      message: "Select at least one department for access",
+      path: ["department"],
+    }
   );
 
 // TypeScript type inferred from schema
@@ -257,61 +499,12 @@ export const eventFormSchema = z
 export type EventFormData = z.infer<typeof eventFormSchema>;
 export type ScheduleItem = z.infer<typeof scheduleItemSchema>;
 
-export const departments = [
+export const departments: DepartmentOption[] = [
   {
     value: "all_departments",
     label: "All Departments",
   },
-  {
-    value: "dept_business_management_bba",
-    label: "Department of Business and Management (BBA)",
-  },
-  {
-    value: "dept_business_management_mba",
-    label: "Department of Business and Management (MBA)",
-  },
-  { value: "dept_hotel_management", label: "Department of Hotel Management" },
-  { value: "dept_commerce", label: "Department of Commerce" },
-  {
-    value: "dept_professional_studies",
-    label: "Department of Professional Studies",
-  },
-  {
-    value: "dept_english_cultural_studies",
-    label: "Department of English and Cultural Studies",
-  },
-  { value: "dept_music", label: "Department of Music" },
-  {
-    value: "dept_performing_arts",
-    label: "Department of Performing Arts",
-  },
-  {
-    value: "dept_philosophy_theology",
-    label: "Department of Philosophy and Theology",
-  },
-  { value: "dept_theatre_studies", label: "Department of Theatre Studies" },
-  { value: "dept_school_of_law", label: "Department of School of Law" },
-  { value: "dept_psychology", label: "Department of Psychology" },
-  { value: "dept_school_of_education", label: "Department of School of Education" },
-  { value: "dept_social_work", label: "Department of Social Work" },
-  { value: "dept_chemistry", label: "Department of Chemistry" },
-  { value: "dept_computer_science", label: "Department of Computer Science" },
-  { value: "dept_life_sciences", label: "Department of Life Sciences" },
-  { value: "dept_mathematics", label: "Department of Mathematics" },
-  {
-    value: "dept_physics_electronics",
-    label: "Department of Physics and Electronics",
-  },
-  {
-    value: "dept_statistics_data_science",
-    label: "Department of Statistics and Data Science",
-  },
-  { value: "dept_economics", label: "Department of Economics" },
-  {
-    value: "dept_international_studies_political_science_history",
-    label: "Department of International Studies, Political Science and History",
-  },
-  { value: "dept_media_studies", label: "Department of Media Studies" },
+  ...allDepartmentOptions,
 ];
 
 export const categories = [

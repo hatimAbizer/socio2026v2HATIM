@@ -76,14 +76,17 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith("/create") ||
     pathname.startsWith("/edit");
 
-  if (user && isManagementRoute) {
+  const isHodRoute = pathname.startsWith("/hod");
+  const isDeanRoute = pathname.startsWith("/dean");
+
+  if (user && (isManagementRoute || isHodRoute || isDeanRoute)) {
     if (!user.email) {
       return redirect("/error");
     }
 
     const { data: userData, error } = await supabase
       .from("users")
-      .select("is_organiser, is_masteradmin")
+      .select("is_organiser, is_masteradmin, is_hod, is_dean")
       .eq("email", user.email)
       .single();
 
@@ -132,7 +135,15 @@ export async function middleware(req: NextRequest) {
     }
 
     const canManage = Boolean(userData?.is_organiser) || Boolean(userData?.is_masteradmin);
-    if (!canManage) {
+    if (isManagementRoute && !canManage) {
+      return redirect("/error");
+    }
+
+    if (isHodRoute && !userData?.is_hod && !userData?.is_masteradmin) {
+      return redirect("/error");
+    }
+
+    if (isDeanRoute && !userData?.is_dean && !userData?.is_masteradmin) {
       return redirect("/error");
     }
   }
