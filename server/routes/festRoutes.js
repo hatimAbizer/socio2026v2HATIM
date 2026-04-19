@@ -227,6 +227,7 @@ const deriveFestsFromEvents = (events, festRegistrationCounts = {}) => {
       derivedFestMap.set(festKey, {
         fest_id: festKey,
         fest_title: festKey,
+        organizing_school: event?.organizing_school || null,
         organizing_dept: event?.organizing_dept || null,
         opening_date: event?.event_date || null,
         closing_date: event?.event_date || null,
@@ -247,6 +248,10 @@ const deriveFestsFromEvents = (events, festRegistrationCounts = {}) => {
       entry.organizing_dept = event.organizing_dept;
     }
 
+    if (!entry.organizing_school && event?.organizing_school) {
+      entry.organizing_school = event.organizing_school;
+    }
+
     if (!entry.opening_date && event?.event_date) {
       entry.opening_date = event.event_date;
     }
@@ -263,6 +268,7 @@ const deriveFestsFromEvents = (events, festRegistrationCounts = {}) => {
   return Array.from(derivedFestMap.values()).map((fest) => ({
     fest_id: fest.fest_id,
     fest_title: fest.fest_title,
+    organizing_school: fest.organizing_school,
     organizing_dept: fest.organizing_dept,
     opening_date: fest.opening_date,
     closing_date: fest.closing_date,
@@ -328,7 +334,7 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
     let events = [];
     try {
       events = await queryAll("events", {
-        select: "event_id, fest, fest_id, organizing_dept, event_date, created_at, is_archived",
+        select: "event_id, fest, fest_id, organizing_school, organizing_dept, event_date, created_at, is_archived",
       });
     } catch (error) {
       if (isMissingRelationError(error)) {
@@ -336,7 +342,7 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
       } else if (isMissingColumnError(error)) {
         try {
           events = await queryAll("events", {
-            select: "event_id, fest_id, organizing_dept, event_date, created_at, is_archived",
+            select: "event_id, fest_id, organizing_school, organizing_dept, event_date, created_at, is_archived",
           });
         } catch (fallbackError) {
           if (isMissingRelationError(fallbackError) || isMissingColumnError(fallbackError)) {
@@ -394,6 +400,7 @@ router.get("/", optionalAuth, checkRoleExpiration, async (req, res) => {
     if (normalizedSearch) {
       processedFests = processedFests.filter((fest) =>
         fest.fest_title?.toLowerCase().includes(normalizedSearch) ||
+        fest.organizing_school?.toLowerCase().includes(normalizedSearch) ||
         fest.organizing_dept?.toLowerCase().includes(normalizedSearch)
       );
     }
@@ -636,6 +643,9 @@ router.post(
 
       // Basic validation
       const title = String(festData.festTitle || festData.title || "").trim();
+      const school = String(
+        festData.organizingSchool || festData.organizing_school || ""
+      ).trim();
       const dept = String(festData.organizingDept || festData.organizing_dept || "").trim();
       const contactEmail = normalizeEmail(
         pickDefined(festData.contactEmail, festData.contact_email)
@@ -651,9 +661,11 @@ router.post(
         ? eventHeads.map(normalizeEventHead).filter((head) => head.email)
         : [];
 
-      if (!title || !dept) {
+      if (!title || !school || !dept) {
         console.log("Validation failed. Received:", JSON.stringify(festData));
-        return res.status(400).json({ error: "Fest title and organizing department are required" });
+        return res.status(400).json({
+          error: "Fest title, organizing school, and organizing department are required",
+        });
       }
 
       if (!contactEmail) {
@@ -741,6 +753,7 @@ router.post(
         opening_date: openingDateValue,
         closing_date: closingDateValue,
         fest_image_url: festData.festImageUrl || festData.fest_image_url || null,
+        organizing_school: school,
         organizing_dept: dept,
         department_access: festData.departmentAccess || festData.department_access || [],
         category: festData.category || "",
@@ -874,7 +887,12 @@ router.put(
       const departmentAccessInput = pickDefined(updateData.department_access, updateData.departmentAccess);
       const eventHeadsInput = pickDefined(updateData.event_heads, updateData.eventHeads);
       const customFieldsInput = pickDefined(updateData.custom_fields, updateData.customFields);
+      const organizingSchoolInput = pickDefined(updateData.organizing_school, updateData.organizingSchool);
       const organizingDeptInput = pickDefined(updateData.organizing_dept, updateData.organizingDept);
+      const normalizedOrganizingSchool =
+        organizingSchoolInput !== undefined
+          ? String(organizingSchoolInput || "").trim()
+          : undefined;
       const normalizedOrganizingDept =
         organizingDeptInput !== undefined
           ? String(organizingDeptInput || "").trim()
@@ -927,6 +945,12 @@ router.put(
       if (normalizedOrganizingDept !== undefined && !normalizedOrganizingDept) {
         return res.status(400).json({
           error: "Organizing department cannot be empty.",
+        });
+      }
+
+      if (normalizedOrganizingSchool !== undefined && !normalizedOrganizingSchool) {
+        return res.status(400).json({
+          error: "Organizing school cannot be empty.",
         });
       }
 
@@ -1017,6 +1041,7 @@ router.put(
         ["opening_date", incomingOpeningDate],
         ["closing_date", incomingClosingDate],
         ["fest_image_url", incomingImageUrl],
+        ["organizing_school", normalizedOrganizingSchool],
         ["organizing_dept", normalizedOrganizingDept],
         ["category", updateData.category],
         ["contact_email", normalizedContactEmail],

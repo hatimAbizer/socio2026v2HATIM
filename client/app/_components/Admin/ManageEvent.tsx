@@ -18,6 +18,10 @@ import {
   EventFormData,
   eventFormSchema,
   departments as departmentOptions,
+  organizingSchools,
+  getDepartmentOptionsForSchool,
+  inferSchoolFromDepartment,
+  CLUBS_AND_CENTRES_SCHOOL,
   categories as categoryOptions,
   festEvents as festEventOptions,
   christCampuses,
@@ -741,6 +745,7 @@ interface FestOption {
   value: string;
   label: string;
   departmentAccess: string[];
+  organizingSchool: string;
   organizingDept: string;
   category: string;
   campusHostedAt: string;
@@ -898,6 +903,7 @@ const EVENT_ERROR_SCROLL_ORDER: string[] = [
   "outsiderRegistrationFee",
   "outsiderMaxParticipants",
   "campusHostedAt",
+  "organizingSchool",
   "allowedCampuses",
   "organizingDept",
   "department",
@@ -931,6 +937,7 @@ const EVENT_ERROR_SELECTOR_MAP: Record<string, string> = {
   outsiderRegistrationFee: "#outsiderRegistrationFee",
   outsiderMaxParticipants: "#outsiderMaxParticipants",
   campusHostedAt: "#campusHostedAt",
+  organizingSchool: "#organizingSchool",
   allowedCampuses: "#allowedCampuses-group",
   organizingDept: "#organizingDept",
   department: "#department",
@@ -1001,6 +1008,12 @@ export default function EventForm({
               value: normalizeFestOptionValue(f),
               label: normalizeFestOptionLabel(f),
               departmentAccess: normalizeDepartmentAccess(f.department_access),
+              organizingSchool:
+                typeof f.organizing_school === "string"
+                  ? f.organizing_school.trim()
+                  : inferSchoolFromDepartment(
+                      typeof f.organizing_dept === "string" ? f.organizing_dept : ""
+                    ),
               organizingDept:
                 typeof f.organizing_dept === "string" ? f.organizing_dept.trim() : "",
               category: normalizeCategoryValue(f.category),
@@ -1013,6 +1026,7 @@ export default function EventForm({
               value: "none",
               label: "None",
               departmentAccess: [],
+              organizingSchool: "",
               organizingDept: "",
               category: "",
               campusHostedAt: "",
@@ -1053,6 +1067,7 @@ export default function EventForm({
       detailedDescription: "",
       department: [],
       category: "",
+      organizingSchool: "",
       organizingDept: "",
       festEvent: "none",
       registrationDeadline: "",
@@ -1234,6 +1249,15 @@ export default function EventForm({
         scheduleItems: Array.isArray(defaultValues.scheduleItems)
           ? defaultValues.scheduleItems
           : [],
+        organizingSchool:
+          typeof defaultValues.organizingSchool === "string" &&
+          defaultValues.organizingSchool.trim().length > 0
+            ? defaultValues.organizingSchool.trim()
+            : inferSchoolFromDepartment(
+                typeof defaultValues.organizingDept === "string"
+                  ? defaultValues.organizingDept
+                  : ""
+              ),
         campusHostedAt: normalizeCampusHostedAt(defaultValues.campusHostedAt),
         allowedCampuses: normalizeAllowedCampuses(defaultValues.allowedCampuses),
       };
@@ -1247,7 +1271,55 @@ export default function EventForm({
   const watchedMaxParticipants = useWatch({ control, name: "maxParticipants" });
   const watchedMinParticipants = useWatch({ control, name: "minParticipants" });
   const watchedFestEvent = useWatch({ control, name: "festEvent" });
+  const watchedOrganizingSchool = useWatch({
+    control,
+    name: "organizingSchool",
+  });
   const lastAutoFilledFestRef = useRef<string | null>(null);
+
+  const departmentOptionsForSelectedSchool = React.useMemo(() => {
+    const selectedSchool = String(watchedOrganizingSchool || "").trim();
+    return getDepartmentOptionsForSchool(selectedSchool);
+  }, [watchedOrganizingSchool]);
+
+  useEffect(() => {
+    const selectedSchool = String(watchedOrganizingSchool || "").trim();
+    if (!selectedSchool) return;
+
+    const allowedDepartments = new Set(
+      getDepartmentOptionsForSchool(selectedSchool).map((option) => option.value)
+    );
+    const currentDepartments = Array.isArray(getValues("department"))
+      ? (getValues("department") as string[])
+      : [];
+
+    const filteredDepartments = currentDepartments.filter((departmentValue) =>
+      allowedDepartments.has(departmentValue)
+    );
+
+    if (filteredDepartments.length !== currentDepartments.length) {
+      setValue("department", filteredDepartments, {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+    }
+
+    if (selectedSchool === CLUBS_AND_CENTRES_SCHOOL) {
+      return;
+    }
+
+    const allowedDepartmentLabels = new Set(
+      getDepartmentOptionsForSchool(selectedSchool).map((option) => option.label)
+    );
+    const currentOrganizingDept = String(getValues("organizingDept") || "").trim();
+
+    if (currentOrganizingDept && !allowedDepartmentLabels.has(currentOrganizingDept)) {
+      setValue("organizingDept", "", {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+    }
+  }, [watchedOrganizingSchool, getValues, setValue]);
 
   useEffect(() => {
     if (!watchedIsTeamEvent) {
@@ -1311,6 +1383,10 @@ export default function EventForm({
     }
 
     setValue("department", selectedFest.departmentAccess, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setValue("organizingSchool", selectedFest.organizingSchool, {
       shouldDirty: true,
       shouldValidate: true,
     });
@@ -2256,30 +2332,64 @@ export default function EventForm({
                   </div>
                 </div>
 
-                <datalist id="organizing-dept-list-event">
-                  {departmentOptions
-                    .filter((d) => d.value !== "all_departments")
-                    .map((dept) => (
-                      <option key={dept.value} value={dept.label} />
-                    ))}
-                </datalist>
-
-                <InputField
-                  label="Organizing department / committee:"
-                  name="organizingDept"
-                  list="organizing-dept-list-event"
-                  register={register}
-                  error={errors.organizingDept}
+                <CustomDropdown
+                  name="organizingSchool"
+                  control={control}
+                  options={organizingSchools}
+                  placeholder="Select organizing school"
+                  label="Organizing school:"
+                  error={errors.organizingSchool}
                   required
-                  placeholder="e.g., Department of Computer Science /  Student Welfare Organization"
                 />
+
+                {watchedOrganizingSchool === CLUBS_AND_CENTRES_SCHOOL ? (
+                  <>
+                    <datalist id="organizing-dept-list-event">
+                      {getDepartmentOptionsForSchool(CLUBS_AND_CENTRES_SCHOOL)
+                        .map((dept) => (
+                          <option key={dept.value} value={dept.label} />
+                        ))}
+                    </datalist>
+
+                    <InputField
+                      label="Organizing department / committee:"
+                      name="organizingDept"
+                      list="organizing-dept-list-event"
+                      register={register}
+                      error={errors.organizingDept}
+                      required
+                      placeholder="Type club or centre name"
+                    />
+                  </>
+                ) : (
+                  <CustomDropdown
+                    name="organizingDept"
+                    control={control}
+                    options={departmentOptionsForSelectedSchool.map((dept) => ({
+                      value: dept.label,
+                      label: dept.label,
+                    }))}
+                    placeholder={
+                      watchedOrganizingSchool
+                        ? "Select organizing department"
+                        : "Select organizing school first"
+                    }
+                    label="Organizing department:"
+                    error={errors.organizingDept}
+                    required
+                  />
+                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
                   <MultiSelectDropdown
                     name="department"
                     control={control}
-                    options={departmentOptions}
-                    placeholder="Select departments"
+                    options={departmentOptionsForSelectedSchool}
+                    placeholder={
+                      watchedOrganizingSchool
+                        ? "Select departments"
+                        : "Select organizing school first"
+                    }
                     label="Department access:"
                     error={errors.department as FieldError | undefined}
                     required

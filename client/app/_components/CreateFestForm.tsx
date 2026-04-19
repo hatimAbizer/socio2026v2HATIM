@@ -1,10 +1,16 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "../../context/AuthContext"; // Adjust path as needed
-import { departments as baseDepartments, christCampuses } from "../lib/eventFormSchema";
+import {
+  christCampuses,
+  organizingSchools,
+  getDepartmentOptionsForSchool,
+  inferSchoolFromDepartment,
+  CLUBS_AND_CENTRES_SCHOOL,
+} from "../lib/eventFormSchema";
 import {
   buildFestPreviewData,
   saveFestPreviewDraft,
@@ -491,6 +497,7 @@ const CustomDateInput: React.FC<CustomDateInputProps> = ({
 
 interface DepartmentAndCategoryInputsProps {
   formData: { department: string[]; category: string };
+  availableDepartments: { value: string; label: string }[];
   errors: Record<string, string | undefined>;
   setFormData: React.Dispatch<React.SetStateAction<CreateFestState>>;
   validateField: (
@@ -511,6 +518,7 @@ interface CreateFestState {
   contactEmail: string;
   contactPhone: string;
   eventHeads: { email: string; expiresAt: string | null }[];
+  organizingSchool: string;
   organizingDept: string;
   venue: string;
   status: "draft" | "upcoming" | "ongoing" | "completed" | "cancelled" | "past";
@@ -529,6 +537,7 @@ interface CreateFestState {
 
 function DepartmentAndCategoryInputs({
   formData,
+  availableDepartments,
   errors,
   setFormData,
   validateField,
@@ -575,7 +584,11 @@ function DepartmentAndCategoryInputs({
     const newDepartments = formData.department.includes(dept)
       ? formData.department.filter((d) => d !== dept)
       : [...formData.department, dept];
-    setFormData((prev) => ({ ...prev, department: newDepartments }));
+    setFormData((prev) => ({
+      ...prev,
+      department: newDepartments,
+      allowedDepartments: newDepartments,
+    }));
     validateField("department", newDepartments);
   };
   const handleCategorySelect = (value: string) => {
@@ -584,7 +597,7 @@ function DepartmentAndCategoryInputs({
     setIsCategoryDropdownOpen(false);
   };
 
-  const departments = baseDepartments;
+  const departments = availableDepartments;
   
   const categories = [
     { value: "technology", label: "Technology" },
@@ -791,6 +804,7 @@ interface CreateFestProps {
   scheduleItems?: { time: string; activity: string }[];
   rules?: string[];
   prizes?: string[];
+  organizingSchool?: string;
   organizingDept?: string;
   isEditMode?: boolean;
   existingImageFileUrl?: string | null;
@@ -848,6 +862,8 @@ function CreateFestForm(props?: CreateFestProps) {
   const category = props?.category || "";
   const contactEmail = normalizeEmail(props?.contactEmail || "");
   const contactPhone = normalizePhone(props?.contactPhone || "");
+  const organizingSchool =
+    props?.organizingSchool || inferSchoolFromDepartment(props?.organizingDept || "");
   const organizingDept = props?.organizingDept || "";
   const initialEventHeads: { email: string; expiresAt: string | null }[] =
     (props?.eventHeads || []).map((head) => ({
@@ -884,6 +900,7 @@ function CreateFestForm(props?: CreateFestProps) {
     category,
     contactEmail,
     contactPhone,
+    organizingSchool,
     organizingDept,
     eventHeads: initialEventHeads,
     venue,
@@ -926,6 +943,57 @@ function CreateFestForm(props?: CreateFestProps) {
   const isEditModeFromPath = pathname.startsWith("/edit/fest");
   const festIdFromPath = isEditModeFromPath ? pathname.split("/").pop() : null;
   const finalIsEditMode = isEditMode || isEditModeFromPath;
+
+  const departmentOptionsForSelectedSchool = useMemo(() => {
+    const selectedSchool = String(formData.organizingSchool || "").trim();
+    return getDepartmentOptionsForSchool(selectedSchool);
+  }, [formData.organizingSchool]);
+
+  const clubsAndCentresDepartmentOptions = useMemo(
+    () => getDepartmentOptionsForSchool(CLUBS_AND_CENTRES_SCHOOL),
+    []
+  );
+
+  useEffect(() => {
+    const selectedSchool = String(formData.organizingSchool || "").trim();
+    if (!selectedSchool) return;
+
+    const allowedDepartmentValues = new Set(
+      departmentOptionsForSelectedSchool.map((option) => option.value)
+    );
+    const allowedDepartmentLabels = new Set(
+      departmentOptionsForSelectedSchool.map((option) => option.label)
+    );
+
+    setFormData((prev) => {
+      const filteredDepartments = prev.department.filter((departmentValue) =>
+        allowedDepartmentValues.has(departmentValue)
+      );
+      const filteredAllowedDepartments = prev.allowedDepartments.filter((departmentValue) =>
+        allowedDepartmentValues.has(departmentValue)
+      );
+      const nextOrganizingDept =
+        selectedSchool === CLUBS_AND_CENTRES_SCHOOL ||
+        allowedDepartmentLabels.has(prev.organizingDept)
+          ? prev.organizingDept
+          : "";
+
+      const hasDepartmentChanges =
+        filteredDepartments.length !== prev.department.length ||
+        filteredAllowedDepartments.length !== prev.allowedDepartments.length;
+
+      if (!hasDepartmentChanges && nextOrganizingDept === prev.organizingDept) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        department: filteredDepartments,
+        allowedDepartments: filteredAllowedDepartments,
+        organizingDept: nextOrganizingDept,
+      };
+    });
+  }, [formData.organizingSchool, departmentOptionsForSelectedSchool]);
 
   useEffect(() => {
     if (typeof props?.isDraft === "boolean") {
@@ -998,6 +1066,9 @@ function CreateFestForm(props?: CreateFestProps) {
               contactEmail: normalizeEmail(data.fest.contact_email || ""),
               contactPhone: normalizePhone(data.fest.contact_phone || ""),
               eventHeads: transformedEventHeads,
+              organizingSchool:
+                data.fest.organizing_school ||
+                inferSchoolFromDepartment(data.fest.organizing_dept || ""),
               organizingDept: data.fest.organizing_dept || "",
               venue: data.fest.venue || "",
               status: deriveFestStatusFromDates(loadedOpeningDate, loadedClosingDate),
@@ -1264,6 +1335,21 @@ function CreateFestForm(props?: CreateFestProps) {
           case "department":
             if ((value as string[]).length === 0)
               newErrors.department = "Select at least one department";
+            else if (formData.organizingSchool) {
+              const allowedDepartmentValues = new Set(
+                getDepartmentOptionsForSchool(formData.organizingSchool).map(
+                  (option) => option.value
+                )
+              );
+              const hasInvalidDepartment = (value as string[]).some(
+                (departmentValue) => !allowedDepartmentValues.has(departmentValue)
+              );
+              if (hasInvalidDepartment) {
+                newErrors.department = "Department access must match selected school";
+              } else {
+                delete newErrors.department;
+              }
+            }
             else delete newErrors.department;
             break;
           case "category":
@@ -1287,11 +1373,33 @@ function CreateFestForm(props?: CreateFestProps) {
               newErrors.contactPhone = "Must be 10-14 digits";
             else delete newErrors.contactPhone;
             break;
+          case "organizingSchool":
+            if (!(value as string).trim()) {
+              newErrors.organizingSchool = "Organizing school is required";
+            } else {
+              delete newErrors.organizingSchool;
+            }
+            break;
           case "organizingDept":
             if (!(value as string).trim())
               newErrors.organizingDept = "Organizing department is required";
             else if ((value as string).length > 100)
               newErrors.organizingDept = "Max 100 characters";
+            else if (
+              formData.organizingSchool &&
+              formData.organizingSchool !== CLUBS_AND_CENTRES_SCHOOL
+            ) {
+              const allowedLabels = new Set(
+                getDepartmentOptionsForSchool(formData.organizingSchool).map(
+                  (option) => option.label
+                )
+              );
+              if (!allowedLabels.has(String(value).trim())) {
+                newErrors.organizingDept = "Select a department from the selected school";
+              } else {
+                delete newErrors.organizingDept;
+              }
+            }
             else delete newErrors.organizingDept;
             break;
           case "campusHostedAt":
@@ -1315,6 +1423,7 @@ function CreateFestForm(props?: CreateFestProps) {
       formData.isTeamEvent,
       formData.minParticipants,
       formData.maxParticipants,
+      formData.organizingSchool,
       isEditMode,
     ] // Use prop isEditMode here
   );
@@ -1334,6 +1443,7 @@ function CreateFestForm(props?: CreateFestProps) {
         "category",
         "contactEmail",
         "contactPhone",
+        "organizingSchool",
         "organizingDept",
         "campusHostedAt",
         "allowedCampuses",
@@ -1439,6 +1549,18 @@ function CreateFestForm(props?: CreateFestProps) {
           case "department":
             if (!Array.isArray(value) || value.length === 0) {
               errorMsg = "Select at least one department";
+            } else if (formData.organizingSchool) {
+              const allowedDepartmentValues = new Set(
+                getDepartmentOptionsForSchool(formData.organizingSchool).map(
+                  (option) => option.value
+                )
+              );
+              const hasInvalidDepartment = (value as string[]).some(
+                (departmentValue) => !allowedDepartmentValues.has(departmentValue)
+              );
+              if (hasInvalidDepartment) {
+                errorMsg = "Department access must match selected school";
+              }
             }
             break;
           case "category":
@@ -1455,9 +1577,27 @@ function CreateFestForm(props?: CreateFestProps) {
             else if (!PHONE_REGEX.test(normalizePhone(value)))
               errorMsg = "Must be 10-14 digits";
             break;
+          case "organizingSchool":
+            if (!String(value).trim()) {
+              errorMsg = "Organizing school is required";
+            }
+            break;
           case "organizingDept":
             if (!String(value).trim()) errorMsg = "Organizing department is required";
             else if (String(value).length > 100) errorMsg = "Max 100 characters";
+            else if (
+              formData.organizingSchool &&
+              formData.organizingSchool !== CLUBS_AND_CENTRES_SCHOOL
+            ) {
+              const allowedLabels = new Set(
+                getDepartmentOptionsForSchool(formData.organizingSchool).map(
+                  (option) => option.label
+                )
+              );
+              if (!allowedLabels.has(String(value).trim())) {
+                errorMsg = "Select a department from the selected school";
+              }
+            }
             break;
           case "campusHostedAt":
             if (!String(value).trim()) errorMsg = "Hosted campus is required";
@@ -1521,6 +1661,7 @@ function CreateFestForm(props?: CreateFestProps) {
         "detailedDescription",
         "campusHostedAt",
         "allowedCampuses",
+        "organizingSchool",
         "organizingDept",
         "department",
         "category",
@@ -1539,6 +1680,7 @@ function CreateFestForm(props?: CreateFestProps) {
       if (firstKey === "department") selector = "#department-trigger";
       if (firstKey === "category") selector = "#category-trigger";
       if (firstKey === "allowedCampuses") selector = "#allowedCampuses-group";
+      if (firstKey === "organizingSchool") selector = "#organizingSchool";
       if (firstKey === "imageFile") selector = "#image-upload-input";
 
       if (firstKey.startsWith("eventHead_")) {
@@ -1708,6 +1850,7 @@ function CreateFestForm(props?: CreateFestProps) {
         contactEmail: normalizedContactEmail,
         contactPhone: normalizedContactPhone,
         eventHeads: sanitizedEventHeads,
+        organizingSchool: formData.organizingSchool,
         organizingDept: formData.organizingDept,
         createdBy: session.user.email,
         venue: formData.venue,
@@ -2513,51 +2656,115 @@ function CreateFestForm(props?: CreateFestProps) {
                   </div>
                 </div>
 
-                <div>
-                  <label
-                    htmlFor="organizingDept"
-                    className="block mb-2 text-sm font-medium text-gray-700"
-                  >
-                    Organizing department (Select or Type):{" "}
-                    <span className="text-red-500">*</span>
-                  </label>
-                  <datalist id="organizing-dept-list">
-                    {baseDepartments
-                      .filter((d) => d.value !== "all_departments")
-                      .map((dept) => (
-                        <option key={dept.value} value={dept.label} />
-                      ))}
-                  </datalist>
-                  <input
-                    type="text"
-                    id="organizingDept"
-                    list="organizing-dept-list"
-                    placeholder="Select or type organizing department"
-                    value={formData.organizingDept}
-                    onChange={handleInputChange}
-                    onBlur={handleInputBlur}
-                    required
-                    aria-describedby={
-                      errors.organizingDept ? "organizingDept-error" : undefined
-                    }
-                    className={`w-full px-4 py-3 sm:py-3.5 rounded-lg border ${
-                      errors.organizingDept
-                        ? "border-red-500"
-                        : "border-gray-300"
-                    } focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent transition-all text-sm sm:text-base`}
-                  />
-                  {errors.organizingDept && (
-                    <p
-                      id="organizingDept-error"
-                      className="text-red-500 text-xs mt-1"
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
+                  <div>
+                    <label
+                      htmlFor="organizingSchool"
+                      className="block mb-2 text-sm font-medium text-gray-700"
                     >
-                      {errors.organizingDept}
-                    </p>
-                  )}
+                      Organizing school: <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      id="organizingSchool"
+                      value={formData.organizingSchool}
+                      onChange={(e) => {
+                        const selectedSchool = e.target.value;
+                        setFormData((prev) => ({ ...prev, organizingSchool: selectedSchool }));
+                        validateField("organizingSchool", selectedSchool);
+                      }}
+                      onBlur={(e) => validateField("organizingSchool", e.target.value)}
+                      className={`w-full px-4 py-3 sm:py-3.5 rounded-lg border ${
+                        errors.organizingSchool ? "border-red-500" : "border-gray-300"
+                      } focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent transition-all text-sm sm:text-base bg-white`}
+                    >
+                      <option value="">Select organizing school</option>
+                      {organizingSchools.map((school) => (
+                        <option key={school.value} value={school.value}>
+                          {school.label}
+                        </option>
+                      ))}
+                    </select>
+                    {errors.organizingSchool && (
+                      <p className="text-red-500 text-xs mt-1">{errors.organizingSchool}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="organizingDept"
+                      className="block mb-2 text-sm font-medium text-gray-700"
+                    >
+                      Organizing department: <span className="text-red-500">*</span>
+                    </label>
+                    {formData.organizingSchool === CLUBS_AND_CENTRES_SCHOOL ? (
+                      <>
+                        <datalist id="organizing-dept-list">
+                          {clubsAndCentresDepartmentOptions.map((dept) => (
+                            <option key={dept.value} value={dept.label} />
+                          ))}
+                        </datalist>
+                        <input
+                          type="text"
+                          id="organizingDept"
+                          list="organizing-dept-list"
+                          placeholder="Type club or centre name"
+                          value={formData.organizingDept}
+                          onChange={handleInputChange}
+                          onBlur={handleInputBlur}
+                          required
+                          aria-describedby={
+                            errors.organizingDept ? "organizingDept-error" : undefined
+                          }
+                          className={`w-full px-4 py-3 sm:py-3.5 rounded-lg border ${
+                            errors.organizingDept
+                              ? "border-red-500"
+                              : "border-gray-300"
+                          } focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent transition-all text-sm sm:text-base`}
+                        />
+                      </>
+                    ) : (
+                      <select
+                        id="organizingDept"
+                        value={formData.organizingDept}
+                        onChange={(e) => {
+                          const selectedDepartment = e.target.value;
+                          setFormData((prev) => ({ ...prev, organizingDept: selectedDepartment }));
+                          validateField("organizingDept", selectedDepartment);
+                        }}
+                        onBlur={(e) => validateField("organizingDept", e.target.value)}
+                        disabled={!formData.organizingSchool}
+                        className={`w-full px-4 py-3 sm:py-3.5 rounded-lg border ${
+                          errors.organizingDept
+                            ? "border-red-500"
+                            : "border-gray-300"
+                        } focus:outline-none focus:ring-2 focus:ring-[#154CB3] focus:border-transparent transition-all text-sm sm:text-base bg-white disabled:bg-gray-100 disabled:text-gray-500`}
+                      >
+                        <option value="">
+                          {formData.organizingSchool
+                            ? "Select organizing department"
+                            : "Select organizing school first"}
+                        </option>
+                        {departmentOptionsForSelectedSchool.map((dept) => (
+                          <option key={dept.value} value={dept.label}>
+                            {dept.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {errors.organizingDept && (
+                      <p
+                        id="organizingDept-error"
+                        className="text-red-500 text-xs mt-1"
+                      >
+                        {errors.organizingDept}
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 <DepartmentAndCategoryInputs
                   formData={formData}
+                  availableDepartments={departmentOptionsForSelectedSchool}
                   errors={errors}
                   setFormData={setFormData}
                   validateField={validateField}

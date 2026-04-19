@@ -6,6 +6,7 @@ import EventForm from "@/app/_components/Admin/ManageEvent";
 import {
   EventFormData,
   departments as departmentOptions,
+  inferSchoolFromDepartment,
   ScheduleItem as ScheduleItemType,
 } from "@/app/lib/eventFormSchema";
 import { SubmitHandler } from "react-hook-form";
@@ -270,6 +271,10 @@ export default function EditEventPage() {
             detailedDescription: data.description || "",
             department: parsedDepartments,
             category: data.category || "",
+            organizingSchool:
+              typeof data.organizing_school === "string" && data.organizing_school.trim()
+                ? data.organizing_school.trim()
+                : inferSchoolFromDepartment(data.organizing_dept || ""),
             organizingDept: data.organizing_dept || "",
             festEvent: data.fest_id || data.fest || "none",
             registrationDeadline: data.registration_deadline
@@ -476,6 +481,7 @@ export default function EditEventPage() {
     payload.append("event_time", formData.eventTime || "");
     payload.append("description", formData.detailedDescription);
     payload.append("category", formData.category);
+    payload.append("organizing_school", formData.organizingSchool || "");
     payload.append("organizing_dept", formData.organizingDept || "");
     // Only append fest_id if it's not "none"
     if (formData.festEvent && formData.festEvent !== "none") {
